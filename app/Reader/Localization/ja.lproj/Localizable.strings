@@ -25,3 +25,14 @@
 "import.unsupported" = "未対応のファイル形式";
 "import.unreadable" = "ファイルを読み込めませんでした";
 "import.empty" = "読めるテキストが見つかりません";
+
+/* アクセシビリティ — アイコンのみ・カスタム描画コントロールのVoiceOverラベル */
+"a11y.back" = "戻る";
+"a11y.play" = "再生";
+"a11y.pause" = "一時停止";
+"a11y.theme" = "テーマ";
+"a11y.add" = "テキストを追加";
+"a11y.orientation" = "縦書き・横書きの切り替え";
+"a11y.position" = "再生位置";
+"a11y.playWord" = "発音を再生";
+"a11y.saveWord" = "単語を保存";

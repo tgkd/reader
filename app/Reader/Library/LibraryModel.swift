@@ -21,10 +21,22 @@ final class LibraryModel {
 
     private(set) var items: [Item] = []
 
+    /// Cache the (expensive, SHA-256) `ContentKey` per document so reappearing
+    /// in the library — which calls `load` each time — doesn't re-hash every
+    /// first-chapter text on the main thread. Keyed by id; a doc's first-chapter
+    /// text is stable for its lifetime.
+    private var keyCache: [Document.ID: ContentKey] = [:]
+
     func load(_ services: AppServices) {
         items = services.library.all().map { doc in
             let text = doc.chapters.first?.text ?? ""
-            let key = SynthesisRequest(text: text).cacheKey
+            let key: ContentKey
+            if let cached = keyCache[doc.id] {
+                key = cached
+            } else {
+                key = SynthesisRequest(text: text).cacheKey
+                keyCache[doc.id] = key
+            }
             // Offline audio available = already synthesized to disk, OR a bundled
             // fixture exists (DEBUG offline fallback).
             let cached = services.audioStore.has(key) || services.fixtures.hasFixture(for: text)

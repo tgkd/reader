@@ -27,4 +27,15 @@ enum L10n {
     static var importUnsupported: String { String(localized: "import.unsupported") }
     static var importUnreadable: String { String(localized: "import.unreadable") }
     static var importEmpty: String { String(localized: "import.empty") }
+
+    // VoiceOver labels for icon-only / custom-drawn controls.
+    static var a11yBack: String { String(localized: "a11y.back") }
+    static var a11yPlay: String { String(localized: "a11y.play") }
+    static var a11yPause: String { String(localized: "a11y.pause") }
+    static var a11yTheme: String { String(localized: "a11y.theme") }
+    static var a11yAdd: String { String(localized: "a11y.add") }
+    static var a11yOrientation: String { String(localized: "a11y.orientation") }
+    static var a11yPosition: String { String(localized: "a11y.position") }
+    static var a11yPlayWord: String { String(localized: "a11y.playWord") }
+    static var a11ySaveWord: String { String(localized: "a11y.saveWord") }
 }

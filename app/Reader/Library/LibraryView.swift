@@ -81,9 +81,9 @@ struct LibraryView: View {
             Spacer()
             HStack(spacing: 10) {
                 IconButton(glyph: app.themeName.glyph, font: Mincho.font(15),
-                           foreground: theme.muted) { app.cycleTheme() }
+                           foreground: theme.muted, label: L10n.a11yTheme) { app.cycleTheme() }
                 IconButton(glyph: "+", font: .system(size: 21, weight: .light),
-                           foreground: theme.ink) { importing = true }
+                           foreground: theme.ink, label: L10n.a11yAdd) { importing = true }
             }
         }
         .padding(.horizontal, 22)

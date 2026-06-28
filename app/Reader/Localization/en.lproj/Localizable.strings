@@ -27,3 +27,14 @@
 "import.unsupported" = "Unsupported file type";
 "import.unreadable" = "Couldn’t read this file";
 "import.empty" = "No readable text found";
+
+/* Accessibility — VoiceOver labels for icon-only / custom-drawn controls */
+"a11y.back" = "Back";
+"a11y.play" = "Play";
+"a11y.pause" = "Pause";
+"a11y.theme" = "Theme";
+"a11y.add" = "Import text";
+"a11y.orientation" = "Toggle writing direction";
+"a11y.position" = "Playback position";
+"a11y.playWord" = "Play pronunciation";
+"a11y.saveWord" = "Save word";

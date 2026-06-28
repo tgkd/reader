@@ -59,7 +59,7 @@ struct DefinitionSheet: View {
         .padding(.bottom, 30)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.surface)
-        .clipShape(RoundedCorner(radius: 22, corners: [.topLeft, .topRight]))
+        .clipShape(.rect(topLeadingRadius: 22, topTrailingRadius: 22, style: .circular))
     }
 
     private var header: some View {
@@ -72,17 +72,21 @@ struct DefinitionSheet: View {
             }
             Spacer()
             HStack(spacing: 9) {
+                // TODO: wire word-pronunciation playback (currently a no-op stub).
                 Button { } label: {
                     PlayTriangle().fill(theme.accent).frame(width: 10, height: 13).offset(x: 1)
                         .frame(width: 38, height: 38).overlay(Circle().stroke(theme.hair, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(L10n.a11yPlayWord)
                 Button { model.toggleSaved() } label: {
                     Text(model.saved ? "♥" : "♡")
                         .font(.system(size: 17)).foregroundStyle(theme.accent)
                         .frame(width: 38, height: 38).overlay(Circle().stroke(theme.hair, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(L10n.a11ySaveWord)
+                .accessibilityAddTraits(model.saved ? .isSelected : [])
             }
             .padding(.top, 6)
         }

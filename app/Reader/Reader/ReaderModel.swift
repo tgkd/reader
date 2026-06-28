@@ -18,6 +18,10 @@ final class ReaderModel {
 
     private(set) var loadState: LoadState = .loading
     private(set) var timeline = SpanTimeline([])
+    /// Bumped whenever `timeline` is replaced. The reading surface compares this
+    /// cheap integer to decide whether to relayout, instead of re-hashing every
+    /// token's strings on each highlight frame (~60×/sec). See `setTimeline`.
+    private(set) var structureVersion = 0
     private(set) var activeIndex: Int?
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
@@ -39,6 +43,11 @@ final class ReaderModel {
     private var player: AVAudioPlayer?
     private let link = DisplayLinkProxy()
     private var isSwitchingChapter = false
+    /// Bumped at the top of every `load()`. A load that finds itself superseded
+    /// (a newer chapter switch, or the view torn down) after its `await` bails
+    /// before touching the shared player/timeline/loadState — so two overlapping
+    /// loads can't mis-pair audio with text.
+    private var loadGeneration = 0
 
     init(document: Document, services: AppServices) {
         self.document = document
@@ -58,6 +67,13 @@ final class ReaderModel {
     var spans: [TokenSpan] { timeline.spans }
     var progressFraction: Double { duration > 0 ? min(1, currentTime / duration) : 0 }
 
+    /// The single mutation point for `timeline` — keeps `structureVersion` in lock
+    /// step so the surface relayouts exactly when the token list actually changes.
+    private func setTimeline(_ t: SpanTimeline) {
+        timeline = t
+        structureVersion &+= 1
+    }
+
     var currentChapter: Chapter? {
         document.chapters.indices.contains(chapterIndex) ? document.chapters[chapterIndex] : document.chapters.first
     }
@@ -73,6 +89,8 @@ final class ReaderModel {
     // MARK: - Load
 
     func load() async {
+        loadGeneration &+= 1
+        let gen = loadGeneration
         loadState = .loading
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -91,22 +109,30 @@ final class ReaderModel {
         } else {
             do {
                 synth = try await services.tts.synthesize(request)
+                // Cache the (network-paid) result before any bail-out: the disk
+                // write is cheap, local, and the valuable artifact — it must not
+                // be lost just because this load was superseded or dismissed.
                 services.audioStore.save(synth, for: key)
             } catch is FixtureTTSService.FixtureError {
                 // No offline audio for this text — the genuine "not generated" case.
-                loadState = .notGenerated
+                if gen == loadGeneration { loadState = .notGenerated }
                 return
             } catch {
                 // Real failure (Worker auth/network, decode) — surface it, don't
                 // disguise it as "not generated".
-                loadState = .failed(error.localizedDescription)
+                if gen == loadGeneration { loadState = .failed(error.localizedDescription) }
                 return
             }
         }
 
+        // Superseded by a newer load() (chapter switch) or the view torn down
+        // while we awaited synthesis? Stop before mutating the shared player /
+        // timeline / loadState, so overlapping loads can't mis-pair audio + text.
+        guard gen == loadGeneration, !Task.isCancelled else { return }
+
         // Tokenize the EXACT text the alignment indexes (single source of truth).
         let tokens = tokenizer.tokenize(synth.text)
-        timeline = SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: synth.alignment))
+        setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: synth.alignment)))
 
         do {
             let p = try AVAudioPlayer(data: synth.audio)
@@ -178,6 +204,16 @@ final class ReaderModel {
         player?.rate = Float(v)
     }
 
+    /// Move the playhead (scrubbing / VoiceOver adjust). Works while playing or
+    /// paused; the highlight jumps to the new position immediately.
+    func seek(to t: Double) {
+        guard let player, duration > 0 else { return }
+        let clamped = min(max(0, t), duration)
+        player.currentTime = clamped
+        currentTime = clamped
+        activeIndex = timeline.index(at: clamped)
+    }
+
     func toggleOrientation() { orientation = orientation == .tate ? .yoko : .tate }
     func toggleChrome() { chromeVisible.toggle() }
 
@@ -194,7 +230,7 @@ final class ReaderModel {
         currentTime = 0
         activeIndex = nil
         duration = 0
-        timeline = SpanTimeline([])
+        setTimeline(SpanTimeline([]))
         await load()
         isSwitchingChapter = false
     }

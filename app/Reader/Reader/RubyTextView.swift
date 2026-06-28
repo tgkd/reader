@@ -13,6 +13,10 @@ import ReaderCore
 ///  • taps hit-tested against the same per-token rects → token index.
 struct RubyTextView: UIViewRepresentable {
     let spans: [TokenSpan]
+    /// Increments only when `spans` is replaced. Lets the view decide whether to
+    /// relayout with a single integer compare, instead of hashing every token's
+    /// strings on each highlight frame.
+    let structureVersion: Int
     let activeIndex: Int?
     let vertical: Bool
     let theme: Theme
@@ -29,7 +33,8 @@ struct RubyTextView: UIViewRepresentable {
     func updateUIView(_ v: RubyUIView, context: Context) {
         v.onTapToken = onTapToken
         v.onTapBackground = onTapBackground
-        v.configure(spans: spans, activeIndex: activeIndex, vertical: vertical,
+        v.configure(spans: spans, structureVersion: structureVersion,
+                    activeIndex: activeIndex, vertical: vertical,
                     ink: theme.ink.ui, ruby: theme.muted.ui, hi: theme.hi.ui, hiInk: theme.hiInk.ui)
     }
 }
@@ -60,22 +65,34 @@ final class RubyUIView: UIView {
         backgroundColor = .clear
         isOpaque = false
         contentMode = .redraw
+        // VoiceOver reads the page as one static-text element (the reading
+        // material itself). The per-token tap-to-define is a sighted affordance.
+        isAccessibilityElement = true
+        accessibilityTraits = .staticText
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap)))
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// The page reads as static text under VoiceOver; the per-token tap-to-define
+    /// is a sighted-only affordance. Suppress activation so a double-tap doesn't
+    /// open the definition of whatever token happens to sit at the center.
+    override func accessibilityActivate() -> Bool { false }
+
     private var fontSize: CGFloat { vertical ? 26 : 22 }
 
     // MARK: - Configure
 
-    func configure(spans: [TokenSpan], activeIndex: Int?, vertical: Bool,
+    func configure(spans: [TokenSpan], structureVersion: Int, activeIndex: Int?, vertical: Bool,
                    ink: UIColor, ruby: UIColor, hi: UIColor, hiInk: UIColor) {
         // Draw-time colors: changing them only needs a redraw, never a relayout.
         inkColor = ink; hiColor = hi; hiInkColor = hiInk
 
-        // Only surfaces/readings/orientation/ruby-color affect layout.
-        let key = Self.structureHash(spans: spans, vertical: vertical, ruby: ruby)
+        // Only a new token list (structureVersion), orientation, or ruby color
+        // affect layout. The version is a cheap O(1) proxy for "spans changed",
+        // so this comparison runs every highlight frame without touching the
+        // token strings.
+        let key = Self.structureHash(version: structureVersion, vertical: vertical, ruby: ruby)
         if key != structureKey {
             structureKey = key
             self.spans = spans
@@ -87,11 +104,11 @@ final class RubyUIView: UIView {
         setNeedsDisplay()
     }
 
-    private static func structureHash(spans: [TokenSpan], vertical: Bool, ruby: UIColor) -> Int {
+    private static func structureHash(version: Int, vertical: Bool, ruby: UIColor) -> Int {
         var h = Hasher()
+        h.combine(version)
         h.combine(vertical)
         h.combine(ruby)
-        for s in spans { h.combine(s.surface); h.combine(s.reading) }
         return h.finalize()
     }
 
@@ -139,6 +156,9 @@ final class RubyUIView: UIView {
         framesetter = CTFramesetterCreateWithAttributedString(out)
         ctFrame = nil
         frameSize = .zero
+
+        // The spoken page = the concatenated surfaces (the displayed text).
+        accessibilityLabel = spans.map(\.surface).joined()
     }
 
     // MARK: - Frame caching

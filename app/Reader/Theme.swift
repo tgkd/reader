@@ -38,6 +38,7 @@ struct Theme: Equatable {
     let hi: Color       // active-token highlight background
     let hiInk: Color    // active-token text
     let soft: Color     // faint fills (progress track, example box)
+    let onAccent: Color // text/icon drawn on top of an accent fill (e.g. the speed pill)
 
     init(name: ThemeName) {
         self.name = name
@@ -48,18 +49,23 @@ struct Theme: Equatable {
             hair = Color(hex: 0x36312a, opacity: 0.12); accent = Color(hex: 0xb05c40)
             hi = Color(hex: 0xb05c40, opacity: 0.15);   hiInk = Color(hex: 0x3a261c)
             soft = Color(hex: 0x36312a, opacity: 0.05)
+            onAccent = Color(hex: 0xfbf8f1)
         case .sepia:
             bg = Color(hex: 0xece0ca);  surface = Color(hex: 0xf4ead7)
             ink = Color(hex: 0x473a27); muted = Color(hex: 0xa18d6e)
             hair = Color(hex: 0x473a27, opacity: 0.14); accent = Color(hex: 0xa4663a)
             hi = Color(hex: 0xa4663a, opacity: 0.18);   hiInk = Color(hex: 0x3c2916)
             soft = Color(hex: 0x473a27, opacity: 0.06)
+            onAccent = Color(hex: 0xf4ead7)
         case .night:
             bg = Color(hex: 0x161613);  surface = Color(hex: 0x1f1e1a)
             ink = Color(hex: 0xdcd6c8); muted = Color(hex: 0x736d60)
             hair = Color(hex: 0xdcd6c8, opacity: 0.12); accent = Color(hex: 0xcf8a6c)
             hi = Color(hex: 0xcf8a6c, opacity: 0.20);   hiInk = Color(hex: 0xf1e9dc)
             soft = Color(hex: 0xdcd6c8, opacity: 0.06)
+            // The night accent is a light tan; white text on it is low-contrast,
+            // so on-accent text uses the dark background instead.
+            onAccent = Color(hex: 0x161613)
         }
     }
 }
@@ -84,13 +90,8 @@ extension Color {
     var ui: UIColor { UIColor(self) }
 }
 
-private struct ThemeKey: EnvironmentKey {
-    static let defaultValue = Theme(name: .paper)
-}
-
 extension EnvironmentValues {
-    var theme: Theme {
-        get { self[ThemeKey.self] }
-        set { self[ThemeKey.self] = newValue }
-    }
+    /// The active palette. `@Entry` replaces the manual `EnvironmentKey`
+    /// boilerplate; the default is a stable struct literal.
+    @Entry var theme = Theme(name: .paper)
 }

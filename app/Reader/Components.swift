@@ -10,6 +10,9 @@ struct IconButton: View {
     var foreground: Color
     var outline: Outline = .circle
     var size: CGFloat = 34
+    /// VoiceOver label — the glyph alone (紙 / 目 / 縦) is meaningless to assistive
+    /// tech, so callers pass a spoken label. Falls back to the glyph if omitted.
+    var label: String? = nil
     var action: () -> Void
 
     @Environment(\.theme) private var theme
@@ -24,6 +27,7 @@ struct IconButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label ?? glyph)
     }
 
     @ViewBuilder private var border: some View {
@@ -46,12 +50,3 @@ struct PlayTriangle: Shape {
     }
 }
 
-/// A rectangle with only some corners rounded — for the bottom sheet's top edge.
-struct RoundedCorner: Shape {
-    var radius: CGFloat
-    var corners: UIRectCorner
-    func path(in rect: CGRect) -> Path {
-        Path(UIBezierPath(roundedRect: rect, byRoundingCorners: corners,
-                          cornerRadii: CGSize(width: radius, height: radius)).cgPath)
-    }
-}
