@@ -3,6 +3,20 @@
 /* アプリのワードマーク（ロゴ） */
 "brand.wordmark" = "読み";
 
+/* 汎用 — アラートの了解ボタン */
+"common.ok" = "OK";
+
+/* 設定 — 読書の表示（フォント・サイズ） */
+"settings.title" = "設定";
+"settings.section.font" = "本文フォント";
+"settings.section.size" = "文字サイズ";
+"settings.font.mincho" = "明朝";
+"settings.font.gothic" = "ゴシック";
+"settings.font.rounded" = "丸ゴシック";
+"settings.size.small" = "小";
+"settings.size.medium" = "中";
+"settings.size.large" = "大";
+
 /* ライブラリ — 進捗ラベル */
 "library.status.unread" = "未読";
 "library.status.done" = "読了";
@@ -28,6 +42,8 @@
 
 /* リーダー — 目次（複数章のインポート） */
 "reader.chapters" = "目次";
+/* タイトルのないインポート章のフォールバック名。%d は1始まりの番号。 */
+"reader.chapterNumber.format" = "第%d章";
 
 /* インポート（テキスト追加） */
 "import.failed.title" = "読み込みに失敗しました";
@@ -42,7 +58,9 @@
 "a11y.theme" = "テーマ";
 "a11y.add" = "テキストを追加";
 "a11y.membership" = "メンバーシップ";
+"a11y.settings" = "設定";
 "a11y.orientation" = "縦書き・横書きの切り替え";
 "a11y.position" = "再生位置";
 "a11y.playWord" = "発音を再生";
 "a11y.saveWord" = "単語を保存";
+"a11y.audioCached" = "音声ダウンロード済み";

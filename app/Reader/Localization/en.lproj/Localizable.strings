@@ -5,6 +5,20 @@
 /* App wordmark (logo). Latin on English devices, 読み on Japanese. */
 "brand.wordmark" = "Yomi";
 
+/* Generic — alert dismiss button */
+"common.ok" = "OK";
+
+/* Settings — reading preferences (font + size) */
+"settings.title" = "Settings";
+"settings.section.font" = "Reading font";
+"settings.section.size" = "Text size";
+"settings.font.mincho" = "Mincho";
+"settings.font.gothic" = "Gothic";
+"settings.font.rounded" = "Rounded";
+"settings.size.small" = "Small";
+"settings.size.medium" = "Medium";
+"settings.size.large" = "Large";
+
 /* Library — reading-progress status labels */
 "library.status.unread" = "Unread";
 "library.status.done" = "Done";
@@ -30,6 +44,8 @@
 
 /* Reader — chapter navigation (multi-chapter imports) */
 "reader.chapters" = "Chapters";
+/* Fallback title for an untitled imported chapter; %d is the 1-based index. */
+"reader.chapterNumber.format" = "Chapter %d";
 
 /* Import (add text) */
 "import.failed.title" = "Import failed";
@@ -44,7 +60,9 @@
 "a11y.theme" = "Theme";
 "a11y.add" = "Import text";
 "a11y.membership" = "Membership";
+"a11y.settings" = "Settings";
 "a11y.orientation" = "Toggle writing direction";
 "a11y.position" = "Playback position";
 "a11y.playWord" = "Play pronunciation";
 "a11y.saveWord" = "Save word";
+"a11y.audioCached" = "Audio downloaded";

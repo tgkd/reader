@@ -35,4 +35,24 @@ final class SpanTimelineTests: XCTestCase {
         let t = SpanTimeline([span(0, 0.0, 0.5), span(1, 0.5, 1.25)])
         XCTAssertEqual(t.duration, 1.25, accuracy: 1e-9)
     }
+
+    /// The render-only builder (free tier / pre-synthesis) carries surface, reading,
+    /// dictionaryForm and index from the tokens with zero timing — so the surface
+    /// draws furigana + tap-to-define without any audio.
+    func testUntimedBuilderPreservesTokenFieldsWithZeroTiming() {
+        let tokens = [
+            Token(surface: "生まれた", reading: "うまれた", dictionaryForm: "生まれる"),
+            Token(surface: "。", reading: nil, dictionaryForm: nil),
+        ]
+        let t = SpanTimeline(untimedTokens: tokens)
+        XCTAssertEqual(t.spans.count, 2)
+        XCTAssertEqual(t.spans[0].index, 0)
+        XCTAssertEqual(t.spans[0].surface, "生まれた")
+        XCTAssertEqual(t.spans[0].reading, "うまれた")
+        XCTAssertEqual(t.spans[0].dictionaryForm, "生まれる")
+        XCTAssertEqual(t.spans[1].index, 1)
+        XCTAssertNil(t.spans[1].reading)
+        XCTAssertEqual(t.duration, 0)
+        XCTAssertTrue(t.spans.allSatisfy { $0.start == 0 && $0.end == 0 && $0.matchedChars == 0 })
+    }
 }

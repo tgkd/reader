@@ -10,6 +10,7 @@ struct LibraryView: View {
     @State private var model = LibraryModel()
     @State private var importing = false
     @State private var importError: String?
+    @State private var showingSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,16 +27,27 @@ struct LibraryView: View {
                 }
             }
         }
-        .onAppear { model.load(app.services) }
+        .onAppear {
+            model.load(app.services)
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["READER_SETTINGS"] == "1" { showingSettings = true }
+            #endif
+        }
         .fileImporter(isPresented: $importing,
                       allowedContentTypes: [.epub, .pdf, .plainText, .text],
                       allowsMultipleSelection: false) { result in
             handleImport(result)
         }
         .alert(L10n.importFailedTitle, isPresented: showImportError) {
-            Button("OK", role: .cancel) {}
+            Button(L10n.commonOK, role: .cancel) {}
         } message: {
             Text(importError ?? "")
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(theme.bg)
         }
     }
 
@@ -102,11 +114,11 @@ struct LibraryView: View {
             }
             Spacer()
             HStack(spacing: 10) {
-                IconButton(glyph: "会", font: Mincho.font(15),
+                IconButton(systemImage: "star.circle",
                            foreground: theme.muted, label: L10n.a11yMembership) { app.showPaywall = true }
-                IconButton(glyph: app.themeName.glyph, font: Mincho.font(15),
-                           foreground: theme.muted, label: L10n.a11yTheme) { app.cycleTheme() }
-                IconButton(glyph: "+", font: .system(size: 21, weight: .light),
+                IconButton(systemImage: "gearshape",
+                           foreground: theme.muted, label: L10n.a11ySettings) { showingSettings = true }
+                IconButton(systemImage: "plus", font: .system(size: 18),
                            foreground: theme.ink, label: L10n.a11yAdd) { importing = true }
             }
         }
@@ -121,7 +133,7 @@ struct LibraryView: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(item.document.title)
-                            .font(Mincho.font(19)).foregroundStyle(theme.ink).tracking(0.5)
+                            .font(app.readingFont.font(19)).foregroundStyle(theme.ink).tracking(0.5)
                         Text(item.document.author ?? "")
                             .font(.system(size: 12.5)).foregroundStyle(theme.muted).tracking(0.5)
                     }
@@ -132,6 +144,7 @@ struct LibraryView: View {
                                 .font(.system(size: 10)).foregroundStyle(theme.muted)
                                 .frame(width: 17, height: 17)
                                 .overlay(Circle().stroke(theme.muted, lineWidth: 1))
+                                .accessibilityLabel(L10n.a11yAudioCached)
                         }
                         Text(item.statusLabel)
                             .font(.system(size: 11.5)).foregroundStyle(theme.muted).monospacedDigit()

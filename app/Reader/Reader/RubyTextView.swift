@@ -20,6 +20,9 @@ struct RubyTextView: UIViewRepresentable {
     let activeIndex: Int?
     let vertical: Bool
     let theme: Theme
+    /// Reading typeface (PostScript name) + size multiplier, from Settings.
+    let fontName: String
+    let fontScale: CGFloat
     var onTapToken: (Int) -> Void
     var onTapBackground: () -> Void
 
@@ -35,6 +38,7 @@ struct RubyTextView: UIViewRepresentable {
         v.onTapBackground = onTapBackground
         v.configure(spans: spans, structureVersion: structureVersion,
                     activeIndex: activeIndex, vertical: vertical,
+                    fontName: fontName, fontScale: fontScale,
                     ink: theme.ink.ui, ruby: theme.muted.ui, hi: theme.hi.ui, hiInk: theme.hiInk.ui)
     }
 }
@@ -47,6 +51,8 @@ final class RubyUIView: UIView {
     private var spans: [TokenSpan] = []
     private var activeIndex: Int?
     private var vertical = true
+    private var fontName: String = Mincho.psName        // reading typeface (Settings)
+    private var fontScale: CGFloat = 1                   // size multiplier (Settings)
     private var rubyColor: UIColor = .secondaryLabel   // baked into the string
     private var inkColor: UIColor = .label             // applied via context fill
     private var hiColor: UIColor = .systemYellow       // draw-time
@@ -79,36 +85,49 @@ final class RubyUIView: UIView {
     /// open the definition of whatever token happens to sit at the center.
     override func accessibilityActivate() -> Bool { false }
 
-    private var fontSize: CGFloat { vertical ? 26 : 22 }
+    private var fontSize: CGFloat { (vertical ? 26 : 22) * fontScale }
+
+    /// The reading font at the given size, falling back to the system font if the
+    /// chosen face is unavailable.
+    private func readingFont(_ size: CGFloat) -> UIFont {
+        UIFont(name: fontName, size: size) ?? .systemFont(ofSize: size)
+    }
 
     // MARK: - Configure
 
     func configure(spans: [TokenSpan], structureVersion: Int, activeIndex: Int?, vertical: Bool,
+                   fontName: String, fontScale: CGFloat,
                    ink: UIColor, ruby: UIColor, hi: UIColor, hiInk: UIColor) {
         // Draw-time colors: changing them only needs a redraw, never a relayout.
         inkColor = ink; hiColor = hi; hiInkColor = hiInk
 
-        // Only a new token list (structureVersion), orientation, or ruby color
-        // affect layout. The version is a cheap O(1) proxy for "spans changed",
-        // so this comparison runs every highlight frame without touching the
-        // token strings.
-        let key = Self.structureHash(version: structureVersion, vertical: vertical, ruby: ruby)
+        // Only a new token list (structureVersion), orientation, ruby color, or the
+        // reading font/size affect layout. The version is a cheap O(1) proxy for
+        // "spans changed", so this comparison runs every highlight frame without
+        // touching the token strings.
+        let key = Self.structureHash(version: structureVersion, vertical: vertical, ruby: ruby,
+                                     fontName: fontName, fontScale: fontScale)
         if key != structureKey {
             structureKey = key
             self.spans = spans
             self.vertical = vertical
             self.rubyColor = ruby
+            self.fontName = fontName
+            self.fontScale = fontScale
             rebuild()
         }
         self.activeIndex = activeIndex
         setNeedsDisplay()
     }
 
-    private static func structureHash(version: Int, vertical: Bool, ruby: UIColor) -> Int {
+    private static func structureHash(version: Int, vertical: Bool, ruby: UIColor,
+                                      fontName: String, fontScale: CGFloat) -> Int {
         var h = Hasher()
         h.combine(version)
         h.combine(vertical)
         h.combine(ruby)
+        h.combine(fontName)
+        h.combine(fontScale)
         return h.finalize()
     }
 
@@ -119,7 +138,7 @@ final class RubyUIView: UIView {
         // draw time (so the active token can be repainted in hiInk without
         // rebuilding the string); ruby keeps an explicit color.
         let fromContext = NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String)
-        let font = Mincho.uiFont(fontSize)
+        let font = readingFont(fontSize)
         let baseAttrs: [NSAttributedString.Key: Any] = [.font: font, fromContext: true]
 
         let out = NSMutableAttributedString()
@@ -128,7 +147,7 @@ final class RubyUIView: UIView {
             let start = out.length
             let piece = NSMutableAttributedString(string: span.surface, attributes: baseAttrs)
             if showFurigana, let reading = span.reading, !reading.isEmpty, Self.containsKanji(span.surface) {
-                let rubyFont = Mincho.uiFont(fontSize * 0.5)
+                let rubyFont = readingFont(fontSize * 0.5)
                 let ann = CTRubyAnnotationCreateWithAttributes(
                     .center, .auto, .before, reading as CFString,
                     [kCTFontAttributeName: rubyFont,

@@ -1,25 +1,25 @@
 import SwiftUI
 
 /// A small round/rounded icon button with a hairline border — the design's
-/// 34px header/chrome control (theme toggle, add, orientation).
+/// 34px header/chrome control (settings, membership, add, orientation, theme).
+/// Renders an SF Symbol so the chrome reads the same in any language.
 struct IconButton: View {
     enum Outline { case circle, rounded }
 
-    var glyph: String
-    var font: Font
+    var systemImage: String
+    var font: Font = .system(size: 15)
     var foreground: Color
     var outline: Outline = .circle
     var size: CGFloat = 34
-    /// VoiceOver label — the glyph alone (紙 / 目 / 縦) is meaningless to assistive
-    /// tech, so callers pass a spoken label. Falls back to the glyph if omitted.
-    var label: String? = nil
+    /// VoiceOver label — an icon-only control, so callers pass a spoken label.
+    var label: String
     var action: () -> Void
 
     @Environment(\.theme) private var theme
 
     var body: some View {
         Button(action: action) {
-            Text(glyph)
+            Image(systemName: systemImage)
                 .font(font)
                 .foregroundStyle(foreground)
                 .frame(width: size, height: size)
@@ -27,7 +27,7 @@ struct IconButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(label ?? glyph)
+        .accessibilityLabel(label)
     }
 
     @ViewBuilder private var border: some View {

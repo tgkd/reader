@@ -37,3 +37,17 @@ public struct SpanTimeline: Equatable {
         spans.indices.contains(i) ? spans[i] : nil
     }
 }
+
+public extension SpanTimeline {
+    /// Render-only timeline (no audio): spans carry surface + reading +
+    /// dictionaryForm for furigana / tap-to-define, with zero timing. Used when the
+    /// reader shows text without generated speech (free tier / pre-synthesis). The
+    /// renderer reads only surface/reading + token index, so timing-less spans draw
+    /// the full surface; `index(at:)` is never queried (no player → no tick).
+    init(untimedTokens tokens: [Token]) {
+        self.init(tokens.enumerated().map { i, t in
+            TokenSpan(index: i, surface: t.surface, reading: t.reading,
+                      dictionaryForm: t.dictionaryForm, start: 0, end: 0, matchedChars: 0)
+        })
+    }
+}

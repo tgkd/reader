@@ -84,15 +84,13 @@ struct ReaderView: View {
                     activeIndex: model.activeIndex,
                     vertical: model.orientation == .tate,
                     theme: theme,
+                    fontName: app.readingFont.psName,
+                    fontScale: app.readingSize.scale,
                     onTapToken: { model.tapToken($0) },
                     onTapBackground: { model.toggleChrome() }
                 )
-            case .notGenerated:
-                placeholder(L10n.readerNotGeneratedTitle, L10n.readerNotGeneratedBody)
             case .failed(let msg):
                 placeholder(L10n.readerFailedTitle, msg)
-            case .subscriptionRequired:
-                subscribeCTA
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -101,25 +99,6 @@ struct ReaderView: View {
         // Clears the transport chrome (~136pt with the taller scrubber row) so the
         // last text line can't tuck under the transport's opaque background.
         .padding(.bottom, 140)
-    }
-
-    /// Shown when the chapter is gated behind `reader Pro` — opens the paywall.
-    private var subscribeCTA: some View {
-        VStack(spacing: 16) {
-            Text(L10n.readerSubscribeTitle).font(Mincho.font(20)).foregroundStyle(theme.ink)
-            Text(L10n.readerSubscribeBody).font(.system(size: 13)).foregroundStyle(theme.muted)
-                .multilineTextAlignment(.center)
-            Button { app.showPaywall = true } label: {
-                Text(L10n.readerSubscribeCTA)
-                    .font(.system(size: 15, weight: .medium)).foregroundStyle(theme.accent)
-                    .padding(.horizontal, 22).padding(.vertical, 11)
-                    .overlay(Capsule().stroke(theme.accent, lineWidth: 1.5))
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 40)
     }
 
     private func placeholder(_ title: String, _ subtitle: String) -> some View {
@@ -145,24 +124,24 @@ struct ReaderView: View {
             .accessibilityLabel(L10n.a11yBack)
 
             Text(document.title)
-                .font(Mincho.font(15)).foregroundStyle(theme.ink).tracking(1)
+                .font(app.readingFont.font(15)).foregroundStyle(theme.ink).tracking(1)
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity)
 
             HStack(spacing: 9) {
                 if model.hasChapters {
-                    IconButton(glyph: "目", font: Mincho.font(15),
+                    IconButton(systemImage: "list.bullet",
                                foreground: theme.muted, outline: .rounded, label: L10n.chapters) {
                         model.chaptersVisible = true
                     }
                 }
-                IconButton(glyph: model.orientation == .tate ? "縦" : "横",
-                           font: Mincho.font(15), foreground: theme.ink, outline: .rounded,
+                IconButton(systemImage: model.orientation == .tate ? "arrow.up.and.down" : "arrow.left.and.right",
+                           foreground: theme.ink, outline: .rounded,
                            label: L10n.a11yOrientation) {
                     model.toggleOrientation()
                 }
-                IconButton(glyph: app.themeName.glyph,
-                           font: Mincho.font(15), foreground: theme.muted, outline: .rounded,
+                IconButton(systemImage: app.themeName.symbol,
+                           foreground: theme.muted, outline: .rounded,
                            label: L10n.a11yTheme) {
                     app.cycleTheme()
                 }
@@ -182,7 +161,71 @@ struct ReaderView: View {
 
     // MARK: - Transport
 
-    private func transport(_ model: ReaderModel) -> some View {
+    /// The bottom chrome adapts to the audio state. Speech is the only gated
+    /// feature, so a free user gets a single "Listen with Membership" pill instead
+    /// of a dead scrubber; a subscriber gets a Play control that generates speech on
+    /// demand, then the full transport once audio is ready.
+    @ViewBuilder private func transport(_ model: ReaderModel) -> some View {
+        Group {
+            switch model.audioState {
+            case .locked:
+                listenPill
+            case .idle, .notGenerated, .failed:
+                preAudioControl(model)
+            case .synthesizing:
+                ProgressView().tint(theme.muted).frame(height: 46).frame(maxWidth: .infinity)
+            case .ready:
+                fullTransport(model)
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 16)
+        .padding(.bottom, 30)
+        .background(theme.bg)
+        .overlay(alignment: .top) { Rectangle().fill(theme.hair).frame(height: 1) }
+        .opacity(model.chromeVisible ? 1 : 0)
+        .allowsHitTesting(model.chromeVisible)
+        .accessibilityHidden(!model.chromeVisible)
+        .animation(.easeInOut(duration: 0.3), value: model.chromeVisible)
+    }
+
+    /// Free tier: audio is gated. One pill that opens the paywall — no dead
+    /// scrubber / speed controls.
+    private var listenPill: some View {
+        Button { app.showPaywall = true } label: {
+            Text(L10n.readerSubscribeTitle)
+                .font(.system(size: 15, weight: .medium)).foregroundStyle(theme.accent)
+                .padding(.horizontal, 24).padding(.vertical, 12)
+                .overlay(Capsule().stroke(theme.accent, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel(L10n.a11yMembership)
+    }
+
+    /// Subscribed but audio not generated yet (or a prior attempt failed): a single
+    /// Play control that generates speech on tap. Reading already works above.
+    @ViewBuilder private func preAudioControl(_ model: ReaderModel) -> some View {
+        VStack(spacing: 10) {
+            if case .failed(let msg) = model.audioState {
+                Text(msg).font(.system(size: 12)).foregroundStyle(theme.muted)
+                    .multilineTextAlignment(.center)
+            } else if model.audioState == .notGenerated {
+                Text(L10n.readerNotGeneratedTitle).font(.system(size: 12)).foregroundStyle(theme.muted)
+            }
+            Button { Task { await model.requestAudioAndPlay() } } label: {
+                PlayTriangle().fill(theme.ink).frame(width: 14, height: 18).offset(x: 2)
+                    .frame(width: 46, height: 46)
+                    .overlay(Circle().stroke(theme.hair, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L10n.a11yPlay)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Audio ready: the full scrubber + play/pause + speed transport.
+    private func fullTransport(_ model: ReaderModel) -> some View {
         VStack(spacing: 16) {
             HStack(spacing: 11) {
                 Text(model.timeLabel(model.currentTime))
@@ -204,15 +247,6 @@ struct ReaderView: View {
                 speedPicker(model)
             }
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 16)
-        .padding(.bottom, 30)
-        .background(theme.bg)
-        .overlay(alignment: .top) { Rectangle().fill(theme.hair).frame(height: 1) }
-        .opacity(model.chromeVisible ? 1 : 0)
-        .allowsHitTesting(model.chromeVisible)
-        .accessibilityHidden(!model.chromeVisible)
-        .animation(.easeInOut(duration: 0.3), value: model.chromeVisible)
     }
 
     private func scrubber(_ model: ReaderModel) -> some View {
@@ -301,7 +335,7 @@ struct ReaderView: View {
                     ForEach(Array(model.document.chapters.enumerated()), id: \.element.id) { i, chapter in
                         Button { Task { await model.openChapter(i) } } label: {
                             HStack {
-                                Text(chapter.title ?? "第\(i + 1)章")
+                                Text(chapter.title ?? L10n.chapterNumber(i + 1))
                                     .font(Mincho.font(15))
                                     .foregroundStyle(i == model.chapterIndex ? theme.accent : theme.ink)
                                     .lineLimit(1).truncationMode(.tail)

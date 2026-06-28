@@ -10,13 +10,20 @@ import ReaderCore
 @MainActor
 @Observable
 final class ReaderModel {
-    enum LoadState: Equatable { case loading, ready, notGenerated, failed(String), subscriptionRequired }
+    enum LoadState: Equatable { case loading, ready, failed(String) }
+    /// Audio is the only gated feature, with a lifecycle independent of the
+    /// always-available reading surface: `.locked` = not subscribed (show the
+    /// membership pill), `.idle` = subscribed but not yet generated (Play to
+    /// synthesize), `.synthesizing` = generating, `.ready` = player + timed spans
+    /// loaded, `.notGenerated`/`.failed` = synth had no offline audio / errored.
+    enum AudioState: Equatable { case locked, idle, synthesizing, ready, notGenerated, failed(String) }
     enum Orientation { case tate, yoko }
 
     let document: Document
     private let services: AppServices
 
     private(set) var loadState: LoadState = .loading
+    private(set) var audioState: AudioState = .locked
     private(set) var timeline = SpanTimeline([])
     /// Bumped whenever `timeline` is replaced. The reading surface compares this
     /// cheap integer to decide whether to relayout, instead of re-hashing every
@@ -86,24 +93,63 @@ final class ReaderModel {
         loadGeneration &+= 1
         let gen = loadGeneration
         loadState = .loading
-
-        // Subscription gate: require `reader Pro` (checked locally) before doing any
-        // work — so a non-subscriber sees the paywall and the paid Worker is never
-        // hit for them. No-op when RevenueCat isn't configured (dev/offline).
-        if await !services.isSubscribed() {
-            if gen == loadGeneration { loadState = .subscriptionRequired }
-            return
-        }
-
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        try? AVAudioSession.sharedInstance().setActive(true)
         link.onTick = { [weak self] in MainActor.assumeIsolated { self?.tick() } }
 
         guard let tokenizer = services.tokenizer else {
             loadState = .failed("Tokenizer unavailable"); return
         }
+
+        // Render the text for EVERYONE: tokenize the chapter and show it with
+        // furigana + tap-to-define, no audio required. Speech generation is the only
+        // gated feature, so the reading surface is always available — even offline /
+        // unsubscribed. The word-synced highlight simply stays absent until audio is
+        // loaded.
         let text = currentChapter?.text ?? ""
-        let request = SynthesisRequest(text: text)
+        let tokens = tokenizer.tokenize(text)
+        guard gen == loadGeneration, !Task.isCancelled else { return }
+        setTimeline(SpanTimeline(untimedTokens: tokens))
+        loadState = .ready
+
+        // Audio gate: require `reader Pro` (checked locally) before generating
+        // speech, so a non-subscriber never hits the paid Worker. No-op ungate when
+        // RevenueCat isn't configured (dev/offline). Synthesis is deferred to Play.
+        let subscribed = await services.isSubscribed()
+        guard gen == loadGeneration, !Task.isCancelled else { return }
+        audioState = subscribed ? .idle : .locked
+
+        // Already-paid local audio: load it eagerly (no network) so a re-read gets
+        // the word-synced highlight immediately and resumes where it stopped.
+        if subscribed,
+           let cached = services.audioStore.load(SynthesisRequest(text: text).cacheKey),
+           buildPlayback(from: cached, gen: gen) {
+            audioState = .ready
+        }
+
+        #if DEBUG
+        applyDebugHooks()
+        #endif
+    }
+
+    /// Generate (or load) the chapter's speech, then start playback. Invoked by the
+    /// Play control when audio isn't loaded yet (`.idle`) or a previous attempt
+    /// failed. The only path that triggers synthesis — reading never does.
+    func requestAudioAndPlay() async {
+        switch audioState {
+        case .ready: play(); return
+        case .synthesizing, .locked: return
+        case .idle, .notGenerated, .failed: break
+        }
+        audioState = .synthesizing
+        if await ensureAudio() { play() }
+    }
+
+    /// Cache-or-synthesize the chapter audio and build playback. Sets `audioState`
+    /// to the outcome and returns whether playback is ready. The single
+    /// `tts.synthesize` call site.
+    private func ensureAudio() async -> Bool {
+        if player != nil { audioState = .ready; return true }
+        let gen = loadGeneration
+        let request = SynthesisRequest(text: currentChapter?.text ?? "")
         let key = request.cacheKey
 
         let synth: SynthesizedAudio
@@ -113,30 +159,48 @@ final class ReaderModel {
             do {
                 synth = try await services.tts.synthesize(request)
                 // Cache the (network-paid) result before any bail-out: the disk
-                // write is cheap, local, and the valuable artifact — it must not
-                // be lost just because this load was superseded or dismissed.
+                // write is cheap, local, and the valuable artifact.
                 services.audioStore.save(synth, for: key)
             } catch is FixtureTTSService.FixtureError {
                 // No offline audio for this text — the genuine "not generated" case.
-                if gen == loadGeneration { loadState = .notGenerated }
-                return
+                if gen == loadGeneration { audioState = .notGenerated }
+                return false
+            } catch WorkerTTSService.WorkerError.subscriptionRequired {
+                // Entitlement lapsed (server-side 403) — re-lock and show the pill.
+                if gen == loadGeneration { audioState = .locked }
+                return false
             } catch {
                 // Real failure (Worker auth/network, decode) — surface it, don't
                 // disguise it as "not generated".
-                if gen == loadGeneration { loadState = .failed(error.localizedDescription) }
-                return
+                if gen == loadGeneration { audioState = .failed(error.localizedDescription) }
+                return false
             }
         }
 
-        // Superseded by a newer load() (chapter switch) or the view torn down
-        // while we awaited synthesis? Stop before mutating the shared player /
-        // timeline / loadState, so overlapping loads can't mis-pair audio + text.
-        guard gen == loadGeneration, !Task.isCancelled else { return }
+        guard buildPlayback(from: synth, gen: gen) else {
+            if gen == loadGeneration { audioState = .failed("Audio failed to load") }
+            return false
+        }
+        audioState = .ready
+        return true
+    }
 
-        // Tokenize the EXACT text the alignment indexes (single source of truth).
+    /// Build the player + timed spans from synthesized audio (cached or freshly
+    /// generated). Re-tokenizes the synthesized text (the exact text the alignment
+    /// indexes) and folds the char timings into spans so the highlight tracks the
+    /// real playhead, then resumes the saved position. Returns false if superseded
+    /// by a newer load() / torn down, or the audio can't be decoded.
+    private func buildPlayback(from synth: SynthesizedAudio, gen: Int) -> Bool {
+        guard gen == loadGeneration, !Task.isCancelled,
+              let tokenizer = services.tokenizer else { return false }
+
+        // Tokenize the EXACT text the alignment indexes (single source of truth) and
+        // fold the char timings onto the tokens for the moving highlight.
         let tokens = tokenizer.tokenize(synth.text)
         setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: synth.alignment)))
 
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        try? AVAudioSession.sharedInstance().setActive(true)
         do {
             let p = try AVAudioPlayer(data: synth.audio)
             p.enableRate = true
@@ -145,7 +209,7 @@ final class ReaderModel {
             player = p
             duration = p.duration
         } catch {
-            loadState = .failed("Audio failed to load"); return
+            return false
         }
 
         // Resume where the last session left off (only for the saved chapter, and
@@ -156,27 +220,31 @@ final class ReaderModel {
             currentTime = resume
             activeIndex = timeline.index(at: resume)
         }
-
-        loadState = .ready
-        #if DEBUG
-        applyDebugHooks()
-        #endif
+        return true
     }
 
     #if DEBUG
     /// Launch hooks for deterministic screenshots (pass via SIMCTL_CHILD_*):
     ///   READER_ORI=tate|yoko, READER_SEEK=<seconds> (render highlight paused),
-    ///   READER_AUTOPLAY=1, READER_SHEET=<token index>.
+    ///   READER_AUTOPLAY=1, READER_SHEET=<token index>. Seek/autoplay need generated
+    ///   audio; with lazy synthesis the player may not exist yet, so generate first.
     private func applyDebugHooks() {
         let env = ProcessInfo.processInfo.environment
         if let o = env["READER_ORI"] { orientation = (o == "yoko") ? .yoko : .tate }
-        if let s = env["READER_SEEK"], let t = Double(s) {
-            player?.currentTime = t
-            currentTime = t
-            activeIndex = timeline.index(at: t)
-        }
-        if env["READER_AUTOPLAY"] == "1" { play() }
         if let raw = env["READER_SHEET"], let i = Int(raw) { tapToken(i) }
+
+        let seek = env["READER_SEEK"].flatMap(Double.init)
+        let autoplay = env["READER_AUTOPLAY"] == "1"
+        guard seek != nil || autoplay else { return }
+        Task {
+            if player == nil { guard await ensureAudio() else { return } }
+            if let t = seek {
+                player?.currentTime = t
+                currentTime = t
+                activeIndex = timeline.index(at: t)
+            }
+            if autoplay { play() }
+        }
     }
     #endif
 
@@ -255,7 +323,7 @@ final class ReaderModel {
     /// playhead from a never-played open is skipped, while a `completed` chapter is
     /// always written (its `AVAudioPlayer` playhead has already reset to 0).
     func persistProgress(completed: Bool = false) {
-        guard loadState == .ready, duration > 0 else { return }
+        guard audioState == .ready, duration > 0 else { return }
         let stop: PlaybackStop = completed
             ? .completed
             : .interrupted(time: player?.currentTime ?? currentTime)

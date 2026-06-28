@@ -8,10 +8,26 @@ import ReaderCore
 @MainActor
 @Observable
 final class AppModel {
-    var themeName: ThemeName = .paper
+    /// Active theme. Persisted across launches (the only toggle now lives in the
+    /// reader, so it must stick).
+    var themeName: ThemeName = .paper {
+        didSet { UserDefaults.standard.set(themeName.rawValue, forKey: Self.themeKey) }
+    }
     var route: Route = .library
     /// Drives the membership paywall sheet (RevenueCat `PaywallView`).
     var showPaywall = false
+
+    /// Reading-surface preferences (Settings). Persisted across launches so a
+    /// chosen font/size sticks; applied to `RubyTextView` only.
+    var readingFont: ReadingFont = .mincho {
+        didSet { UserDefaults.standard.set(readingFont.rawValue, forKey: Self.fontKey) }
+    }
+    var readingSize: ReadingSize = .medium {
+        didSet { UserDefaults.standard.set(readingSize.rawValue, forKey: Self.sizeKey) }
+    }
+    private static let themeKey = "reader.themeName"
+    private static let fontKey = "reader.readingFont"
+    private static let sizeKey = "reader.readingSize"
     /// Bumped when a purchase/restore completes — the reader observes it to reload
     /// the chapter (now that `reader Pro` is active).
     var entitlementTick = 0
@@ -26,11 +42,19 @@ final class AppModel {
     var theme: Theme { themeName.theme }
 
     init() {
+        let defaults = UserDefaults.standard
+        if let raw = defaults.string(forKey: Self.themeKey), let t = ThemeName(rawValue: raw) { themeName = t }
+        if let raw = defaults.string(forKey: Self.fontKey), let f = ReadingFont(rawValue: raw) { readingFont = f }
+        if let raw = defaults.string(forKey: Self.sizeKey), let s = ReadingSize(rawValue: raw) { readingSize = s }
+
         #if DEBUG
         // Deterministic launch hooks for screenshots (pass via SIMCTL_CHILD_*):
-        //   READER_THEME=paper|sepia|night, READER_OPEN=<library index>.
+        //   READER_THEME=paper|sepia|night, READER_OPEN=<library index>,
+        //   READER_FONT=mincho|gothic|rounded, READER_SIZE=small|medium|large.
         let env = ProcessInfo.processInfo.environment
         if let t = env["READER_THEME"], let name = ThemeName(rawValue: t) { themeName = name }
+        if let f = env["READER_FONT"], let rf = ReadingFont(rawValue: f) { readingFont = rf }
+        if let s = env["READER_SIZE"], let rs = ReadingSize(rawValue: s) { readingSize = rs }
         if let raw = env["READER_OPEN"], let i = Int(raw) {
             let docs = services.library.all()
             if docs.indices.contains(i) { route = .reader(docs[i]) }

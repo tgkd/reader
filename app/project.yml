@@ -52,6 +52,10 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.0"
+      configs:
+        # @testable import Reader from the ReaderTests target needs testability.
+        Debug:
+          ENABLE_TESTABILITY: YES
     info:
       path: Reader/Info.plist
       properties:
@@ -75,3 +79,44 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+
+  # Unit tests for the app-target importers (EPUB/PDF/Text), which depend on
+  # ZIPFoundation/PDFKit and so can't live in the headless ReaderCore package.
+  # Fixtures are generated at runtime (no committed binaries) — see ReaderTests.
+  ReaderTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ReaderTests
+    dependencies:
+      - target: Reader
+      - package: ReaderCore
+      - package: ZIPFoundation
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: app.reader.app.tests
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+
+schemes:
+  Reader:
+    build:
+      targets:
+        Reader: all
+        ReaderTests: [test]
+    test:
+      targets:
+        - ReaderTests
+      gatherCoverageData: false
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

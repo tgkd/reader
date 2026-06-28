@@ -11,6 +11,19 @@ import Foundation
 enum L10n {
     static var wordmark: String { String(localized: "brand.wordmark") }
 
+    static var commonOK: String { String(localized: "common.ok") }
+
+    // Settings — reading preferences (font + size)
+    static var settings: String { String(localized: "settings.title") }
+    static var settingsFont: String { String(localized: "settings.section.font") }
+    static var settingsSize: String { String(localized: "settings.section.size") }
+    static var fontMincho: String { String(localized: "settings.font.mincho") }
+    static var fontGothic: String { String(localized: "settings.font.gothic") }
+    static var fontRounded: String { String(localized: "settings.font.rounded") }
+    static var sizeSmall: String { String(localized: "settings.size.small") }
+    static var sizeMedium: String { String(localized: "settings.size.medium") }
+    static var sizeLarge: String { String(localized: "settings.size.large") }
+
     static var statusUnread: String { String(localized: "library.status.unread") }
     static var statusDone: String { String(localized: "library.status.done") }
     static var libraryEmptyTitle: String { String(localized: "library.empty.title") }
@@ -27,8 +40,14 @@ enum L10n {
     static var readerSubscribeBody: String { String(localized: "reader.subscribe.body") }
     static var readerSubscribeCTA: String { String(localized: "reader.subscribe.cta") }
     static var chapters: String { String(localized: "reader.chapters") }
+    /// Fallback navigation label for an imported chapter with no title of its own
+    /// (chrome — localizes, unlike the real title, which is reader content).
+    static func chapterNumber(_ n: Int) -> String {
+        String(format: String(localized: "reader.chapterNumber.format"), n)
+    }
 
     static var a11yMembership: String { String(localized: "a11y.membership") }
+    static var a11ySettings: String { String(localized: "a11y.settings") }
 
     static var importFailedTitle: String { String(localized: "import.failed.title") }
     static var importUnsupported: String { String(localized: "import.unsupported") }
@@ -45,4 +64,5 @@ enum L10n {
     static var a11yPosition: String { String(localized: "a11y.position") }
     static var a11yPlayWord: String { String(localized: "a11y.playWord") }
     static var a11ySaveWord: String { String(localized: "a11y.saveWord") }
+    static var a11yAudioCached: String { String(localized: "a11y.audioCached") }
 }

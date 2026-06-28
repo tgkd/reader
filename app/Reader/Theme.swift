@@ -7,12 +7,13 @@ import SwiftUI
 enum ThemeName: String, CaseIterable, Codable {
     case paper, sepia, night
 
-    /// Toggle glyph shown in the UI (紙 / 茶 / 夜).
-    var glyph: String {
+    /// SF Symbol for the reader's appearance toggle, reflecting the current theme
+    /// (light → warm → dark). Language-neutral, unlike the old 紙/茶/夜 glyphs.
+    var symbol: String {
         switch self {
-        case .paper: return "紙"
-        case .sepia: return "茶"
-        case .night: return "夜"
+        case .paper: return "sun.max"
+        case .sepia: return "sunset"
+        case .night: return "moon.stars"
         }
     }
 
