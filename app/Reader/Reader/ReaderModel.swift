@@ -286,7 +286,6 @@ final class ReaderModel {
         sheetVisible = true
     }
 
-    func closeSheet() { sheetVisible = false }
     func toggleSaved() { saved.toggle() }
 
     // MARK: - Helpers

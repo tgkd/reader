@@ -11,55 +11,54 @@ struct DefinitionSheet: View {
     private var entry: DictionaryEntry? { model.entry }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Capsule().fill(theme.hair).frame(width: 40, height: 5)
-                .frame(maxWidth: .infinity).padding(.bottom, 18)
+        // Hosted in a native `.sheet` (grabber, background, rounded corners, and
+        // swipe-to-dismiss come from the system); this is just the content.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                header
 
-            header
+                Text(posLabel)
+                    .font(.system(size: 12.5).italic()).foregroundStyle(theme.muted)
+                    .padding(.top, 10)
 
-            Text(posLabel)
-                .font(.system(size: 12.5).italic()).foregroundStyle(theme.muted)
-                .padding(.top, 10)
-
-            VStack(alignment: .leading, spacing: 9) {
-                ForEach(Array(meanings.enumerated()), id: \.offset) { i, text in
-                    HStack(alignment: .firstTextBaseline, spacing: 11) {
-                        Text("\(i + 1).")
-                            .font(.system(size: 12)).monospacedDigit().foregroundStyle(theme.muted)
-                            .frame(width: 13, alignment: .leading)
-                        Text(text).font(.system(size: 16)).foregroundStyle(theme.ink).lineSpacing(4)
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(Array(meanings.enumerated()), id: \.offset) { i, text in
+                        HStack(alignment: .firstTextBaseline, spacing: 11) {
+                            Text("\(i + 1).")
+                                .font(.system(size: 12)).monospacedDigit().foregroundStyle(theme.muted)
+                                .frame(width: 13, alignment: .leading)
+                            Text(text).font(.system(size: 16)).foregroundStyle(theme.ink).lineSpacing(4)
+                        }
                     }
                 }
-            }
-            .padding(.top, 14)
+                .padding(.top, 14)
 
-            if let ex = entry?.example {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(ex.japanese).font(Mincho.font(17)).foregroundStyle(theme.ink).tracking(0.5)
-                    Text(ex.english).font(.system(size: 12.5)).foregroundStyle(theme.muted)
+                if let ex = entry?.example {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(ex.japanese).font(Mincho.font(17)).foregroundStyle(theme.ink).tracking(0.5)
+                        Text(ex.english).font(.system(size: 12.5)).foregroundStyle(theme.muted)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(theme.soft)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding(.top, 18)
                 }
-                .padding(.horizontal, 16).padding(.vertical, 14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(theme.soft)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .padding(.top, 18)
-            }
 
-            Button { model.toggleSaved() } label: {
-                Text(model.saved ? L10n.dictSaved : L10n.dictSave)
-                    .font(.system(size: 14)).tracking(1).foregroundStyle(theme.ink)
-                    .frame(maxWidth: .infinity).padding(13)
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(theme.hair, lineWidth: 1))
+                Button { model.toggleSaved() } label: {
+                    Text(model.saved ? L10n.dictSaved : L10n.dictSave)
+                        .font(.system(size: 14)).tracking(1).foregroundStyle(theme.ink)
+                        .frame(maxWidth: .infinity).padding(13)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(theme.hair, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 20)
             }
-            .buttonStyle(.plain)
-            .padding(.top, 20)
+            .padding(.horizontal, 24)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 14)
-        .padding(.bottom, 30)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.surface)
-        .clipShape(.rect(topLeadingRadius: 22, topTrailingRadius: 22, style: .circular))
     }
 
     private var header: some View {

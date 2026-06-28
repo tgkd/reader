@@ -19,10 +19,29 @@ struct ReaderView: View {
                 surface(model)
                 VStack(spacing: 0) { topBar(model); Spacer() }
                 VStack(spacing: 0) { Spacer(); transport(model) }
-                sheetLayer(model)
-                chaptersLayer(model)
             } else {
                 ProgressView().tint(theme.muted)
+            }
+        }
+        // Native bottom sheets — the system provides the grabber, dim, rounded
+        // corners, swipe-to-dismiss, and modal VoiceOver focus. The background is
+        // pinned to the theme so the themed text always contrasts it: a native
+        // sheet otherwise follows the device appearance, not the app's forced
+        // color scheme, which leaves a light theme's dark text on a dark sheet.
+        .sheet(isPresented: presented(\.sheetVisible)) {
+            if let model {
+                DefinitionSheet(model: model)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(theme.surface)
+            }
+        }
+        .sheet(isPresented: presented(\.chaptersVisible)) {
+            if let model {
+                chaptersSheet(model)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(theme.bg)
             }
         }
         .task(id: document.id) {
@@ -39,6 +58,12 @@ struct ReaderView: View {
             // playhead so a kill-while-backgrounded doesn't lose progress.
             if phase == .background { model?.persistProgress() }
         }
+    }
+
+    /// A Bool binding into the (optional) model, for native `.sheet` presentation.
+    private func presented(_ keyPath: ReferenceWritableKeyPath<ReaderModel, Bool>) -> Binding<Bool> {
+        Binding(get: { model?[keyPath: keyPath] ?? false },
+                set: { model?[keyPath: keyPath] = $0 })
     }
 
     // MARK: - Reading surface
@@ -239,43 +264,7 @@ struct ReaderView: View {
         v == v.rounded() ? "\(Int(v))" : String(format: "%g", v)
     }
 
-    // MARK: - Dictionary sheet
-
-    @ViewBuilder private func sheetLayer(_ model: ReaderModel) -> some View {
-        ZStack(alignment: .bottom) {
-            Color.black
-                .opacity(model.sheetVisible ? 0.34 : 0)
-                .ignoresSafeArea()
-                .allowsHitTesting(model.sheetVisible)
-                .onTapGesture { model.closeSheet() }
-
-            if model.sheetVisible {
-                DefinitionSheet(model: model)
-                    .accessibilityAddTraits(.isModal)   // scope VoiceOver to the sheet
-                    .transition(.move(edge: .bottom))
-            }
-        }
-        .animation(.spring(response: 0.36, dampingFraction: 0.88), value: model.sheetVisible)
-    }
-
     // MARK: - Chapters (multi-chapter imports)
-
-    @ViewBuilder private func chaptersLayer(_ model: ReaderModel) -> some View {
-        ZStack(alignment: .bottom) {
-            Color.black
-                .opacity(model.chaptersVisible ? 0.34 : 0)
-                .ignoresSafeArea()
-                .allowsHitTesting(model.chaptersVisible)
-                .onTapGesture { model.chaptersVisible = false }
-
-            if model.chaptersVisible {
-                chaptersSheet(model)
-                    .accessibilityAddTraits(.isModal)   // scope VoiceOver to the sheet
-                    .transition(.move(edge: .bottom))
-            }
-        }
-        .animation(.spring(response: 0.36, dampingFraction: 0.88), value: model.chaptersVisible)
-    }
 
     private func chaptersSheet(_ model: ReaderModel) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -307,12 +296,7 @@ struct ReaderView: View {
                     }
                 }
             }
-            .frame(maxHeight: 360)
         }
-        .padding(.bottom, 24)
-        .frame(maxWidth: .infinity)
-        .background(theme.bg)
-        .clipShape(.rect(topLeadingRadius: 18, topTrailingRadius: 18, style: .circular))
-        .ignoresSafeArea(edges: .bottom)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
