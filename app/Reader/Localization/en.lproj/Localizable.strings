@@ -23,6 +23,11 @@
 "reader.notGenerated.body" = "This chapter has no narration yet. In production, audio is generated once via the Worker and cached.";
 "reader.failed.title" = "Couldn’t load this chapter";
 
+/* Reader — subscription gate (no active `reader Pro` entitlement) */
+"reader.subscribe.title" = "Listen with Membership";
+"reader.subscribe.body" = "Subscribe to generate and play the word-synced narration.";
+"reader.subscribe.cta" = "View Membership";
+
 /* Reader — chapter navigation (multi-chapter imports) */
 "reader.chapters" = "Chapters";
 
@@ -38,6 +43,7 @@
 "a11y.pause" = "Pause";
 "a11y.theme" = "Theme";
 "a11y.add" = "Import text";
+"a11y.membership" = "Membership";
 "a11y.orientation" = "Toggle writing direction";
 "a11y.position" = "Playback position";
 "a11y.playWord" = "Play pronunciation";

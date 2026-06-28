@@ -58,6 +58,10 @@ struct ReaderView: View {
             // playhead so a kill-while-backgrounded doesn't lose progress.
             if phase == .background { model?.persistProgress() }
         }
+        .onChange(of: app.entitlementTick) { _, _ in
+            // A purchase/restore just unlocked `reader Pro` — retry the gated load.
+            Task { await model?.load() }
+        }
     }
 
     /// A Bool binding into the (optional) model, for native `.sheet` presentation.
@@ -87,6 +91,8 @@ struct ReaderView: View {
                 placeholder(L10n.readerNotGeneratedTitle, L10n.readerNotGeneratedBody)
             case .failed(let msg):
                 placeholder(L10n.readerFailedTitle, msg)
+            case .subscriptionRequired:
+                subscribeCTA
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -95,6 +101,25 @@ struct ReaderView: View {
         // Clears the transport chrome (~136pt with the taller scrubber row) so the
         // last text line can't tuck under the transport's opaque background.
         .padding(.bottom, 140)
+    }
+
+    /// Shown when the chapter is gated behind `reader Pro` — opens the paywall.
+    private var subscribeCTA: some View {
+        VStack(spacing: 16) {
+            Text(L10n.readerSubscribeTitle).font(Mincho.font(20)).foregroundStyle(theme.ink)
+            Text(L10n.readerSubscribeBody).font(.system(size: 13)).foregroundStyle(theme.muted)
+                .multilineTextAlignment(.center)
+            Button { app.showPaywall = true } label: {
+                Text(L10n.readerSubscribeCTA)
+                    .font(.system(size: 15, weight: .medium)).foregroundStyle(theme.accent)
+                    .padding(.horizontal, 22).padding(.vertical, 11)
+                    .overlay(Capsule().stroke(theme.accent, lineWidth: 1.5))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 40)
     }
 
     private func placeholder(_ title: String, _ subtitle: String) -> some View {

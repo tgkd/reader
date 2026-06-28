@@ -21,6 +21,11 @@
 "reader.notGenerated.body" = "この章にはまだ音声がありません。本番ではWorker経由で一度だけ生成され、キャッシュされます。";
 "reader.failed.title" = "この章を読み込めませんでした";
 
+/* リーダー — 購読ゲート（reader Pro 未加入） */
+"reader.subscribe.title" = "メンバーシップで聴く";
+"reader.subscribe.body" = "購読すると、単語同期の朗読を生成・再生できます。";
+"reader.subscribe.cta" = "メンバーシップを見る";
+
 /* リーダー — 目次（複数章のインポート） */
 "reader.chapters" = "目次";
 
@@ -36,6 +41,7 @@
 "a11y.pause" = "一時停止";
 "a11y.theme" = "テーマ";
 "a11y.add" = "テキストを追加";
+"a11y.membership" = "メンバーシップ";
 "a11y.orientation" = "縦書き・横書きの切り替え";
 "a11y.position" = "再生位置";
 "a11y.playWord" = "発音を再生";

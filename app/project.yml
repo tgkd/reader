@@ -34,6 +34,8 @@ targets:
       - package: ZIPFoundation
       - package: RevenueCat
         product: RevenueCat
+      - package: RevenueCat
+        product: RevenueCatUI
     # DEVELOPMENT_TEAM comes from the gitignored Signing.xcconfig (keeps the team
     # ID out of this public repo) and so survives `xcodegen generate`. Copy
     # Signing.xcconfig.example → Signing.xcconfig before a device/archive build.

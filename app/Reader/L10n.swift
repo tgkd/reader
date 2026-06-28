@@ -23,7 +23,12 @@ enum L10n {
     static var readerNotGeneratedTitle: String { String(localized: "reader.notGenerated.title") }
     static var readerNotGeneratedBody: String { String(localized: "reader.notGenerated.body") }
     static var readerFailedTitle: String { String(localized: "reader.failed.title") }
+    static var readerSubscribeTitle: String { String(localized: "reader.subscribe.title") }
+    static var readerSubscribeBody: String { String(localized: "reader.subscribe.body") }
+    static var readerSubscribeCTA: String { String(localized: "reader.subscribe.cta") }
     static var chapters: String { String(localized: "reader.chapters") }
+
+    static var a11yMembership: String { String(localized: "a11y.membership") }
 
     static var importFailedTitle: String { String(localized: "import.failed.title") }
     static var importUnsupported: String { String(localized: "import.unsupported") }

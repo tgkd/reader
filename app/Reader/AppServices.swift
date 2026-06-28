@@ -76,6 +76,9 @@ final class AppServices {
     /// from `YomiApp.init()` so `Purchases.shared.appUserID` is ready before any
     /// `AppServices` reads it. In DEBUG it prints the appUserID, so you can grant
     /// that id a promotional entitlement in the RevenueCat dashboard.
+    /// The `reader Pro` entitlement (RevenueCat identifier) the reader is gated on.
+    static let entitlementID = "reader Pro"
+
     static func configureRevenueCat() {
         guard !Purchases.isConfigured, let key = revenueCatKey, !key.isEmpty else { return }
         #if !targetEnvironment(simulator)
@@ -85,10 +88,29 @@ final class AppServices {
         // Store (appl_…) public key.
         guard !key.hasPrefix("test_") else { return }
         #endif
-        Purchases.configure(withAPIKey: key)
+        #if DEBUG
+        // Configure as a specific SDK user — e.g. a fresh, UNSUBSCRIBED id — to
+        // exercise the paywall gate in the sim (the default anonymous id may already
+        // hold a promo entitlement). nil → anonymous.
+        let appUserID = ProcessInfo.processInfo.environment["READER_RC_USER"]
+        #else
+        let appUserID: String? = nil
+        #endif
+        Purchases.configure(withAPIKey: key, appUserID: appUserID)
         #if DEBUG
         print("RevenueCat appUserID = \(Purchases.shared.appUserID)")
         #endif
+    }
+
+    /// Local subscription check backing the reader's paywall gate. When RevenueCat
+    /// isn't configured (dev/offline, or a device without an `appl_` key) it's
+    /// ungated (`true`), so fixture/Worker behavior is unchanged; otherwise `true`
+    /// iff `reader Pro` is active. Checked locally so the (paid) Worker is never hit
+    /// for a non-subscriber — which would also poison its negative-result cache.
+    func isSubscribed() async -> Bool {
+        guard Purchases.isConfigured else { return true }
+        let info = try? await Purchases.shared.customerInfo()
+        return info?.entitlements[AppServices.entitlementID]?.isActive == true
     }
 
     #if DEBUG

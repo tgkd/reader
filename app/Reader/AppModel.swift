@@ -10,6 +10,11 @@ import ReaderCore
 final class AppModel {
     var themeName: ThemeName = .paper
     var route: Route = .library
+    /// Drives the membership paywall sheet (RevenueCat `PaywallView`).
+    var showPaywall = false
+    /// Bumped when a purchase/restore completes — the reader observes it to reload
+    /// the chapter (now that `reader Pro` is active).
+    var entitlementTick = 0
 
     let services = AppServices()
 
@@ -36,6 +41,9 @@ final class AppModel {
             services.library.save(doc)
             route = .reader(doc)
         }
+        // Force-show the paywall for local testing (the sim's appUserID is already
+        // entitled, so the real gate wouldn't trigger).
+        if env["READER_PAYWALL"] == "1" { showPaywall = true }
         #endif
     }
 

@@ -10,7 +10,7 @@ import ReaderCore
 @MainActor
 @Observable
 final class ReaderModel {
-    enum LoadState: Equatable { case loading, ready, notGenerated, failed(String) }
+    enum LoadState: Equatable { case loading, ready, notGenerated, failed(String), subscriptionRequired }
     enum Orientation { case tate, yoko }
 
     let document: Document
@@ -86,6 +86,15 @@ final class ReaderModel {
         loadGeneration &+= 1
         let gen = loadGeneration
         loadState = .loading
+
+        // Subscription gate: require `reader Pro` (checked locally) before doing any
+        // work — so a non-subscriber sees the paywall and the paid Worker is never
+        // hit for them. No-op when RevenueCat isn't configured (dev/offline).
+        if await !services.isSubscribed() {
+            if gen == loadGeneration { loadState = .subscriptionRequired }
+            return
+        }
+
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
         link.onTick = { [weak self] in MainActor.assumeIsolated { self?.tick() } }
