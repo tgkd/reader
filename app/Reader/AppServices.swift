@@ -78,6 +78,13 @@ final class AppServices {
     /// that id a promotional entitlement in the RevenueCat dashboard.
     static func configureRevenueCat() {
         guard !Purchases.isConfigured, let key = revenueCatKey, !key.isEmpty else { return }
+        #if !targetEnvironment(simulator)
+        // RevenueCat "Test Store" keys (test_…) are a simulator/sandbox-testing
+        // construct and crash when configured against real StoreKit on a physical
+        // device. Skip them on device — on-device subscriptions need a real App
+        // Store (appl_…) public key.
+        guard !key.hasPrefix("test_") else { return }
+        #endif
         Purchases.configure(withAPIKey: key)
         #if DEBUG
         print("RevenueCat appUserID = \(Purchases.shared.appUserID)")
