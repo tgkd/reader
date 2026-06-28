@@ -1,4 +1,4 @@
-name: SyncSpike
+name: Reader
 options:
   bundleIdPrefix: app.reader
   developmentLanguage: en
@@ -13,30 +13,7 @@ packages:
     url: https://github.com/weichsel/ZIPFoundation.git
     from: "0.9.0"
 targets:
-  SyncSpike:
-    type: application
-    platform: iOS
-    sources:
-      - path: SyncSpike
-      - path: ../ReaderCore/Tests/ReaderCoreTests/fixtures
-        buildPhase: resources
-        excludes:
-          - ".gitkeep"
-    dependencies:
-      - package: ReaderCore
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: app.reader.syncspike
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "1"
-        TARGETED_DEVICE_FAMILY: "1"
-        SWIFT_VERSION: "5.0"
-
-  # The real product app (Yomi). Shares ReaderCore + the captured fixtures with
-  # the throwaway SyncSpike. Uses an explicit Info.plist (not the generated one)
+  # The product app (Yomi). Uses an explicit Info.plist (not the generated one)
   # so UIBackgroundModes: [audio] is honored for background TTS playback.
   Reader:
     type: application
@@ -50,10 +27,18 @@ targets:
     dependencies:
       - package: ReaderCore
       - package: ZIPFoundation
+    # DEVELOPMENT_TEAM comes from the gitignored Signing.xcconfig (keeps the team
+    # ID out of this public repo) and so survives `xcodegen generate`. Copy
+    # Signing.xcconfig.example → Signing.xcconfig before a device/archive build.
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.reader.app
         GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"

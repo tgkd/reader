@@ -12,3 +12,9 @@ ReaderCore/Tests/ReaderCoreTests/fixtures/*.mp3
 
 # Generated compact dictionary DB (regenerate: scripts/build-compact-dict.sh)
 app/Reader/Resources/jisho-compact.db
+
+# Xcode SwiftPM per-user state (leaks username; not reproducible)
+.swiftpm/
+
+# Local signing (Team ID) — copy from app/Signing.xcconfig.example
+app/Signing.xcconfig

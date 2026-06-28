@@ -121,8 +121,7 @@ reader/
 │   └── Tests/ReaderCoreTests/        # 34 green: mapper(8) + MeCab(4) + SpanTimeline(4) + Chunker(7) + Stitcher(4) + Decoder(6) + AlignmentFixture(1)
 │       └── fixtures/                 # captured <name>.json (commit) + <name>.mp3 (gitignored)
 └── app/                              # xcodegen; .xcodeproj + build/ gitignored — edit project.yml, not the proj
-    ├── project.yml                   # TWO targets: SyncSpike (old spike) + Reader (the product app)
-    ├── SyncSpike/                    # throwaway sync-overlay spike (App/SyncModel/ContentView) — kept
+    ├── project.yml                   # one target: Reader (the product app)
     └── Reader/                       # ★ the product app (Yomi)
         ├── App.swift  AppModel.swift  AppServices.swift  RootView.swift
         ├── Theme.swift  Components.swift  L10n.swift
@@ -146,7 +145,6 @@ builds for macOS); the app target is for the perceptual/visual checks.
   `READER_WORKER_URL=<url>` (Worker base URL; from your gitignored `.env`, see `.env.example`),
   `READER_IMPORT=<host file path>` (import an epub/pdf/txt and open it),
   `READER_CHAPTERS=1` (open the 目 chapter-nav sheet).
-- `SyncSpike` app: `SYNC_FIXTURE=soseki|numbers|dialogue`, `SYNC_SEEK=1.7`, `SYNC_AUTOPLAY=1`.
 
 ## Commands
 
@@ -161,8 +159,9 @@ node scripts/capture-alignment.mjs "吾輩は猫である。名前はまだ無�
 scripts/build-compact-dict.sh          # jisho-seed.db → app/Reader/Resources/jisho-compact.db (43MB)
 
 # Build/run the product app (Reader / Yomi).
+cp app/Signing.xcconfig.example app/Signing.xcconfig  # once: set your Team ID (gitignored; xcodegen requires the file)
 cd app && xcodegen generate            # regenerate after adding files or editing project.yml
-xcodebuild -project SyncSpike.xcodeproj -scheme Reader \
+xcodebuild -project Reader.xcodeproj -scheme Reader \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath build build
 DEV=$(xcrun simctl list devices | grep "(Booted)" | grep -oE "[0-9A-F-]{36}" | head -1)
 xcrun simctl install "$DEV" build/Build/Products/Debug-iphonesimulator/Reader.app
