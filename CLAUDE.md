@@ -143,6 +143,7 @@ builds for macOS); the app target is for the perceptual/visual checks.
   `READER_SEEK=<sec>` (render highlight paused), `READER_AUTOPLAY=1`,
   `READER_SHEET=<token index>` (open the definition), `READER_THEME=paper|sepia|night`,
   `READER_FORCE_WORKER=1` (skip the fixture fallback), `READER_USER_ID=<id>` (test X-User-ID),
+  `READER_WORKER_URL=<url>` (Worker base URL; from your gitignored `.env`, see `.env.example`),
   `READER_IMPORT=<host file path>` (import an epub/pdf/txt and open it),
   `READER_CHAPTERS=1` (open the 目 chapter-nav sheet).
 - `SyncSpike` app: `SYNC_FIXTURE=soseki|numbers|dialogue`, `SYNC_SEEK=1.7`, `SYNC_AUTOPLAY=1`.
@@ -167,6 +168,15 @@ DEV=$(xcrun simctl list devices | grep "(Booted)" | grep -oE "[0-9A-F-]{36}" | h
 xcrun simctl install "$DEV" build/Build/Products/Debug-iphonesimulator/Reader.app
 # Deterministic screenshot, e.g. tategaki + highlight on 名前:
 SIMCTL_CHILD_READER_OPEN=0 SIMCTL_CHILD_READER_ORI=tate SIMCTL_CHILD_READER_SEEK=1.7 \
+  xcrun simctl launch "$DEV" app.reader.app
+
+# Exercise the LIVE Worker on the sim: load secrets/config from .env, then pass
+# the READER_* values into the app's launch environment. (.env is gitignored;
+# copy .env.example → .env and fill it in.)
+set -a; . ./.env; set +a
+SIMCTL_CHILD_READER_FORCE_WORKER=1 \
+SIMCTL_CHILD_READER_WORKER_URL="$READER_WORKER_URL" \
+SIMCTL_CHILD_READER_USER_ID="$READER_USER_ID" \
   xcrun simctl launch "$DEV" app.reader.app
 
 # Production TTS (USER runs these — interactive / mutates the live Worker):

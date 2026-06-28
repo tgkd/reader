@@ -30,7 +30,7 @@ final class AppServices {
         let store = DiskAudioStore()
         audioStore = store
 
-        let worker = WorkerTTSService(userId: AppServices.userId)
+        let worker = WorkerTTSService(baseURL: AppServices.workerBaseURL, userId: AppServices.userId)
         let base: TTSService
         #if DEBUG
         let forceWorker = ProcessInfo.processInfo.environment["READER_FORCE_WORKER"] == "1"
@@ -59,5 +59,24 @@ final class AppServices {
         #else
         return nil
         #endif
+    }
+
+    /// Worker base URL for the production TTS path, resolved in order:
+    ///  1. DEBUG/sim — the launch env `READER_WORKER_URL` (export it from your
+    ///     gitignored `.env`; see `.env.example`).
+    ///  2. Release — the `WorkerBaseURL` Info.plist key (set via a gitignored
+    ///     xcconfig; env vars aren't available on device).
+    ///  3. A non-functional placeholder, so a fresh clone still builds and the
+    ///     public repo ships no live, billable host.
+    private static var workerBaseURL: URL {
+        var raw: String?
+        #if DEBUG
+        raw = ProcessInfo.processInfo.environment["READER_WORKER_URL"]
+        #endif
+        if (raw ?? "").isEmpty {
+            raw = Bundle.main.object(forInfoDictionaryKey: "WorkerBaseURL") as? String
+        }
+        if let raw, !raw.isEmpty, let url = URL(string: raw) { return url }
+        return URL(string: "https://your-worker.example.workers.dev")!
     }
 }
