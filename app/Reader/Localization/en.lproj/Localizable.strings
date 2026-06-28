@@ -1,0 +1,29 @@
+/* Yomi — UI chrome strings (English). Reader CONTENT is always Japanese;
+   only chrome follows the device language. Keys are semantic; the Japanese
+   values live in ja.lproj/Localizable.strings. */
+
+/* App wordmark (logo). Latin on English devices, 読み on Japanese. */
+"brand.wordmark" = "Yomi";
+
+/* Library — reading-progress status labels */
+"library.status.unread" = "Unread";
+"library.status.done" = "Done";
+
+/* Dictionary sheet */
+"dict.save" = "Save to list";
+"dict.saved" = "Saved to your list";
+"dict.notFound" = "Not in dictionary";
+
+/* Reader — chapter load states */
+"reader.notGenerated.title" = "Audio not generated yet";
+"reader.notGenerated.body" = "This chapter has no narration yet. In production, audio is generated once via the Worker and cached.";
+"reader.failed.title" = "Couldn’t load this chapter";
+
+/* Reader — chapter navigation (multi-chapter imports) */
+"reader.chapters" = "Chapters";
+
+/* Import (add text) */
+"import.failed.title" = "Import failed";
+"import.unsupported" = "Unsupported file type";
+"import.unreadable" = "Couldn’t read this file";
+"import.empty" = "No readable text found";

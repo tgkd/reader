@@ -1,0 +1,27 @@
+/* Yomi — UI chrome strings (Japanese). Same keys as en.lproj. */
+
+/* アプリのワードマーク（ロゴ） */
+"brand.wordmark" = "読み";
+
+/* ライブラリ — 進捗ラベル */
+"library.status.unread" = "未読";
+"library.status.done" = "読了";
+
+/* 辞書シート */
+"dict.save" = "単語帳に保存";
+"dict.saved" = "保存済み — 単語帳に追加しました";
+"dict.notFound" = "辞書に未収録";
+
+/* リーダー — 章の読み込み状態 */
+"reader.notGenerated.title" = "音声はまだ生成されていません";
+"reader.notGenerated.body" = "この章にはまだ音声がありません。本番ではWorker経由で一度だけ生成され、キャッシュされます。";
+"reader.failed.title" = "この章を読み込めませんでした";
+
+/* リーダー — 目次（複数章のインポート） */
+"reader.chapters" = "目次";
+
+/* インポート（テキスト追加） */
+"import.failed.title" = "読み込みに失敗しました";
+"import.unsupported" = "未対応のファイル形式";
+"import.unreadable" = "ファイルを読み込めませんでした";
+"import.empty" = "読めるテキストが見つかりません";

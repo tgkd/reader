@@ -1,0 +1,14 @@
+.DS_Store
+.build/
+DerivedData/
+build/
+*.xcodeproj
+*.xcworkspace
+node_modules/
+
+# Captured audio is regenerable; keep the JSON alignment fixtures committed.
+ReaderCore/Tests/ReaderCoreTests/fixtures/*.mp3
+.env
+
+# Generated compact dictionary DB (regenerate: scripts/build-compact-dict.sh)
+app/Reader/Resources/jisho-compact.db

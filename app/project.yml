@@ -1,0 +1,76 @@
+name: SyncSpike
+options:
+  bundleIdPrefix: app.reader
+  developmentLanguage: en
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  ReaderCore:
+    path: ../ReaderCore
+  # EPUB is a ZIP container; no public system unzip exists on iOS. Pinned to the
+  # 0.9.x line for its failable `Archive(url:accessMode:)` API (1.0 made it throw).
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: "0.9.0"
+targets:
+  SyncSpike:
+    type: application
+    platform: iOS
+    sources:
+      - path: SyncSpike
+      - path: ../ReaderCore/Tests/ReaderCoreTests/fixtures
+        buildPhase: resources
+        excludes:
+          - ".gitkeep"
+    dependencies:
+      - package: ReaderCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.reader.syncspike
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+
+  # The real product app (Yomi). Shares ReaderCore + the captured fixtures with
+  # the throwaway SyncSpike. Uses an explicit Info.plist (not the generated one)
+  # so UIBackgroundModes: [audio] is honored for background TTS playback.
+  Reader:
+    type: application
+    platform: iOS
+    sources:
+      - path: Reader
+      - path: ../ReaderCore/Tests/ReaderCoreTests/fixtures
+        buildPhase: resources
+        excludes:
+          - ".gitkeep"
+    dependencies:
+      - package: ReaderCore
+      - package: ZIPFoundation
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.reader.app
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+    info:
+      path: Reader/Info.plist
+      properties:
+        CFBundleDisplayName: Yomi
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations:
+          - en
+          - ja
+        ITSAppUsesNonExemptEncryption: false
+        UIBackgroundModes:
+          - audio
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait

@@ -1,0 +1,297 @@
+import SwiftUI
+import AVFAudio
+import QuartzCore
+import ReaderCore
+
+/// Drives one chapter: load-or-synthesize audio + alignment, tokenize the exact
+/// text the alignment indexes, fold char timings into token spans, play the mp3,
+/// and advance the active token each display frame from the real playhead. The
+/// highlight visual is the design's; the timing is the proven sync pipeline.
+@MainActor
+@Observable
+final class ReaderModel {
+    enum LoadState: Equatable { case loading, ready, notGenerated, failed(String) }
+    enum Orientation { case tate, yoko }
+
+    let document: Document
+    private let services: AppServices
+
+    private(set) var loadState: LoadState = .loading
+    private(set) var timeline = SpanTimeline([])
+    private(set) var activeIndex: Int?
+    private(set) var currentTime: Double = 0
+    private(set) var duration: Double = 0
+    private(set) var isPlaying = false
+
+    var speed: Double = 1.0
+    var orientation: Orientation = .tate
+    var chromeVisible = true
+
+    // Chapters (multi-chapter imports; single-chapter docs just read .first)
+    private(set) var chapterIndex = 0
+    var chaptersVisible = false
+
+    // Dictionary sheet
+    private(set) var entry: DictionaryEntry?
+    var sheetVisible = false
+    var saved = false
+
+    private var player: AVAudioPlayer?
+    private let link = DisplayLinkProxy()
+    private var isSwitchingChapter = false
+
+    init(document: Document, services: AppServices) {
+        self.document = document
+        self.services = services
+        let saved = document.progress.chapterIndex
+        chapterIndex = document.chapters.indices.contains(saved) ? saved : 0
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["READER_CHAPTERS"] == "1" { chaptersVisible = true }
+        #endif
+    }
+
+    /// Backstop teardown for the display link. ReaderModel sits OUTSIDE the
+    /// proxy↔CADisplayLink retain cycle (the proxy holds the model weakly), so
+    /// this deinit can run and break the cycle even if `onDisappear` is missed.
+    deinit { link.stop() }
+
+    var spans: [TokenSpan] { timeline.spans }
+    var progressFraction: Double { duration > 0 ? min(1, currentTime / duration) : 0 }
+
+    var currentChapter: Chapter? {
+        document.chapters.indices.contains(chapterIndex) ? document.chapters[chapterIndex] : document.chapters.first
+    }
+    var chapterCount: Int { document.chapters.count }
+    var hasChapters: Bool { chapterCount > 1 }
+    /// Book-level progress: the current chapter's position spread across all
+    /// chapters, so the library bar reflects whole-document reading.
+    var bookFraction: Double {
+        let n = max(1, chapterCount)
+        return (Double(chapterIndex) + progressFraction) / Double(n)
+    }
+
+    // MARK: - Load
+
+    func load() async {
+        loadState = .loading
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        link.onTick = { [weak self] in MainActor.assumeIsolated { self?.tick() } }
+
+        guard let tokenizer = services.tokenizer else {
+            loadState = .failed("Tokenizer unavailable"); return
+        }
+        let text = currentChapter?.text ?? ""
+        let request = SynthesisRequest(text: text)
+        let key = request.cacheKey
+
+        let synth: SynthesizedAudio
+        if let cached = services.audioStore.load(key) {
+            synth = cached
+        } else {
+            do {
+                synth = try await services.tts.synthesize(request)
+                services.audioStore.save(synth, for: key)
+            } catch is FixtureTTSService.FixtureError {
+                // No offline audio for this text — the genuine "not generated" case.
+                loadState = .notGenerated
+                return
+            } catch {
+                // Real failure (Worker auth/network, decode) — surface it, don't
+                // disguise it as "not generated".
+                loadState = .failed(error.localizedDescription)
+                return
+            }
+        }
+
+        // Tokenize the EXACT text the alignment indexes (single source of truth).
+        let tokens = tokenizer.tokenize(synth.text)
+        timeline = SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: synth.alignment))
+
+        do {
+            let p = try AVAudioPlayer(data: synth.audio)
+            p.enableRate = true
+            p.rate = Float(speed)
+            p.prepareToPlay()
+            player = p
+            duration = p.duration
+        } catch {
+            loadState = .failed("Audio failed to load"); return
+        }
+
+        // Resume where the last session left off (only for the saved chapter, and
+        // unless it was effectively finished).
+        let resume = document.progress.time
+        if chapterIndex == document.progress.chapterIndex, resume > 0, resume < duration - 0.5 {
+            player?.currentTime = resume
+            currentTime = resume
+            activeIndex = timeline.index(at: resume)
+        }
+
+        loadState = .ready
+        #if DEBUG
+        applyDebugHooks()
+        #endif
+    }
+
+    #if DEBUG
+    /// Launch hooks for deterministic screenshots (pass via SIMCTL_CHILD_*):
+    ///   READER_ORI=tate|yoko, READER_SEEK=<seconds> (render highlight paused),
+    ///   READER_AUTOPLAY=1, READER_SHEET=<token index>.
+    private func applyDebugHooks() {
+        let env = ProcessInfo.processInfo.environment
+        if let o = env["READER_ORI"] { orientation = (o == "yoko") ? .yoko : .tate }
+        if let s = env["READER_SEEK"], let t = Double(s) {
+            player?.currentTime = t
+            currentTime = t
+            activeIndex = timeline.index(at: t)
+        }
+        if env["READER_AUTOPLAY"] == "1" { play() }
+        if let raw = env["READER_SHEET"], let i = Int(raw) { tapToken(i) }
+    }
+    #endif
+
+    // MARK: - Transport
+
+    func togglePlay() { isPlaying ? pause() : play() }
+
+    func play() {
+        guard let player else { return }
+        if currentTime >= duration { player.currentTime = 0 }
+        player.enableRate = true
+        player.rate = Float(speed)
+        player.play()
+        isPlaying = true
+        link.start()
+    }
+
+    func pause() {
+        player?.pause()
+        isPlaying = false
+        link.stop()
+        persistProgress()
+    }
+
+    func setSpeed(_ v: Double) {
+        speed = v
+        player?.enableRate = true
+        player?.rate = Float(v)
+    }
+
+    func toggleOrientation() { orientation = orientation == .tate ? .yoko : .tate }
+    func toggleChrome() { chromeVisible.toggle() }
+
+    /// Switch to another chapter: save the current spot, tear down, reload. The
+    /// new chapter starts at the top (only the saved resume chapter restores time).
+    func openChapter(_ i: Int) async {
+        chaptersVisible = false
+        // Reentrancy guard: a fast double-tap must not start two overlapping loads
+        // that race the shared player/timeline and mis-pair audio with text.
+        guard !isSwitchingChapter, document.chapters.indices.contains(i), i != chapterIndex else { return }
+        isSwitchingChapter = true
+        stop()                       // persists current chapter's progress + tears down audio
+        chapterIndex = i
+        currentTime = 0
+        activeIndex = nil
+        duration = 0
+        timeline = SpanTimeline([])
+        await load()
+        isSwitchingChapter = false
+    }
+
+    func stop() {
+        persistProgress()       // capture the playhead before tearing down
+        player?.stop()
+        isPlaying = false
+        link.stop()
+    }
+
+    // MARK: - Progress persistence
+
+    /// Write the playhead back to the library so the row reflects real reading and
+    /// the next open resumes here. Called on pause / leave / completion /
+    /// backgrounding — never per frame. No-op until the chapter is loaded, so a
+    /// failed or not-generated open never clobbers saved progress with zeros.
+    func persistProgress() {
+        guard loadState == .ready, duration > 0 else { return }
+        if let player { currentTime = player.currentTime }
+        // Don't clobber a real saved position with zeros: if the chapter was opened
+        // but never resumed or played (playhead still at 0), leave the stored
+        // progress alone — e.g. reopening a finished book, or navigating to a fresh
+        // chapter and backing out without pressing play.
+        guard currentTime > 0 else { return }
+        var doc = document
+        doc.progress = ReadingProgress(chapterIndex: chapterIndex,
+                                       time: currentTime,
+                                       fraction: bookFraction)
+        services.library.save(doc)
+    }
+
+    private func tick() {
+        guard let player else { return }
+        currentTime = player.currentTime
+        activeIndex = timeline.index(at: currentTime)
+        if !player.isPlaying {
+            isPlaying = false
+            link.stop()
+            persistProgress()       // capture completion → row shows 読了
+        }
+    }
+
+    // MARK: - Tap to define
+
+    func tapToken(_ i: Int) {
+        guard let span = timeline[i], hasWordChar(span.surface) else { return }
+        let lemma = span.dictionaryForm ?? span.surface
+        entry = services.dictionary.lookup(dictionaryForm: lemma, reading: span.reading)
+            ?? DictionaryEntry(id: -1, word: span.surface, reading: span.reading ?? "",
+                               senses: [Sense(glosses: [L10n.dictNotFound], partsOfSpeech: ["—"])])
+        saved = false
+        sheetVisible = true
+    }
+
+    func closeSheet() { sheetVisible = false }
+    func toggleSaved() { saved.toggle() }
+
+    // MARK: - Helpers
+
+    func timeLabel(_ sec: Double) -> String {
+        let s = max(0, Int(sec.rounded()))
+        return "\(s / 60):" + String(format: "%02d", s % 60)
+    }
+
+    /// A token is tappable if it contains a kana/kanji/letter/digit — i.e. not
+    /// pure punctuation (。、「」), which the design also skips.
+    private func hasWordChar(_ s: String) -> Bool {
+        s.unicodeScalars.contains { sc in
+            let v = sc.value
+            return (0x3041...0x3096).contains(v)   // hiragana
+                || (0x30A1...0x30FA).contains(v)   // katakana
+                || (0x4E00...0x9FFF).contains(v)   // CJK kanji
+                || (0x0030...0x0039).contains(v)   // digit
+                || (0x0041...0x005A).contains(v) || (0x0061...0x007A).contains(v) // latin
+        }
+    }
+}
+
+/// CADisplayLink needs an `@objc` target; this keeps `ReaderModel` a clean
+/// `@Observable`. The link runs on the main run loop, so ticks fire on the main
+/// thread (hence `MainActor.assumeIsolated` is valid at the call site).
+private final class DisplayLinkProxy: NSObject {
+    var onTick: (() -> Void)?
+    private var link: CADisplayLink?
+
+    func start() {
+        guard link == nil else { return }
+        let l = CADisplayLink(target: self, selector: #selector(tick))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+
+    func stop() {
+        link?.invalidate()
+        link = nil
+    }
+
+    @objc private func tick() { onTick?() }
+}
