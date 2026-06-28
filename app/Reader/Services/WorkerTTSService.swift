@@ -28,6 +28,9 @@ final class WorkerTTSService: TTSService {
     private let userId: String?
     private let session: URLSession
 
+    /// The production endpoint is a private deployment. Supply your own Worker
+    /// base URL here (or inject one at call sites); the committed default is a
+    /// non-functional placeholder so the public repo ships no live, billable host.
     init(baseURL: URL = URL(string: "https://your-worker.example.workers.dev")!,
          userId: String?,
          session: URLSession = .shared) {
