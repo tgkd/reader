@@ -70,6 +70,21 @@ furigana segmentation. See research doc §4 "Verdict".
   `sha256(nfkc(text)+voice+model)`, storing `<key>.mp3` + `<key>.json` (alignment +
   text). `ReaderModel` does load-or-synthesize, so re-reads play from disk, offline.
   `DiskLibraryStore` persists the shelf.
+- **Monetization / gate (audio-only, lazy synth):** the subscription gates **only speech
+  generation**. Reading — tokenize, furigana, tap-to-define, import, chapter nav, themes,
+  settings — is **free**. `ReaderModel` splits `LoadState` (surface: loading/ready/failed)
+  from `AudioState` (locked/idle/synthesizing/ready/notGenerated/failed). Synthesis is
+  **lazy** (first Play): a free user sees a "Listen with Membership" pill, a subscriber
+  generates on demand; already-cached audio loads on open. The reader renders text from
+  `SpanTimeline(untimedTokens:)` (no alignment) so the moving highlight is the only
+  audio-dependent piece. The local `isSubscribed()` check (RevenueCat `reader Pro`) only
+  decides locked-vs-idle; the Worker's 403 stays the server-side backstop.
+- **Settings:** a themed sheet from the home-header **gear** (`SettingsView`/`SettingsModel`):
+  **reading font** (Mincho / Gothic / Rounded → `HiraMin`/`HiraKaku`/`HiraMaru` PS names)
+  + **text size** (S/M/L scale). The font *face* applies to the reader body **and** the
+  library/reader titles; the size to the reader body only. The theme toggle moved **out of
+  the home header into the reader**. Theme + font + size persist via `UserDefaults` (loaded
+  in `AppModel.init`, written on `didSet`).
 - **Design / UI:** built to the claude.ai **Yomi** design. All visual tokens (colors,
   highlight) live in a `Theme` injected via the **SwiftUI Environment** — switching
   theme swaps the env `Theme` (the "CSS variables" analogue; never pass theme props).
@@ -77,7 +92,9 @@ furigana segmentation. See research doc §4 "Verdict".
   (`RubyTextView`), see Invariants.
 - **i18n:** `L10n` + `en`/`ja` `.lproj`. **Chrome** localizes by system locale; **reader
   content** (the Japanese text, furigana, dictionary headwords) is always Japanese.
-  Wordmark localizes 読み↔Yomi; compact toggle glyphs (縦/横, 紙/茶/夜) stay iconic.
+  Wordmark localizes 読み↔Yomi; chrome controls are **SF Symbols** (language-neutral —
+  `IconButton` renders `Image(systemName:)`; the old 縦/横, 紙/茶/夜, 会, 目, + kanji
+  glyphs are gone). `ThemeName.symbol` maps paper/sepia/night → sun.max/sunset/moon.stars.
 - **Dictionary (DONE):** real tap-to-define via `SQLiteDictionaryService` over a
   **compact DB**. `scripts/build-compact-dict.sh` trims `jisho-seed.db` (275 MB) to
   **43 MB** by dropping the FTS5 tables + the `search_ngrams` column and keeping one
@@ -118,20 +135,23 @@ reader/
 │   │   ├── DictionaryService.swift   # protocol + DictionaryEntry / Sense / Example
 │   │   ├── Stores.swift              # LibraryStore / GeneratedAudioStore protocols
 │   │   └── DocumentImporter.swift    # ingestion seam (spine + encoding invariants noted)
-│   └── Tests/ReaderCoreTests/        # 41 green: mapper(8) + MeCab(4) + SpanTimeline(4) + Chunker(7) + Stitcher(4) + Decoder(6) + AlignmentFixture(1) + ProgressResolver(7)
+│   └── Tests/ReaderCoreTests/        # 42 green: mapper(8) + MeCab(4) + SpanTimeline(5) + Chunker(7) + Stitcher(4) + Decoder(6) + AlignmentFixture(1) + ProgressResolver(7)
 │       └── fixtures/                 # captured <name>.json (commit) + <name>.mp3 (gitignored)
 └── app/                              # xcodegen; .xcodeproj + build/ gitignored — edit project.yml, not the proj
-    ├── project.yml                   # one target: Reader (the product app)
-    └── Reader/                       # ★ the product app (Yomi)
-        ├── App.swift  AppModel.swift  AppServices.swift  RootView.swift
-        ├── Theme.swift  Components.swift  L10n.swift
-        ├── Localization/{en,ja}.lproj/Localizable.strings
-        ├── Resources/jisho-compact.db # bundled tap-to-define DB (gitignored; build-compact-dict.sh)
-        ├── Library/{LibraryView,LibraryModel}.swift   # LibraryView "+" → fileImporter import flow
-        ├── Reader/{ReaderView,ReaderModel,RubyTextView,DefinitionSheet}.swift  # progress writeback + 目 chapter nav
-        └── Services/{FixtureTTSService,WorkerTTSService,FallbackTTSService,ChunkingTTSService,DiskAudioStore,
-                       DiskLibraryStore,SQLiteDictionaryService,MockDictionaryService,SeedLibrary,
-                       Importer,EPUBImporter,PDFImporter,TextImporter}.swift  # ZIPFoundation (app target) for EPUB
+    ├── project.yml                   # targets: Reader (app) + ReaderTests (importer unit tests); scheme runs both
+    ├── Reader/                       # ★ the product app (Yomi)
+    │   ├── App.swift  AppModel.swift  AppServices.swift  RootView.swift   # AppModel persists theme/font/size
+    │   ├── Theme.swift  Components.swift  L10n.swift   # IconButton = SF-Symbol chrome; ThemeName.symbol
+    │   ├── Localization/{en,ja}.lproj/Localizable.strings
+    │   ├── Resources/jisho-compact.db # bundled tap-to-define DB (gitignored; build-compact-dict.sh)
+    │   ├── Settings/{SettingsView,SettingsModel}.swift  # font+size sheet; ReadingFont/ReadingSize (persisted)
+    │   ├── Library/{LibraryView,LibraryModel}.swift   # "+" import; home header = ★ membership / ⚙ settings / + import
+    │   ├── Reader/{ReaderView,ReaderModel,RubyTextView,DefinitionSheet}.swift  # audio-only gate + lazy synth; 目→list nav
+    │   └── Services/{FixtureTTSService,WorkerTTSService,FallbackTTSService,ChunkingTTSService,DiskAudioStore,
+    │                  DiskLibraryStore,SQLiteDictionaryService,MockDictionaryService,SeedLibrary,
+    │                  Importer,EPUBImporter,PDFImporter,TextImporter}.swift  # ZIPFoundation (app target) for EPUB
+    └── ReaderTests/                  # app unit-test target — importer tests (24), runtime-generated fixtures
+        └── {ImporterTestSupport,EPUBImporterTests,PDFImporterTests,TextImporterTests,ImporterRoutingTests}.swift
 ```
 
 The non-UI pipeline + contracts stay verifiable headless via `swift test` (MeCab-Swift
@@ -143,16 +163,25 @@ builds for macOS); the app target is for the perceptual/visual checks.
   `READER_OPEN=<library index>` (needs `READER_SEED=1` or an import), `READER_ORI=tate|yoko`,
   `READER_SEEK=<sec>` (render highlight paused), `READER_AUTOPLAY=1`,
   `READER_SHEET=<token index>` (open the definition), `READER_THEME=paper|sepia|night`,
+  `READER_FONT=mincho|gothic|rounded`, `READER_SIZE=small|medium|large` (these two persist
+  to `UserDefaults`, like a real change), `READER_SETTINGS=1` (open the settings sheet),
   `READER_FORCE_WORKER=1` (skip the fixture fallback), `READER_USER_ID=<id>` (test X-User-ID),
+  `READER_RC_KEY=<key>` / `READER_RC_USER=<id>` (configure RevenueCat on the sim to exercise
+  the locked/free tier), `READER_PAYWALL=1` (force the paywall sheet),
   `READER_WORKER_URL=<url>` (Worker base URL; from your gitignored `.env`, see `.env.example`),
   `READER_IMPORT=<host file path>` (import an epub/pdf/txt and open it),
-  `READER_CHAPTERS=1` (open the 目 chapter-nav sheet).
+  `READER_CHAPTERS=1` (open the chapter-nav sheet).
 
 ## Commands
 
 ```bash
 # Core logic + contracts — fast, no simulator. Run after ANY change to ReaderCore.
-cd ReaderCore && swift test            # 41 pass
+cd ReaderCore && swift test            # 42 pass
+
+# App-target importer tests (EPUB/PDF/Text + routing) — needs the simulator. Fixtures are
+# generated at runtime (no committed binaries); see app/ReaderTests.
+cd app && xcodebuild test -project Reader.xcodeproj -scheme Reader \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath build   # 24 pass
 
 # Capture REAL ElevenLabs alignment (your key, in reader/.env as ELEVEN_KEY). Default voice = George.
 node scripts/capture-alignment.mjs "吾輩は猫である。名前はまだ無い。" soseki
@@ -194,7 +223,7 @@ First `swift test` compiles the MeCab C++ sources (~minute) and downloads IPADic
 - `protocol JapaneseTokenizer`; `MeCabTokenizer()` (`throws`) — NFKC-normalizes internally; one pass yields surface + hiragana reading + kanji `dictionaryForm`.
 - `Alignment(characters:startTimes:endTimes:)` (Codable, ElevenLabs snake_case); `TimestampedAudio` (`audio_base64`+`alignment`+`normalized_alignment`).
 - `CharTokenMapper.map(tokens:alignment:options:) -> [TokenSpan]`; `Options(lookahead:)` default 8.
-- `SpanTimeline([TokenSpan])` → `index(at: Double) -> Int?` (rightmost token with `start ≤ t`), `duration`.
+- `SpanTimeline([TokenSpan])` → `index(at: Double) -> Int?` (rightmost token with `start ≤ t`), `duration`; `SpanTimeline(untimedTokens: [Token])` builds a render-only (zero-timing) timeline for the no-audio reader path.
 - `ContentKey(text:voice:model:)` → stable cache key (`.value`).
 - Models: `Document`/`Chapter`/`ReadingProgress`, `Voice`(`.george`)/`SynthesisModel`, `DictionaryEntry`/`Sense`/`Example`.
 - Protocols: `TTSService.synthesize(_:) async throws -> SynthesizedAudio` (`SynthesisRequest{text,voice,model}`, `.cacheKey`); `DictionaryService.lookup(dictionaryForm:reading:)`; `LibraryStore`; `GeneratedAudioStore.{load,save,has}`; `DocumentImporter.chapters()`.
@@ -227,7 +256,7 @@ sides NFKC-normalized identically; (2) confirm `alignment` not `normalized_align
 - **Phases 1–3 — sync pipeline: DONE & green.** `CharTokenMapper` + 8 adversarial tests;
   `MeCabTokenizer` (surfaces reconstruct NFKC input 1:1, kanji `dictionaryForm` extracted);
   3 captured fixtures (soseki / numbers / dialogue) at 100% char-match coverage. `2026`
-  stays one token across its spoken expansion (we read `alignment`). These are 17 of the now-**41** `swift test` cases.
+  stays one token across its spoken expansion (we read `alignment`). These are 17 of the now-**42** `swift test` cases.
 - **Phase 4 — product app BUILT to the Yomi design & sim-verified.** Library / Reader /
   Dictionary, 3 themes, tategaki + yokogaki with furigana, the synced highlight (correct
   glyph-rect in both orientations), tap-to-define. A `code-review` adversarial pass found
@@ -263,6 +292,29 @@ sides NFKC-normalized identically; (2) confirm `alignment` not `normalized_align
   epub/pdf/txt (off-main parse); multi-chapter docs get a **目** chapter-nav sheet.
   EPUB import verified end-to-end on the sim (3-chapter spine parsed in order, library
   persists). A 5-dimension adversarial review (12 confirmed findings) was applied.
+- **Monetization reworked — gate ONLY speech generation, lazy synth. DONE & sim-verified.**
+  Reading (text + furigana + tap-to-define + import + chapters + themes + settings) is
+  **free**; only TTS is gated. `ReaderModel` split into `LoadState` (surface) + `AudioState`;
+  synthesis deferred to first Play. Sim-verified: free/unsubscribed user reads the full text
+  + a "Listen with Membership" pill; subscriber gets lazy synth → correct highlight + full
+  transport; cached re-reads load instantly; tap-to-define works for free users.
+- **Settings + persistence — DONE & sim-verified.** Themed sheet from the home gear:
+  reading font (Mincho/Gothic/Rounded, each previewed in-face) + text size (S/M/L). Font
+  face reaches the reader body + library/reader titles. Theme toggle moved into the reader.
+  Theme + font + size persist (`UserDefaults`) — two-launch persistence verified; EN + JA
+  settings both render.
+- **Chrome → SF Symbols + i18n sweep — DONE & sim-verified.** All header glyphs replaced
+  with language-neutral SF Symbols (★ membership / ⚙ settings / + import / ☰ chapters /
+  ↕↔ orientation / ☀🌇🌙 theme). Remaining hardcoded chrome localized (alert OK,
+  chapter-number fallback, cached-audio a11y) + all settings strings, en + ja.
+- **Importer tests — DONE & green (NEW: first app-level tests).** A `ReaderTests`
+  `bundle.unit-test` target (hosted by `Reader`, deps ZIPFoundation + ReaderCore) with
+  **runtime-generated fixtures** — EPUB zipped via `FileManager.zipItem`, PDF via
+  `UIGraphicsPDFRenderer`, text in UTF-8/Shift-JIS/EUC-JP/BOM — **24 cases** over
+  EPUBImporter (spine order, `linear="no"` skip, head isolation, entity decode, nested/%-href,
+  corrupt→unreadable, empty-spine→empty), PDFImporter (per-page, blank-skip, unreadable),
+  TextImporter (encodings, BOM, empty), and `Importer` routing. All three formats also
+  re-verified end-to-end via `READER_IMPORT` (real .epub/.pdf/.txt opened in the reader).
 
 ## Not done yet / next
 
@@ -315,3 +367,17 @@ sides NFKC-normalized identically; (2) confirm `alignment` not `normalized_align
   `RevenueCatKey` Info.plist); `Purchases.shared.appUserID` becomes the Worker's `X-User-ID` (DEBUG `READER_USER_ID`
   overrides for tests). The `aiwork` Worker verifies the standalone `reader` RevenueCat project for `/tts/aligned`
   only (`projectCreds()`, `REVENUECAT_*_READER`), default project for jisho's routes — two apps, one Worker (user, 2026-06-28).
+- **Gate ONLY speech generation**, not the whole reader: reading is free, audio is the paid
+  feature. Synthesis is **lazy** (on Play), not eager on open — saves TTS cost on
+  opened-but-unheard chapters. Free-user audio UI = a single "Listen with Membership" pill
+  (user, 2026-06-28).
+- **Settings screen** (font + size) reached from the home-header gear; theme toggle moved
+  out of the home header into the reader. Reading **font face** applies to body + titles,
+  **size** to the body only. Theme + font + size persist via `UserDefaults` (user, 2026-06-28).
+- **Chrome controls → SF Symbols** (language-neutral), replacing the single-kanji glyph
+  buttons; membership icon is `star.circle` (user chose over crown). Reader content + the
+  read-direction nature of orientation kept the glyphs' intent via arrows/appearance icons
+  (user, 2026-06-28).
+- **First app-level test target** (`ReaderTests`): the EPUB/PDF/Text importers live in the
+  app target (need ZIPFoundation/PDFKit) so they can't go in headless ReaderCore — fixtures
+  are generated at runtime instead of committing binaries (impl, 2026-06-28).
