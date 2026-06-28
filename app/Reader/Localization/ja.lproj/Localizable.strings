@@ -7,6 +7,10 @@
 "library.status.unread" = "未読";
 "library.status.done" = "読了";
 
+/* ライブラリ — 空の状態（まだ本がない） */
+"library.empty.title" = "ライブラリは空です";
+"library.empty.body" = "＋ から EPUB・PDF・テキストを追加できます。";
+
 /* 辞書シート */
 "dict.save" = "単語帳に保存";
 "dict.saved" = "保存済み — 単語帳に追加しました";

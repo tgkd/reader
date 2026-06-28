@@ -118,7 +118,7 @@ reader/
 │   │   ├── DictionaryService.swift   # protocol + DictionaryEntry / Sense / Example
 │   │   ├── Stores.swift              # LibraryStore / GeneratedAudioStore protocols
 │   │   └── DocumentImporter.swift    # ingestion seam (spine + encoding invariants noted)
-│   └── Tests/ReaderCoreTests/        # 34 green: mapper(8) + MeCab(4) + SpanTimeline(4) + Chunker(7) + Stitcher(4) + Decoder(6) + AlignmentFixture(1)
+│   └── Tests/ReaderCoreTests/        # 41 green: mapper(8) + MeCab(4) + SpanTimeline(4) + Chunker(7) + Stitcher(4) + Decoder(6) + AlignmentFixture(1) + ProgressResolver(7)
 │       └── fixtures/                 # captured <name>.json (commit) + <name>.mp3 (gitignored)
 └── app/                              # xcodegen; .xcodeproj + build/ gitignored — edit project.yml, not the proj
     ├── project.yml                   # one target: Reader (the product app)
@@ -137,8 +137,10 @@ reader/
 The non-UI pipeline + contracts stay verifiable headless via `swift test` (MeCab-Swift
 builds for macOS); the app target is for the perceptual/visual checks.
 
-**DEBUG launch hooks** (via `SIMCTL_CHILD_<VAR>`):
-- `Reader` app: `READER_OPEN=<library index>`, `READER_ORI=tate|yoko`,
+**DEBUG launch hooks** (via `SIMCTL_CHILD_<VAR>`; on device, set them as Xcode scheme env vars):
+- `Reader` app: `READER_SEED=1` (load the sample shelf — the library is **empty by
+  default**), `READER_RESET=1` (wipe the persisted shelf + narration cache),
+  `READER_OPEN=<library index>` (needs `READER_SEED=1` or an import), `READER_ORI=tate|yoko`,
   `READER_SEEK=<sec>` (render highlight paused), `READER_AUTOPLAY=1`,
   `READER_SHEET=<token index>` (open the definition), `READER_THEME=paper|sepia|night`,
   `READER_FORCE_WORKER=1` (skip the fixture fallback), `READER_USER_ID=<id>` (test X-User-ID),
@@ -150,7 +152,7 @@ builds for macOS); the app target is for the perceptual/visual checks.
 
 ```bash
 # Core logic + contracts — fast, no simulator. Run after ANY change to ReaderCore.
-cd ReaderCore && swift test            # 34 pass
+cd ReaderCore && swift test            # 41 pass
 
 # Capture REAL ElevenLabs alignment (your key, in reader/.env as ELEVEN_KEY). Default voice = George.
 node scripts/capture-alignment.mjs "吾輩は猫である。名前はまだ無い。" soseki
@@ -165,8 +167,8 @@ xcodebuild -project Reader.xcodeproj -scheme Reader \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath build build
 DEV=$(xcrun simctl list devices | grep "(Booted)" | grep -oE "[0-9A-F-]{36}" | head -1)
 xcrun simctl install "$DEV" build/Build/Products/Debug-iphonesimulator/Reader.app
-# Deterministic screenshot, e.g. tategaki + highlight on 名前:
-SIMCTL_CHILD_READER_OPEN=0 SIMCTL_CHILD_READER_ORI=tate SIMCTL_CHILD_READER_SEEK=1.7 \
+# Deterministic screenshot, e.g. tategaki + highlight on 名前 (READER_SEED loads the samples):
+SIMCTL_CHILD_READER_SEED=1 SIMCTL_CHILD_READER_OPEN=0 SIMCTL_CHILD_READER_ORI=tate SIMCTL_CHILD_READER_SEEK=1.7 \
   xcrun simctl launch "$DEV" app.reader.app
 
 # Exercise the LIVE Worker on the sim: load secrets/config from .env, then pass
@@ -225,7 +227,7 @@ sides NFKC-normalized identically; (2) confirm `alignment` not `normalized_align
 - **Phases 1–3 — sync pipeline: DONE & green.** `CharTokenMapper` + 8 adversarial tests;
   `MeCabTokenizer` (surfaces reconstruct NFKC input 1:1, kanji `dictionaryForm` extracted);
   3 captured fixtures (soseki / numbers / dialogue) at 100% char-match coverage. `2026`
-  stays one token across its spoken expansion (we read `alignment`). These are 17 of the now-**34** `swift test` cases.
+  stays one token across its spoken expansion (we read `alignment`). These are 17 of the now-**41** `swift test` cases.
 - **Phase 4 — product app BUILT to the Yomi design & sim-verified.** Library / Reader /
   Dictionary, 3 themes, tategaki + yokogaki with furigana, the synced highlight (correct
   glyph-rect in both orientations), tap-to-define. A `code-review` adversarial pass found
@@ -306,3 +308,10 @@ sides NFKC-normalized identically; (2) confirm `alignment` not `normalized_align
   request → one stitched `SynthesizedAudio` keyed by the whole-chapter `ContentKey` (impl, 2026-06-28).
 - Imported books keep chapter structure (one Chapter per EPUB spine item / PDF page) + a minimal in-reader
   **目** chapter-nav sheet, rather than flattening a whole book into one giant synthesis (impl, 2026-06-28).
+- **Library starts empty** (real app): the sample shelf (`SeedLibrary`, with its canned progress) is dev-only,
+  opt-in via DEBUG `READER_SEED=1`; `READER_RESET=1` wipes the persisted shelf + narration cache without an app
+  delete (keeps the RevenueCat appUserID). Empty first-run shows a "Your library is empty" hint (user, 2026-06-28).
+- **RevenueCat wired** (minimal): `Purchases.configure` at launch with the iOS public key (`READER_RC_KEY` env /
+  `RevenueCatKey` Info.plist); `Purchases.shared.appUserID` becomes the Worker's `X-User-ID` (DEBUG `READER_USER_ID`
+  overrides for tests). The `aiwork` Worker verifies the standalone `reader` RevenueCat project for `/tts/aligned`
+  only (`projectCreds()`, `REVENUECAT_*_READER`), default project for jisho's routes — two apps, one Worker (user, 2026-06-28).

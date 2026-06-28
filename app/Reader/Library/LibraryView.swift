@@ -15,11 +15,15 @@ struct LibraryView: View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 22)
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(model.items) { row($0) }
+            if model.items.isEmpty {
+                emptyState
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(model.items) { row($0) }
+                    }
+                    .padding(.vertical, 6)
                 }
-                .padding(.vertical, 6)
             }
         }
         .onAppear { model.load(app.services) }
@@ -45,6 +49,9 @@ struct LibraryView: View {
     /// row appears when parsing finishes.
     private func handleImport(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
+        // Title from the ORIGINAL file name — the temp copy below is UUID-prefixed,
+        // so deriving the title from it would name every import after the temp file.
+        let displayName = url.deletingPathExtension().lastPathComponent
         let scoped = url.startAccessingSecurityScopedResource()
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + "-" + url.lastPathComponent)
@@ -61,15 +68,30 @@ struct LibraryView: View {
         Task { @MainActor in
             defer { try? FileManager.default.removeItem(at: temp) }
             do {
-                let document = try await Task.detached(priority: .userInitiated) {
+                var document = try await Task.detached(priority: .userInitiated) {
                     try Importer.document(from: temp)
                 }.value
+                document.title = displayName
                 app.services.library.save(document)
                 model.load(app.services)
             } catch {
                 importError = error.localizedDescription
             }
         }
+    }
+
+    /// Shown when no books have been imported yet (the default on a fresh install,
+    /// now that the sample shelf is dev-only). Keeps first run from looking broken.
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Text(L10n.libraryEmptyTitle)
+                .font(Mincho.font(18)).foregroundStyle(theme.ink)
+            Text(L10n.libraryEmptyBody)
+                .font(.system(size: 13)).foregroundStyle(theme.muted)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 40)
     }
 
     private var header: some View {

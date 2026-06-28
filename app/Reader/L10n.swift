@@ -13,6 +13,8 @@ enum L10n {
 
     static var statusUnread: String { String(localized: "library.status.unread") }
     static var statusDone: String { String(localized: "library.status.done") }
+    static var libraryEmptyTitle: String { String(localized: "library.empty.title") }
+    static var libraryEmptyBody: String { String(localized: "library.empty.body") }
 
     static var dictSave: String { String(localized: "dict.save") }
     static var dictSaved: String { String(localized: "dict.saved") }

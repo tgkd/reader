@@ -79,12 +79,6 @@ final class ReaderModel {
     }
     var chapterCount: Int { document.chapters.count }
     var hasChapters: Bool { chapterCount > 1 }
-    /// Book-level progress: the current chapter's position spread across all
-    /// chapters, so the library bar reflects whole-document reading.
-    var bookFraction: Double {
-        let n = max(1, chapterCount)
-        return (Double(chapterIndex) + progressFraction) / Double(n)
-    }
 
     // MARK: - Load
 
@@ -247,31 +241,45 @@ final class ReaderModel {
     /// Write the playhead back to the library so the row reflects real reading and
     /// the next open resumes here. Called on pause / leave / completion /
     /// backgrounding — never per frame. No-op until the chapter is loaded, so a
-    /// failed or not-generated open never clobbers saved progress with zeros.
-    func persistProgress() {
+    /// failed or not-generated open never clobbers saved progress with zeros. The
+    /// keep-or-skip decision lives in `ReadingProgressResolver` (tested): a zero
+    /// playhead from a never-played open is skipped, while a `completed` chapter is
+    /// always written (its `AVAudioPlayer` playhead has already reset to 0).
+    func persistProgress(completed: Bool = false) {
         guard loadState == .ready, duration > 0 else { return }
-        if let player { currentTime = player.currentTime }
-        // Don't clobber a real saved position with zeros: if the chapter was opened
-        // but never resumed or played (playhead still at 0), leave the stored
-        // progress alone — e.g. reopening a finished book, or navigating to a fresh
-        // chapter and backing out without pressing play.
-        guard currentTime > 0 else { return }
+        let stop: PlaybackStop = completed
+            ? .completed
+            : .interrupted(time: player?.currentTime ?? currentTime)
+        guard let progress = ReadingProgressResolver.resolve(stop, duration: duration,
+                                                             chapterIndex: chapterIndex,
+                                                             chapterCount: chapterCount)
+        else { return }
+        currentTime = progress.time
         var doc = document
-        doc.progress = ReadingProgress(chapterIndex: chapterIndex,
-                                       time: currentTime,
-                                       fraction: bookFraction)
+        doc.progress = progress
         services.library.save(doc)
     }
 
     private func tick() {
         guard let player else { return }
-        currentTime = player.currentTime
-        activeIndex = timeline.index(at: currentTime)
         if !player.isPlaying {
+            // Playback stopped. `AVAudioPlayer` zeroes `currentTime` on a *natural*
+            // finish, so detect "reached the end" from the last playhead we recorded
+            // (≈duration) rather than the reset value — else a finished chapter
+            // persists as 0 and never shows 読了. A stop short of the end (e.g. an
+            // audio-session interruption) keeps its real position.
             isPlaying = false
             link.stop()
-            persistProgress()       // capture completion → row shows 読了
+            let reachedEnd = currentTime >= duration - 0.5
+            if reachedEnd {
+                currentTime = duration
+                activeIndex = timeline.index(at: duration)
+            }
+            persistProgress(completed: reachedEnd)
+            return
         }
+        currentTime = player.currentTime
+        activeIndex = timeline.index(at: currentTime)
     }
 
     // MARK: - Tap to define

@@ -12,6 +12,11 @@ packages:
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation.git
     from: "0.9.0"
+  # Subscriptions: configured with the iOS public SDK key; the app's RevenueCat
+  # appUserID becomes the Worker's X-User-ID (the /tts/aligned subscription gate).
+  RevenueCat:
+    url: https://github.com/RevenueCat/purchases-ios.git
+    from: "5.0.0"
 targets:
   # The product app (Yomi). Uses an explicit Info.plist (not the generated one)
   # so UIBackgroundModes: [audio] is honored for background TTS playback.
@@ -27,6 +32,8 @@ targets:
     dependencies:
       - package: ReaderCore
       - package: ZIPFoundation
+      - package: RevenueCat
+        product: RevenueCat
     # DEVELOPMENT_TEAM comes from the gitignored Signing.xcconfig (keeps the team
     # ID out of this public repo) and so survives `xcodegen generate`. Copy
     # Signing.xcconfig.example → Signing.xcconfig before a device/archive build.
@@ -53,6 +60,13 @@ targets:
         CFBundleLocalizations:
           - en
           - ja
+        # Release/device config — values come from the gitignored Signing.xcconfig
+        # (WORKER_HOST / REVENUECAT_KEY), so the app reaches production on an icon /
+        # TestFlight launch without the DEBUG READER_* env vars. Empty → the code's
+        # placeholder fallback. The host lives in the xcconfig (gitignored); only the
+        # scheme is committed here.
+        WorkerBaseURL: "https://$(WORKER_HOST)"
+        RevenueCatKey: "$(REVENUECAT_KEY)"
         ITSAppUsesNonExemptEncryption: false
         UIBackgroundModes:
           - audio

@@ -7,3 +7,11 @@
 //   security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
 // (the OU=... field is your Team ID).
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
+
+// Production config baked into the Info.plist (WorkerBaseURL / RevenueCatKey) so a
+// device / TestFlight build reaches the Worker + configures RevenueCat without the
+// DEBUG READER_* env vars. Host only — no scheme (xcconfig treats `//` as a comment,
+// so the https:// is added in project.yml). REVENUECAT_KEY is the SDK public key
+// (appl_/test_). Leave blank → the app falls back to its placeholder.
+WORKER_HOST = your-worker.example.workers.dev
+REVENUECAT_KEY =

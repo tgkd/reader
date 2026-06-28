@@ -9,6 +9,10 @@
 "library.status.unread" = "Unread";
 "library.status.done" = "Done";
 
+/* Library — empty state (no books imported yet) */
+"library.empty.title" = "Your library is empty";
+"library.empty.body" = "Tap + to add an EPUB, PDF, or text file.";
+
 /* Dictionary sheet */
 "dict.save" = "Save to list";
 "dict.saved" = "Saved to your list";

@@ -26,7 +26,7 @@ highlight) · on-disk content-addressed cache · jisho→SQLite tap-to-define.
 
 | Area | What | State |
 |---|---|---|
-| Sync pipeline | `CharTokenMapper` + MeCab + real ElevenLabs fixtures | ✅ green — 34 tests, 100% coverage |
+| Sync pipeline | `CharTokenMapper` + MeCab + real ElevenLabs fixtures | ✅ green — 41 tests, 100% coverage |
 | Product app | Library / Reader / Dictionary, 3 themes, tategaki + yokogaki, tap-to-define — built to the **Yomi** design | ✅ built & sim-verified |
 | i18n | `L10n` + en/ja dicts; chrome localizes, content stays JP | ✅ verified |
 | Caching | `DiskAudioStore` (mp3 + alignment by content hash) + persisted library | ✅ verified |
@@ -43,7 +43,7 @@ target (`Reader`) is for the visual/perceptual checks.
 ## Run
 
 ```bash
-cd ReaderCore && swift test            # 34 pass — run after any ReaderCore change
+cd ReaderCore && swift test            # 41 pass — run after any ReaderCore change
 
 # Build the compact tap-to-define DB once (gitignored output), then the app:
 scripts/build-compact-dict.sh          # jisho-seed.db → app/Reader/Resources/jisho-compact.db
@@ -54,7 +54,7 @@ cd app && xcodegen generate
 xcodebuild -project Reader.xcodeproj -scheme Reader \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath build build
 # Deterministic screenshot via DEBUG hooks (e.g. tategaki, highlight at 1.7s):
-#   SIMCTL_CHILD_READER_OPEN=0 SIMCTL_CHILD_READER_ORI=tate SIMCTL_CHILD_READER_SEEK=1.7
+#   SIMCTL_CHILD_READER_SEED=1 SIMCTL_CHILD_READER_OPEN=0 SIMCTL_CHILD_READER_ORI=tate SIMCTL_CHILD_READER_SEEK=1.7
 
 # Capture ElevenLabs fixtures (your key in reader/.env as ELEVEN_KEY):
 node scripts/capture-alignment.mjs "吾輩は猫である。" soseki
@@ -73,7 +73,7 @@ the **DEBUG launch hooks** so they're reproducible without tapping through the U
 
 ```bash
 # 1. Headless pipeline — fast, no simulator. Run after ANY ReaderCore change.
-cd ReaderCore && swift test            # 34 pass (first run compiles MeCab ~1 min)
+cd ReaderCore && swift test            # 41 pass (first run compiles MeCab ~1 min)
 cd ..
 
 # 2. Compact tap-to-define DB (gitignored output; skip → app falls back to a mock dict)
@@ -94,13 +94,15 @@ DEV=$(xcrun simctl list devices | grep "(Booted)" | grep -oE "[0-9A-F-]{36}" | h
 xcrun simctl install "$DEV" app/build/Build/Products/Debug-iphonesimulator/Reader.app
 ```
 
-The committed fixtures (`soseki` / `numbers` / `dialogue`) make three of the six
-starter texts play **offline** on the sim — no Worker needed for the UI pass.
+The library is **empty by default**; pass `SIMCTL_CHILD_READER_SEED=1` to load the
+sample shelf. The committed fixtures (`soseki` / `numbers` / `dialogue`) then make
+three of the six samples play **offline** on the sim — no Worker needed for the UI pass.
 
 ### 1. Automated — what `swift test` covers
 
-34 tests over the non-UI pipeline (`CharTokenMapper` 8, `MeCab` 4, `SpanTimeline` 4,
-`Chunker` 7, `AlignmentStitcher` 4, `JapaneseTextDecoder` 6, `AlignmentFixture` 1).
+41 tests over the non-UI pipeline (`CharTokenMapper` 8, `MeCab` 4, `SpanTimeline` 4,
+`Chunker` 7, `AlignmentStitcher` 4, `JapaneseTextDecoder` 6, `AlignmentFixture` 1,
+`ReadingProgressResolver` 7).
 The fixture proxy asserts the spike's headless thresholds on real ElevenLabs
 alignment: **char-match coverage > 90 %** (the 3 fixtures sit at 100 %), token
 starts **monotonic non-decreasing**, and **no NaN** spans (`end ≥ start`). If
@@ -115,7 +117,9 @@ injects the rest into the app's env). All are `#if DEBUG` only.
 
 | Hook | Values | Effect |
 |---|---|---|
-| `READER_OPEN` | int index | open library doc N straight into the reader |
+| `READER_SEED` | `1` | load the sample shelf (the library is **empty by default**) |
+| `READER_RESET` | `1` | wipe the persisted shelf + narration cache on launch |
+| `READER_OPEN` | int index | open library doc N straight into the reader (needs `READER_SEED=1` or an import) |
 | `READER_THEME` | `paper`·`sepia`·`night` | start in that theme |
 | `READER_ORI` | `tate`·`yoko` | vertical / horizontal text |
 | `READER_SEEK` | seconds | move playhead + render highlight, **paused** |
@@ -128,8 +132,8 @@ injects the rest into the app's env). All are `#if DEBUG` only.
 | `READER_WORKER_URL` | url | override the Worker base URL (from `.env`) |
 
 ```bash
-# Example: tategaki, paper theme, highlight paused on token ~1.7 s into 吾輩は猫である
-SIMCTL_CHILD_READER_OPEN=0 SIMCTL_CHILD_READER_THEME=paper \
+# Example: seed the samples, tategaki, paper theme, highlight paused ~1.7 s into 吾輩は猫である
+SIMCTL_CHILD_READER_SEED=1 SIMCTL_CHILD_READER_OPEN=0 SIMCTL_CHILD_READER_THEME=paper \
 SIMCTL_CHILD_READER_ORI=tate SIMCTL_CHILD_READER_SEEK=1.7 \
   xcrun simctl launch "$DEV" app.reader.app
 # Screenshot the current state:
@@ -141,8 +145,9 @@ xcrun simctl io "$DEV" screenshot /tmp/yomi.png
 Launch with `xcrun simctl launch "$DEV" app.reader.app` (+ hooks). Each row notes the
 fastest way to reach the state and what "pass" looks like.
 
-**Library** (default launch, no hooks)
-- [ ] Six starter texts list with author + a progress bar; `soseki` (42 %), `銀河鉄道の夜` (88 %), `走れメロス` (読了/Done), two `練習` samples.
+**Library**
+- [ ] Default launch (no hooks) → **empty shelf** with the "Your library is empty / Tap + …" hint.
+- [ ] With `SIMCTL_CHILD_READER_SEED=1`: six sample texts list with author + a progress bar; `soseki` (42 %), `銀河鉄道の夜` (88 %), `走れメロス` (読了/Done), two `練習` samples.
 - [ ] The three fixture-backed rows (`soseki`, `数字と日付`, `会話文`) show the `↓` cached marker; status reads 未読/`N%`/読了.
 - [ ] Cycle the theme toggle (紙/茶/夜) → whole palette swaps instantly.
 
@@ -150,11 +155,11 @@ fastest way to reach the state and what "pass" looks like.
 - [ ] EPUB → chapters appear in **spine** order (`linear="no"` items skipped); multi-chapter docs get the 目 button.
 - [ ] PDF → one chapter per page; `.txt` (UTF-8 / Shift-JIS / EUC sniffed) → one chapter. Unsupported/empty/garbled file → "Import failed" alert.
 
-**Reader** (`READER_OPEN=0`)
+**Reader** (`READER_SEED=1 READER_OPEN=0`)
 - [ ] Text renders with furigana over kanji; `READER_ORI=tate` columns run right-to-left, `yoko` is horizontal.
 - [ ] All three themes (`READER_THEME=…`) are legible in the reader **and** the sheets.
 
-**Word-synced highlight** (`READER_OPEN=0 READER_AUTOPLAY=1`) — the core feature
+**Word-synced highlight** (`READER_SEED=1 READER_OPEN=0 READER_AUTOPLAY=1`) — the core feature
 - [ ] Highlight lands on the **correct token** and tracks the audio (target: >95 % correct, <150 ms perceived lag — watch + listen).
 - [ ] `READER_SEEK=<sec>` renders a stable paused highlight at that time; scrub by dragging the bar → highlight + audio jump together.
 
@@ -190,10 +195,12 @@ synthesis needs a genuinely subscribed `X-User-ID`.
 
 ```bash
 set -a; . ./.env; set +a               # ELEVEN_KEY, READER_WORKER_URL, READER_USER_ID (repo root)
+# NOTE: READER_USER_ID must be SINGLE-QUOTED in .env (it contains `$RCAnonymousID:`),
+# else sourcing expands the prefix away and the Worker 403s on the wrong id.
 SIMCTL_CHILD_READER_FORCE_WORKER=1 \
 SIMCTL_CHILD_READER_WORKER_URL="$READER_WORKER_URL" \
 SIMCTL_CHILD_READER_USER_ID="$READER_USER_ID" \
-SIMCTL_CHILD_READER_OPEN=0 SIMCTL_CHILD_READER_AUTOPLAY=1 \
+SIMCTL_CHILD_READER_SEED=1 SIMCTL_CHILD_READER_OPEN=0 SIMCTL_CHILD_READER_AUTOPLAY=1 \
   xcrun simctl launch "$DEV" app.reader.app
 ```
 - [ ] Reader reaches `ready` and plays **real** audio with the synced highlight (validates `WorkerTTSService` → real `alignment` decode → `CharTokenMapper` on live data → playback → disk cache).
