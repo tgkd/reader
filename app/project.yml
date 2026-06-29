@@ -79,6 +79,13 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+    # StoreKit Configuration file for testing purchases locally (run from Xcode →
+    # the paywall loads products from this file; no sandbox account needed). Wired
+    # here so `xcodegen generate` keeps it on the Reader scheme.
+    scheme:
+      testTargets:
+        - ReaderTests
+      storeKitConfiguration: Reader.storekit
 
   # Unit tests for the app-target importers (EPUB/PDF/Text), which depend on
   # ZIPFoundation/PDFKit and so can't live in the headless ReaderCore package.

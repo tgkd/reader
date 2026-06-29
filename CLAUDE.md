@@ -118,7 +118,8 @@ scheme env vars on device). The library is **empty by default**:
 - Import / OCR: `READER_IMPORT=<host path>` (epub/pdf/txt; a scanned PDF needs the Worker OCR —
   subscriber-gated — so set `READER_WORKER_URL` + a subscribed/primed `READER_USER_ID`).
 - Worker / subscription: `READER_FORCE_WORKER=1`, `READER_WORKER_URL=<url>`, `READER_USER_ID=<id>`,
-  `READER_RC_KEY` / `READER_RC_USER`, `READER_PAYWALL=1`. (`.env` is gitignored; see `.env.example`.)
+  `READER_RC_KEY` / `READER_RC_USER`, `READER_PAYWALL=1`. Test purchases locally with a **StoreKit
+  Configuration file** (`Reader.storekit`, wired into the scheme), run from Xcode. (`.env` gitignored.)
 
 ## Status
 
