@@ -6,9 +6,6 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.theme) private var theme
-    /// Gates the enhanced-OCR section — it's only useful (and only billable) for
-    /// subscribers. Probed once on appear.
-    @State private var isSubscriber = false
 
     var body: some View {
         ScrollView {
@@ -32,21 +29,9 @@ struct SettingsView: View {
                               font: .custom(app.readingFont.psName, size: 15 * size.scale),
                               selected: app.readingSize == size) { app.readingSize = size }
                 }
-
-                if isSubscriber {
-                    sectionHeader(L10n.settingsOCRSection)
-                    optionRow(L10n.settingsOCRToggle,
-                              font: .system(size: 16),
-                              selected: app.enhancedOCR) { app.enhancedOCR.toggle() }
-                    Text(L10n.settingsOCRNote)
-                        .font(.system(size: 12)).foregroundStyle(theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 24).padding(.top, 10)
-                }
             }
             .padding(.bottom, 24)
         }
-        .task { isSubscriber = await app.services.isSubscribed() }
     }
 
     private func sectionHeader(_ text: String) -> some View {

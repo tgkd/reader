@@ -97,8 +97,9 @@ struct LibraryView: View {
                 try? FileManager.default.removeItem(at: temp)
                 model.importProgress = nil
             }
-            // Default = on-device Vision; subscribers who opted in get Worker OCR.
-            let ocr = await app.services.ocrRecognizer(enhanced: app.enhancedOCR)
+            // Scanned-PDF OCR is the Worker's (subscriber-gated); nil → a scanned PDF
+            // surfaces a Membership prompt. Text / EPUB / .txt never need it.
+            let ocr = await app.services.ocrRecognizer()
             do {
                 var document = try await Task.detached(priority: .userInitiated) {
                     try await Importer.document(from: temp, ocr: ocr) { done, total in

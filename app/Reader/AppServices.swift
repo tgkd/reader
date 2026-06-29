@@ -113,16 +113,14 @@ final class AppServices {
         return info?.entitlements[AppServices.entitlementID]?.isActive == true
     }
 
-    /// The OCR engine PDF import uses for pages with no text layer. Default =
-    /// on-device `VisionOCRService` (free, offline, private). When `enhanced` is on
-    /// AND the user is subscribed, the Worker's higher-quality OCR is used with
-    /// Vision as a transparent fallback (`FallbackOCRService`), so a network error
-    /// never fails the import. Constructed HERE — the swap point, like `tts`.
-    func ocrRecognizer(enhanced: Bool) async -> PDFTextRecognizer {
-        let vision = VisionOCRService()
-        guard enhanced, await isSubscribed() else { return vision }
-        let worker = WorkerOCRService(baseURL: AppServices.workerBaseURL, userId: AppServices.userId)
-        return FallbackOCRService(primary: worker, fallback: vision)
+    /// OCR engine for scanned-PDF pages (those with no text layer) — the Worker's
+    /// cloud OCR (Gemini via AI Gateway), gated on subscription. `nil` for
+    /// non-subscribers: a scanned import then surfaces a Membership prompt, while
+    /// text / EPUB / .txt import never needs OCR. On-device OCR was removed — its
+    /// quality wasn't good enough for a reading app.
+    func ocrRecognizer() async -> PDFTextRecognizer? {
+        guard await isSubscribed() else { return nil }
+        return WorkerOCRService(baseURL: AppServices.workerBaseURL, userId: AppServices.userId)
     }
 
     #if DEBUG

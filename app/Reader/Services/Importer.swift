@@ -7,13 +7,15 @@ enum ImportError: LocalizedError {
     case unreadable
     case empty
     case ocrFailed
+    case ocrUnavailable
 
     var errorDescription: String? {
         switch self {
-        case .unsupported: return L10n.importUnsupported
-        case .unreadable:  return L10n.importUnreadable
-        case .empty:       return L10n.importEmpty
-        case .ocrFailed:   return L10n.importOCRFailed
+        case .unsupported:    return L10n.importUnsupported
+        case .unreadable:     return L10n.importUnreadable
+        case .empty:          return L10n.importEmpty
+        case .ocrFailed:      return L10n.importOCRFailed
+        case .ocrUnavailable: return L10n.importOCRUnavailable
         }
     }
 }

@@ -17,11 +17,6 @@
 "settings.size.medium" = "中";
 "settings.size.large" = "大";
 
-/* 設定 — 高精度OCR（メンバーシップ限定。スキャンPDFの文字認識） */
-"settings.section.ocr" = "スキャンPDF";
-"settings.ocr.toggle" = "高精度OCR（メンバーシップ）";
-"settings.ocr.note" = "スキャンや縦書きのPDFから取り出す文字の精度を高めます。ページ画像は認識のためクラウドへ送信されます。";
-
 /* ライブラリ — 進捗ラベル */
 "library.status.unread" = "未読";
 "library.status.done" = "読了";
@@ -59,6 +54,7 @@
 "import.unreadable" = "ファイルを読み込めませんでした";
 "import.empty" = "読めるテキストが見つかりません";
 "import.ocrFailed" = "スキャンPDFから文字を読み取れませんでした";
+"import.ocrUnavailable" = "スキャンPDFの読み取りにはメンバーシップが必要です";
 /* スキャンPDFのインポート中のOCR進捗。%1$d は完了ページ、%2$d は総ページ。 */
 "import.recognizing.format" = "テキストを認識中… %1$d / %2$d";
 

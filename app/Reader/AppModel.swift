@@ -25,16 +25,9 @@ final class AppModel {
     var readingSize: ReadingSize = .medium {
         didSet { UserDefaults.standard.set(readingSize.rawValue, forKey: Self.sizeKey) }
     }
-    /// Use the Worker's higher-quality OCR for scanned-PDF import (subscribers only;
-    /// uploads page images to a third-party model). Default OFF — the on-device
-    /// Vision engine is the default. Persisted so the choice sticks.
-    var enhancedOCR: Bool = false {
-        didSet { UserDefaults.standard.set(enhancedOCR, forKey: Self.enhancedOCRKey) }
-    }
     private static let themeKey = "reader.themeName"
     private static let fontKey = "reader.readingFont"
     private static let sizeKey = "reader.readingSize"
-    private static let enhancedOCRKey = "reader.enhancedOCR"
     /// Bumped when a purchase/restore completes — the reader observes it to reload
     /// the chapter (now that `reader Pro` is active).
     var entitlementTick = 0
@@ -53,7 +46,6 @@ final class AppModel {
         if let raw = defaults.string(forKey: Self.themeKey), let t = ThemeName(rawValue: raw) { themeName = t }
         if let raw = defaults.string(forKey: Self.fontKey), let f = ReadingFont(rawValue: raw) { readingFont = f }
         if let raw = defaults.string(forKey: Self.sizeKey), let s = ReadingSize(rawValue: raw) { readingSize = s }
-        enhancedOCR = defaults.bool(forKey: Self.enhancedOCRKey)
 
         #if DEBUG
         // Deterministic launch hooks for screenshots (pass via SIMCTL_CHILD_*):
@@ -67,13 +59,12 @@ final class AppModel {
             let docs = services.library.all()
             if docs.indices.contains(i) { route = .reader(docs[i]) }
         }
-        if env["READER_ENHANCED_OCR"] == "1" { enhancedOCR = true }
         // Import a file from a host path and open it (verifies the ingestion path).
-        // Uses on-device Vision OCR explicitly so sim verification stays offline.
+        // Scanned PDFs need the Worker OCR (subscriber-gated) — set READER_WORKER_URL.
         if let path = env["READER_IMPORT"] {
             Task { @MainActor in
-                if let doc = try? await Importer.document(from: URL(fileURLWithPath: path),
-                                                          ocr: VisionOCRService()) {
+                let ocr = await services.ocrRecognizer()
+                if let doc = try? await Importer.document(from: URL(fileURLWithPath: path), ocr: ocr) {
                     services.library.save(doc)
                     route = .reader(doc)
                 }

@@ -24,11 +24,6 @@ enum L10n {
     static var sizeMedium: String { String(localized: "settings.size.medium") }
     static var sizeLarge: String { String(localized: "settings.size.large") }
 
-    // Settings — enhanced OCR (subscriber-only; scanned-PDF text quality)
-    static var settingsOCRSection: String { String(localized: "settings.section.ocr") }
-    static var settingsOCRToggle: String { String(localized: "settings.ocr.toggle") }
-    static var settingsOCRNote: String { String(localized: "settings.ocr.note") }
-
     static var statusUnread: String { String(localized: "library.status.unread") }
     static var statusDone: String { String(localized: "library.status.done") }
     static var libraryEmptyTitle: String { String(localized: "library.empty.title") }
@@ -60,6 +55,7 @@ enum L10n {
     static var importUnreadable: String { String(localized: "import.unreadable") }
     static var importEmpty: String { String(localized: "import.empty") }
     static var importOCRFailed: String { String(localized: "import.ocrFailed") }
+    static var importOCRUnavailable: String { String(localized: "import.ocrUnavailable") }
     /// Determinate OCR progress while importing a scanned PDF; %1$d / %2$d.
     static func importRecognizing(_ done: Int, _ total: Int) -> String {
         String(format: String(localized: "import.recognizing.format"), done, total)

@@ -6,14 +6,13 @@ import ReaderCore
 /// Imports a PDF, one chapter per page. A page's text comes from PDFKit's text
 /// layer (`PDFPage.string`) when present; pages with NO text layer (scanned /
 /// image-only PDFs) are rasterized and handed to an injected `PDFTextRecognizer`
-/// (OCR). Born-digital pages never touch OCR — no cost, no network. A page is one
-/// chapter so the reader can move through a long PDF without synthesizing the whole
-/// thing at once. Complex multi-column / vertical layouts still won't always yield
-/// clean reading order (see `ReadingOrder` for the OCR side).
+/// (the Worker's gated cloud OCR — see `WorkerOCRService`). Born-digital pages never
+/// touch OCR — no cost, no network. A page is one chapter so the reader can move
+/// through a long PDF without synthesizing the whole thing at once.
 struct PDFImporter: DocumentImporter {
     let url: URL
-    /// OCR engine for pages with no text layer. `nil` → the legacy text-layer-only
-    /// behavior (scanned PDFs yield nothing).
+    /// OCR engine for pages with no text layer. `nil` for non-subscribers — a scanned
+    /// PDF then throws `.ocrUnavailable` (OCR is a Membership feature).
     var recognizer: PDFTextRecognizer? = nil
     /// Reports OCR page completion (`completed`, `total`) for a determinate banner.
     var onProgress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil
@@ -33,6 +32,7 @@ struct PDFImporter: DocumentImporter {
         // Pass 1 (cheap, no rasterization): classify each page as text-layer or OCR.
         var slots: [Slot] = []
         var ocrPageIndices: [Int] = []
+        var sawScannedPage = false // a page with no text layer (would need OCR)
         for i in 0..<doc.pageCount {
             guard let page = doc.page(at: i) else { continue }
             let layer = page.string ?? ""
@@ -41,6 +41,8 @@ struct PDFImporter: DocumentImporter {
             } else if recognizer != nil {
                 slots.append(.ocr)
                 ocrPageIndices.append(i)
+            } else {
+                sawScannedPage = true // no OCR engine (non-subscriber)
             }
         }
 
@@ -79,8 +81,11 @@ struct PDFImporter: DocumentImporter {
         }
 
         guard !chapters.isEmpty else {
-            // Distinguish "scanned PDF whose OCR recovered nothing" from a blank file.
-            throw (recognizer != nil && !ocrPageIndices.isEmpty) ? ImportError.ocrFailed : ImportError.empty
+            // A scanned PDF with no recognizer (non-subscriber) → Membership prompt;
+            // OCR ran but recovered nothing → ocrFailed; otherwise a genuinely blank file.
+            if recognizer != nil && !ocrPageIndices.isEmpty { throw ImportError.ocrFailed }
+            if recognizer == nil && sawScannedPage { throw ImportError.ocrUnavailable }
+            throw ImportError.empty
         }
         return chapters
     }

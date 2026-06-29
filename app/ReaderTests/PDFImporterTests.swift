@@ -67,13 +67,13 @@ final class PDFImporterTests: XCTestCase {
         XCTAssertEqual(stub.imageCount, 0)            // OCR never ran
     }
 
-    func testScannedPDFWithNoRecognizerThrowsEmpty() async {
+    func testScannedPDFWithNoRecognizerThrowsOCRUnavailable() async {
         let url = Fixture.imagePDF(["スキャン"])
         do {
             _ = try await chapters(url, recognizer: nil)
-            XCTFail("expected empty")
+            XCTFail("expected ocrUnavailable")
         } catch {
-            XCTAssertEqual(error as? ImportError, .empty)
+            XCTAssertEqual(error as? ImportError, .ocrUnavailable)
         }
     }
 
