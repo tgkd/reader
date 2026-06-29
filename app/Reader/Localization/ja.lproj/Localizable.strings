@@ -79,6 +79,11 @@
 "import.ocrUnavailable" = "スキャンPDFの読み取りにはメンバーシップが必要です";
 /* スキャンPDFのインポート中のOCR進捗。%1$d は完了ページ、%2$d は総ページ。 */
 "import.recognizing.format" = "テキストを認識中… %1$d / %2$d";
+/* 画像のみのEPUB/PDFをOCRする確認（サブスク向け）。%d はページ数。 */
+"import.ocr.confirm.title" = "AIで読み取りますか？";
+"import.ocr.confirm.body.format" = "このファイルには選択可能なテキストがありません。ページが画像のようです。%d ページをAIで読み取りますか？メンバーシップを使用します。";
+"import.ocr.confirm.large" = "時間がかかり、クレジットを多く消費する場合があります。";
+"import.ocr.confirm.action" = "AIで読み取る";
 
 /* アクセシビリティ — アイコンのみ・カスタム描画コントロールのVoiceOverラベル */
 "a11y.back" = "戻る";

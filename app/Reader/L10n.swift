@@ -83,6 +83,17 @@ enum L10n {
         String(format: String(localized: "import.recognizing.format"), done, total)
     }
 
+    static var importOCRConfirmTitle: String { String(localized: "import.ocr.confirm.title") }
+    static var importOCRConfirmAction: String { String(localized: "import.ocr.confirm.action") }
+    /// Body for the "this book is image-only — read it with AI?" confirm; %d = page
+    /// count. Above a soft threshold it appends a cost/time caution so a huge scan
+    /// can't run away on Membership credits silently.
+    static func importOCRConfirmBody(_ pages: Int) -> String {
+        var message = String(format: String(localized: "import.ocr.confirm.body.format"), pages)
+        if pages > 100 { message += " " + String(localized: "import.ocr.confirm.large") }
+        return message
+    }
+
     // VoiceOver labels for icon-only / custom-drawn controls.
     static var a11yBack: String { String(localized: "a11y.back") }
     static var a11yPlay: String { String(localized: "a11y.play") }

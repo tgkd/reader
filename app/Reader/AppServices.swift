@@ -4,14 +4,9 @@ import RevenueCat
 
 /// The app's composed services. The real production path is wired here:
 /// ElevenLabs via the aiwork Worker + on-disk cache + persisted library.
-/// Swapping an impl happens HERE — no view or model changes.
-///
-/// TTS wiring:
-///  • Release → `WorkerTTSService` only (production; needs a subscribed X-User-ID).
-///  • DEBUG → captured fixtures first, Worker behind them, so the simulator
-///    plays the starter texts offline. `READER_FORCE_WORKER=1` skips fixtures to
-///    exercise the Worker directly; `READER_USER_ID=<id>` supplies a test
-///    X-User-ID until RevenueCat is wired.
+/// Swapping an impl happens HERE — no view or model changes. TTS is
+/// `WorkerTTSService` (needs a subscribed X-User-ID), wrapped by
+/// `ChunkingTTSService` for >9k-char chapters and content-addressed disk caching.
 @MainActor
 final class AppServices {
     /// Lazy so the ~50 MB IPADic load happens on first reader open, NOT on the
@@ -25,43 +20,20 @@ final class AppServices {
     let dictionary: DictionaryService
 
     init() {
-        #if DEBUG
-        // `READER_RESET=1` wipes the persisted shelf + narration cache before the
-        // stores load — a clean slate for device/sim testing without deleting the
-        // app (which would also reset the RevenueCat appUserID).
-        if ProcessInfo.processInfo.environment["READER_RESET"] == "1" { AppServices.purgeLocalData() }
-        #endif
-
-        let fx = FixtureTTSService()
-        fixtures = fx
+        // Concrete fixtures service kept only for the library's "cached?" probe
+        // (`FixtureTTSService.hasFixture`); it is not in the playback chain.
+        fixtures = FixtureTTSService()
 
         let store = DiskAudioStore()
         audioStore = store
 
-        let worker = WorkerTTSService(baseURL: AppServices.workerBaseURL, userId: AppServices.userId)
-        let base: TTSService
-        #if DEBUG
-        let forceWorker = ProcessInfo.processInfo.environment["READER_FORCE_WORKER"] == "1"
-        base = forceWorker ? worker : FallbackTTSService(primary: fx, fallback: worker)
-        #else
-        base = worker
-        #endif
         // Chapters over the ElevenLabs per-request char cap are chunked and the
         // alignments stitched back together — transparently to the reader/cache.
-        tts = ChunkingTTSService(inner: base, store: store)
+        let worker = WorkerTTSService(baseURL: AppServices.workerBaseURL, userId: AppServices.userId)
+        tts = ChunkingTTSService(inner: worker, store: store)
 
-        // Real installs start with an EMPTY shelf — the user imports their own
-        // books. The sample texts (with their canned progress) are dev-only and
-        // opt-in: DEBUG + `READER_SEED=1` loads them whenever the shelf is empty
-        // (so it works even after a persisted-empty launch), without clobbering real
-        // imports. Keeps the sim offline tests / `READER_OPEN=<index>` hooks working.
-        let lib = DiskLibraryStore(starter: [])
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["READER_SEED"] == "1", lib.all().isEmpty {
-            SeedLibrary.documents.forEach { lib.save($0) }
-        }
-        #endif
-        library = lib
+        // Installs start with an EMPTY shelf — the user imports their own books.
+        library = DiskLibraryStore(starter: [])
 
         // Real tap-to-define over the bundled compact jisho DB; fall back to the
         // seeded mock if the DB resource is absent (e.g. a build that skipped
@@ -70,15 +42,13 @@ final class AppServices {
         dictionary = sqlite ?? MockDictionaryService.seeded()
     }
 
-    /// Configure RevenueCat once, at launch, if a public SDK key is available
-    /// (`READER_RC_KEY` env on the sim, or the `RevenueCatKey` Info.plist key on
-    /// device). No key → no-op, and the app still runs offline on fixtures. Called
-    /// from `YomiApp.init()` so `Purchases.shared.appUserID` is ready before any
-    /// `AppServices` reads it. In DEBUG it prints the appUserID, so you can grant
-    /// that id a promotional entitlement in the RevenueCat dashboard.
     /// The `reader Pro` entitlement (RevenueCat identifier) the reader is gated on.
     static let entitlementID = "reader Pro"
 
+    /// Configure RevenueCat once, at launch, if the `RevenueCatKey` Info.plist key
+    /// (set via the gitignored xcconfig) is present. No key → no-op. Called from
+    /// `YomiApp.init()` so `Purchases.shared.appUserID` is ready before any
+    /// `AppServices` reads it (the anonymous id becomes the Worker's X-User-ID).
     static func configureRevenueCat() {
         guard !Purchases.isConfigured, let key = revenueCatKey, !key.isEmpty else { return }
         #if !targetEnvironment(simulator)
@@ -88,18 +58,7 @@ final class AppServices {
         // Store (appl_…) public key.
         guard !key.hasPrefix("test_") else { return }
         #endif
-        #if DEBUG
-        // Configure as a specific SDK user — e.g. a fresh, UNSUBSCRIBED id — to
-        // exercise the paywall gate in the sim (the default anonymous id may already
-        // hold a promo entitlement). nil → anonymous.
-        let appUserID = ProcessInfo.processInfo.environment["READER_RC_USER"]
-        #else
-        let appUserID: String? = nil
-        #endif
-        Purchases.configure(withAPIKey: key, appUserID: appUserID)
-        #if DEBUG
-        print("RevenueCat appUserID = \(Purchases.shared.appUserID)")
-        #endif
+        Purchases.configure(withAPIKey: key)
     }
 
     /// Reclaim a deleted document's cached narration so it doesn't linger in the
@@ -139,58 +98,26 @@ final class AppServices {
         return WorkerOCRService(baseURL: AppServices.workerBaseURL, userId: AppServices.userId)
     }
 
-    #if DEBUG
-    /// Delete the persisted shelf (`library.json`) + narration cache. Backs the
-    /// `READER_RESET=1` launch hook.
-    private static func purgeLocalData() {
-        let fm = FileManager.default
-        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        try? fm.removeItem(at: appSupport.appendingPathComponent("library.json"))
-        let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        try? fm.removeItem(at: caches.appendingPathComponent("Narration", isDirectory: true))
-    }
-    #endif
-
-    /// The RevenueCat appUserID for the Worker's X-User-ID header. A DEBUG env
-    /// override (`READER_USER_ID`) wins for deterministic tests; otherwise it's the
-    /// real appUserID once RevenueCat is configured. `nil` (no key) leaves the
-    /// header unset → the Worker's 401 path.
+    /// The RevenueCat appUserID for the Worker's X-User-ID header — the real
+    /// appUserID once RevenueCat is configured. `nil` (no key) leaves the header
+    /// unset → the Worker's 401 path.
     private static var userId: String? {
-        #if DEBUG
-        if let override = ProcessInfo.processInfo.environment["READER_USER_ID"], !override.isEmpty {
-            return override
-        }
-        #endif
-        return Purchases.isConfigured ? Purchases.shared.appUserID : nil
+        Purchases.isConfigured ? Purchases.shared.appUserID : nil
     }
 
-    /// iOS public SDK key, resolved like `workerBaseURL`: DEBUG/sim launch env
-    /// first, then the `RevenueCatKey` Info.plist key (set via a gitignored xcconfig
-    /// for release), else nil. The public key ships in the binary, but keeping it
-    /// out of the committed source matches the redacted-host convention.
+    /// iOS public SDK key from the `RevenueCatKey` Info.plist key (set via the
+    /// gitignored xcconfig), else nil. The public key ships in the binary, but
+    /// keeping it out of the committed source matches the redacted-host convention.
     private static var revenueCatKey: String? {
-        #if DEBUG
-        if let raw = ProcessInfo.processInfo.environment["READER_RC_KEY"], !raw.isEmpty { return raw }
-        #endif
         let plist = Bundle.main.object(forInfoDictionaryKey: "RevenueCatKey") as? String
         return (plist?.isEmpty == false) ? plist : nil
     }
 
-    /// Worker base URL for the production TTS path, resolved in order:
-    ///  1. DEBUG/sim — the launch env `READER_WORKER_URL` (export it from your
-    ///     gitignored `.env`; see `.env.example`).
-    ///  2. Release — the `WorkerBaseURL` Info.plist key (set via a gitignored
-    ///     xcconfig; env vars aren't available on device).
-    ///  3. A non-functional placeholder, so a fresh clone still builds and the
-    ///     public repo ships no live, billable host.
+    /// Worker base URL for the TTS/OCR path: the `WorkerBaseURL` Info.plist key (set
+    /// via the gitignored xcconfig), else a non-functional placeholder so a fresh
+    /// clone still builds and the public repo ships no live, billable host.
     private static var workerBaseURL: URL {
-        var raw: String?
-        #if DEBUG
-        raw = ProcessInfo.processInfo.environment["READER_WORKER_URL"]
-        #endif
-        if (raw ?? "").isEmpty {
-            raw = Bundle.main.object(forInfoDictionaryKey: "WorkerBaseURL") as? String
-        }
+        let raw = Bundle.main.object(forInfoDictionaryKey: "WorkerBaseURL") as? String
         if let raw, !raw.isEmpty, let url = URL(string: raw) { return url }
         return URL(string: "https://your-worker.example.workers.dev")!
     }

@@ -61,9 +61,6 @@ final class ReaderModel {
         self.services = services
         let saved = document.progress.chapterIndex
         chapterIndex = document.chapters.indices.contains(saved) ? saved : 0
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["READER_CHAPTERS"] == "1" { chaptersVisible = true }
-        #endif
     }
 
     /// Backstop teardown for the display link. ReaderModel sits OUTSIDE the
@@ -125,9 +122,6 @@ final class ReaderModel {
             audioState = .ready
         }
 
-        #if DEBUG
-        applyDebugHooks()
-        #endif
     }
 
     /// Generate (or load) the chapter's speech, then start playback. Invoked by the
@@ -222,31 +216,6 @@ final class ReaderModel {
         }
         return true
     }
-
-    #if DEBUG
-    /// Launch hooks for deterministic screenshots (pass via SIMCTL_CHILD_*):
-    ///   READER_SEEK=<seconds> (render highlight paused), READER_AUTOPLAY=1,
-    ///   READER_SHEET=<token index>. (Orientation is `READER_ORI`, handled in
-    ///   `AppModel` now that it's a persisted preference.) Seek/autoplay need
-    ///   generated audio; with lazy synthesis the player may not exist yet, so generate first.
-    private func applyDebugHooks() {
-        let env = ProcessInfo.processInfo.environment
-        if let raw = env["READER_SHEET"], let i = Int(raw) { tapToken(i) }
-
-        let seek = env["READER_SEEK"].flatMap(Double.init)
-        let autoplay = env["READER_AUTOPLAY"] == "1"
-        guard seek != nil || autoplay else { return }
-        Task {
-            if player == nil { guard await ensureAudio() else { return } }
-            if let t = seek {
-                player?.currentTime = t
-                currentTime = t
-                activeIndex = timeline.index(at: t)
-            }
-            if autoplay { play() }
-        }
-    }
-    #endif
 
     // MARK: - Transport
 

@@ -90,6 +90,19 @@ struct PDFImporter: DocumentImporter {
         return chapters
     }
 
+    /// Number of pages an OCR pass would send for this PDF — those with no text layer
+    /// (scanned / image-only). Cheap: classifies without rasterizing. Drives the import
+    /// confirm prompt; mirrors `EPUBImporter.ocrCandidateCount`.
+    func ocrCandidateCount() -> Int {
+        guard let doc = PDFDocument(url: url) else { return 0 }
+        var count = 0
+        for i in 0..<doc.pageCount {
+            guard let page = doc.page(at: i) else { continue }
+            if (page.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { count += 1 }
+        }
+        return count
+    }
+
     /// Rasterize a page for OCR. 200 DPI balances accuracy against memory
     /// (US-letter → ~1700×2200 px). White background so transparent scans don't OCR
     /// as noise. PDFKit's origin is bottom-left, so the context is flipped before

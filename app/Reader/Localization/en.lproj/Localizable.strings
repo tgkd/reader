@@ -81,6 +81,11 @@
 "import.ocrUnavailable" = "Reading scanned PDFs needs Membership";
 /* OCR progress while importing a scanned PDF; %1$d done of %2$d pages. */
 "import.recognizing.format" = "Recognizing text… %1$d / %2$d";
+/* Confirm OCR of an image-only EPUB/PDF (subscriber); %d = page count. */
+"import.ocr.confirm.title" = "Read with AI?";
+"import.ocr.confirm.body.format" = "This file has no selectable text — its pages look like images. Read %d page(s) with AI? This uses your Membership.";
+"import.ocr.confirm.large" = "This may take a while and use a lot of credits.";
+"import.ocr.confirm.action" = "Read with AI";
 
 /* Accessibility — VoiceOver labels for icon-only / custom-drawn controls */
 "a11y.back" = "Back";

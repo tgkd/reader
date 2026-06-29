@@ -109,4 +109,73 @@ final class EPUBImporterTests: XCTestCase {
             XCTAssertEqual(error as? ImportError, .empty)
         }
     }
+
+    // MARK: - OCR fallback (image-only spine items)
+
+    /// A spine item whose text is baked into an `<img>` is OCR'd; recovered text becomes
+    /// the chapter, in spine order. The referenced image is pulled from the archive.
+    func testImageOnlySpineItemsAreOCRdInOrder() async throws {
+        let url = try Fixture.imageEPUB(pages: 2)
+        let stub = StubRecognizer(perImage: ["認識A", "認識B"])
+        let result = try await EPUBImporter(url: url, recognizer: stub).chapters()
+        XCTAssertEqual(result.map(\.text), ["認識A", "認識B"])
+        XCTAssertEqual(stub.imageCount, 2)
+    }
+
+    /// Non-subscriber (no recognizer): an image-only book recovers no text and throws
+    /// `.empty`, exactly as before the OCR fallback existed.
+    func testImageOnlyEPUBWithNoRecognizerThrowsEmpty() async throws {
+        let url = try Fixture.imageEPUB(pages: 2)
+        do {
+            _ = try await EPUBImporter(url: url).chapters()
+            XCTFail("expected empty")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .empty)
+        }
+    }
+
+    /// Text pages extract locally; image pages OCR — interleaved, in spine order. Only
+    /// the image page invokes the recognizer.
+    func testMixedTextAndImagePagesInterleaveInOrder() async throws {
+        let manifest = [
+            Fixture.EPUBItem(id: "t0", href: "t0.xhtml", content: Fixture.xhtml(body: "<p>テキスト頁</p>")),
+            Fixture.EPUBItem(id: "i0", href: "i0.xhtml", content: Fixture.xhtml(body: "<img src=\"images/a.jpg\"/>")),
+            Fixture.EPUBItem(id: "t1", href: "t1.xhtml", content: Fixture.xhtml(body: "<p>最終頁</p>")),
+        ]
+        let url = try Fixture.epub(manifest: manifest,
+                                   spine: manifest.map { Fixture.SpineRef($0.id) },
+                                   extraFiles: ["images/a.jpg": Fixture.jpeg("X")])
+        let stub = StubRecognizer(perImage: ["画像頁"])
+        let result = try await EPUBImporter(url: url, recognizer: stub).chapters()
+        XCTAssertEqual(result.map(\.text), ["テキスト頁", "画像頁", "最終頁"])
+        XCTAssertEqual(stub.imageCount, 1)   // only the image page hit OCR
+    }
+
+    /// OCR recovering nothing from the image pages throws `.ocrFailed` (mirrors PDF).
+    func testImageEPUBOCRYieldingNothingThrowsOCRFailed() async throws {
+        let url = try Fixture.imageEPUB(pages: 2)
+        let stub = StubRecognizer(perImage: ["", "   "])
+        do {
+            _ = try await EPUBImporter(url: url, recognizer: stub).chapters()
+            XCTFail("expected ocrFailed")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .ocrFailed)
+        }
+    }
+
+    /// The probe counts image pages without OCR; text pages don't count.
+    func testOCRCandidateCountCountsImagePagesOnly() async throws {
+        XCTAssertEqual(EPUBImporter(url: try Fixture.imageEPUB(pages: 3)).ocrCandidateCount(), 3)
+        XCTAssertEqual(EPUBImporter(url: try Fixture.simpleEPUB(["本文"])).ocrCandidateCount(), 0)
+    }
+
+    /// More image pages than the OCR window → multiple recognize passes; recovered text
+    /// stays in global page order across windows (bounded-memory windowing).
+    func testEPUBOCRWindowingPreservesOrderAcrossWindows() async throws {
+        let url = try Fixture.imageEPUB(pages: 10)
+        let counter = OCRCounter()
+        let result = try await EPUBImporter(url: url, recognizer: counter).chapters()
+        XCTAssertEqual(result.map(\.text), (0..<10).map { "P\($0)" })
+        XCTAssertGreaterThanOrEqual(counter.calls, 2)   // processed in >1 window
+    }
 }

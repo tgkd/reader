@@ -1,5 +1,4 @@
 import XCTest
-import CoreGraphics
 import ReaderCore
 @testable import Reader
 
@@ -96,37 +95,5 @@ final class PDFImporterTests: XCTestCase {
         let result = try await chapters(url, recognizer: counter)
         XCTAssertEqual(result.map(\.text), (0..<10).map { "P\($0)" })
         XCTAssertGreaterThanOrEqual(counter.calls, 2)   // processed in >1 window
-    }
-}
-
-/// Returns globally-incrementing "P{n}" per image and counts how many batched calls
-/// it received — proves windowed processing preserves order across passes.
-private final class OCRCounter: PDFTextRecognizer, @unchecked Sendable {
-    private let lock = NSLock()
-    private(set) var calls = 0
-    private var next = 0
-
-    func recognize(_ images: [CGImage],
-                   progress: (@Sendable (Int, Int) -> Void)?) async throws -> [String] {
-        lock.lock(); defer { lock.unlock() }
-        calls += 1
-        return images.map { _ in defer { next += 1 }; return "P\(next)" }
-    }
-}
-
-/// Canned recognizer for the importer tests: returns `perImage` text in order and
-/// records how it was called.
-private final class StubRecognizer: PDFTextRecognizer, @unchecked Sendable {
-    private let perImage: [String]
-    private(set) var callCount = 0
-    private(set) var imageCount = 0
-
-    init(perImage: [String]) { self.perImage = perImage }
-
-    func recognize(_ images: [CGImage],
-                   progress: (@Sendable (Int, Int) -> Void)?) async throws -> [String] {
-        callCount += 1
-        imageCount += images.count
-        return images.enumerated().map { i, _ in i < perImage.count ? perImage[i] : "" }
     }
 }

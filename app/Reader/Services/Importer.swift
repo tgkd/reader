@@ -28,23 +28,36 @@ enum ImportError: LocalizedError {
 enum Importer {
     static let supportedExtensions = ["epub", "pdf", "txt", "text"]
 
-    /// Pick the importer for `url` by extension. `ocr`/`onProgress` are only used by
-    /// the PDF path (text-layer pages bypass OCR; scanned pages are recognized);
-    /// every other format ignores them.
+    /// Pick the importer for `url` by extension. `ocr`/`onProgress` drive the OCR
+    /// fallback on the two formats that can be image-only: PDF (pages with no text
+    /// layer) and EPUB (image-only spine items). Born-digital pages / extractable text
+    /// bypass OCR; the text path and unsupported types ignore them.
     static func importer(for url: URL,
                          ocr: PDFTextRecognizer? = nil,
                          onProgress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil) -> DocumentImporter? {
         switch url.pathExtension.lowercased() {
-        case "epub":            return EPUBImporter(url: url)
+        case "epub":            return EPUBImporter(url: url, recognizer: ocr, onProgress: onProgress)
         case "pdf":             return PDFImporter(url: url, recognizer: ocr, onProgress: onProgress)
         case "txt", "text", "": return TextImporter(url: url)
         default:                return nil
         }
     }
 
-    /// Import `url` into a `Document`, or throw an `ImportError`. A PDF with no text
-    /// layer is OCR'd with `ocr` (when supplied); `onProgress` reports OCR page
-    /// completion for a determinate import banner.
+    /// How many page images an OCR pass would send for `url` — pages with no text layer
+    /// (scanned PDF) or image-only EPUB spine items; 0 for formats that never OCR or
+    /// files that already have text. Cheap (no rasterization, no network); drives the
+    /// subscriber "read N pages with AI?" confirm after a local text-extraction miss.
+    static func ocrPageCount(for url: URL) -> Int {
+        switch url.pathExtension.lowercased() {
+        case "epub": return EPUBImporter(url: url).ocrCandidateCount()
+        case "pdf":  return PDFImporter(url: url).ocrCandidateCount()
+        default:     return 0
+        }
+    }
+
+    /// Import `url` into a `Document`, or throw an `ImportError`. Image-only pages (a
+    /// scanned PDF, or an image-only EPUB spine item) are OCR'd with `ocr` when supplied;
+    /// `onProgress` reports OCR page completion for a determinate import banner.
     static func document(from url: URL,
                          ocr: PDFTextRecognizer? = nil,
                          onProgress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil) async throws -> Document {

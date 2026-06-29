@@ -1,147 +1,150 @@
-# CLAUDE.md — `reader` (Japanese reader with synced audio)
+# CLAUDE.md
 
-Guidance for Claude Code. A standalone iOS app (working name **Yomi**, target `Reader`,
-bundle `app.reader.app`) that plays TTS audio with **word-synced highlighting**, furigana,
-and tap-to-define. NOT the Jisho dictionary.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Siblings under `~/Projects/j/` (`ios-native`, `jisho`, `jisho-data`) are **pattern
-references only** — crib from them, don't depend on or modify them. The TTS proxy Worker
-lives at `~/Projects/cloudflare/aiwork`; the tap-to-define DB is built from `../jisho-data`.
-`docs/char-token-sync.md` is the deep dive on the one hard algorithm.
+## What this is
 
-## Thesis
+**Yomi** — a standalone iOS app (target `Reader`, bundle `app.reader.app`, display name *Yomi*)
+that reads Japanese books aloud with **word-synced highlighting**, furigana, and tap-to-define.
+It is NOT a dictionary app. Sibling projects under `~/Projects/j/` are pattern references only —
+don't depend on or modify them. The TTS/OCR proxy Worker lives at `~/Projects/cloudflare/aiwork`;
+the tap-to-define DB is built from `../jisho-data`.
 
-TTS returns **per-character** timings; Japanese has **no spaces**, so word boundaries come
-from a tokenizer and the char timings are folded onto token spans (`CharTokenMapper`). **One
-MeCab pass per chapter is the single source of truth** for (a) highlight sync spans, (b)
-furigana readings, (c) `dictionaryForm` (kanji lemma) for lookup. Never add a second
+## The one hard idea
+
+TTS returns **per-character** timings, but Japanese has no spaces, so word boundaries come from a
+tokenizer. The char timings are folded onto token spans by `CharTokenMapper` (two-pointer +
+monotonic clamp, NOT naive positional slicing — that breaks on whitespace collapse, punctuation,
+and surrogate pairs). See `docs/char-token-sync.md`.
+
+**One MeCab pass per chapter is the single source of truth** for (a) highlight sync spans,
+(b) furigana readings, (c) `dictionaryForm` (kanji lemma) for lookup. Never add a second
 segmenter — it will disagree with the furigana segmentation.
 
-## Invariants & key decisions (don't break / don't relitigate without cause)
+## Architecture
 
-- **`CharTokenMapper` is load-bearing** — two-pointer + monotonic clamp, not naive positional
-  slicing (which breaks on whitespace collapse, punctuation, dropped/inserted chars, surrogate
-  pairs). See `docs/char-token-sync.md`. Keep `CharTokenMapperTests` + `AlignmentFixtureTests` green.
-- **Read `alignment`, never `normalized_alignment`** — ElevenLabs text normalization can rewrite
-  numbers/dates; only `alignment` tracks the displayed/tokenized text.
-- **Normalize once (NFKC), identically everywhere** — tokenizer + TTS + `ContentKey`. New
-  ingestion paths normalize at the boundary, never at import.
-- **`Chunker` lossless, `AlignmentStitcher` monotonic** — `Chunker.split(text).joined()` must
-  equal the input exactly; the stitcher offsets each segment so token starts stay non-decreasing.
-- **`RubyTextView` is custom CoreText** — UILabel/UITextView give no per-token geometry and no
-  vertical text. Ruby via `CTRubyAnnotation`, tategaki via frame progression; the CTFrame is
-  cached (rebuilt on structure change, not per highlight frame).
-- **MeCab-Swift + IPADic**, tokenized with `.katakana` (keeps the kanji lemma; we hiragana-ize the
-  reading ourselves). ~50 MB, lazy-loaded off the launch path.
-- **`ReaderCore` stays UI-free + `swift test`-able on macOS** — contracts + logic here;
-  SwiftUI / CoreText / AVFoundation / PDFKit / networking in the app target only.
+Two modules. The split is load-bearing: **all non-UI logic + contracts live in `ReaderCore`,
+which is headless and `swift test`-able on macOS** (no simulator). SwiftUI / CoreText / AVFoundation /
+PDFKit / networking live in the `app/` target only.
+
+- **`ReaderCore/`** (SwiftPM, one dep: MeCab-Swift + IPADic) — `CharTokenMapper`, `Chunker`,
+  `AlignmentStitcher`, `SpanTimeline`, `MeCabTokenizer`, `Normalize`, `ContentKey`,
+  `ReadingProgressResolver`, `JapaneseTextDecoder`; the model types (`Document`/`Chapter`/
+  `ReadingProgress`/`Token`/`TokenSpan`/`Alignment`) and the protocols (`TTSService`,
+  `DictionaryService`, `LibraryStore`, `GeneratedAudioStore`, `DocumentImporter`,
+  `JapaneseTokenizer`). Swapping an implementation = changing `AppServices`, nothing else.
+
+- **`app/Reader/`** (xcodegen) — the product app, wired together in **`AppServices`** (the one
+  place implementations are chosen) and **`AppModel`** (top-level `@Observable`: theme, route,
+  persisted reading prefs, paywall). `RootView` routes Library ↔ Reader (a simple enum, not a
+  NavigationStack — the reader is a full-screen takeover).
+
+### Pipelines
+
+- **TTS:** `WorkerTTSService` (POSTs `/tts/aligned` on the aiwork Worker → ElevenLabs
+  `with-timestamps`, behind a RevenueCat gate; client sends only `X-User-ID`) → wrapped by
+  `ChunkingTTSService` (splits chapters over `Chunker.defaultMaxChars` ≈ 9k chars, bounded
+  concurrency ~2, exponential 429 backoff, then `AlignmentStitcher` stitches) → cached by
+  `DiskAudioStore`, content-addressed by `ContentKey = sha256(model + voice + nfkc(text))`, so
+  re-reads play offline for free. `FixtureTTSService` provides DEBUG offline fixtures and the
+  library's "is this cached?" probe.
+
+- **Reader:** `ReaderModel` drives one chapter — `AVAudioPlayer` + a `CADisplayLink` proxy advance
+  `activeIndex` each frame via `SpanTimeline.index(at:)`; `RubyTextView` (custom CoreText) renders
+  furigana via `CTRubyAnnotation` and vertical text via frame progression, caching the `CTFrame`.
+  **`LoadState` (the always-available reading surface) is split from `AudioState`** (the gated
+  synth lifecycle: `.locked`/`.idle`/`.synthesizing`/`.ready`/`.notGenerated`/`.failed`).
+  Progress writeback goes through `ReadingProgressResolver` (tested), never per frame.
+
+- **Dictionary:** `SQLiteDictionaryService` over a compact ~bundled jisho DB
+  (`scripts/build-compact-dict.sh`, gitignored output), keyed on `dictionaryForm`; falls back to
+  `MockDictionaryService.seeded()` if the DB resource is absent. Tap-to-define's *pronounce*
+  button uses `AVSpeechSynthesizer` (on-device, free, ungated) — distinct from chapter narration.
+
+- **Import:** `Importer` routes by extension → `EPUBImporter` (ZIPFoundation; reading order from
+  the OPF **`<spine>`**, never the manifest) / `PDFImporter` / `TextImporter` (encoding sniff via
+  `JapaneseTextDecoder`). One `Chapter` per spine item / PDF page.
+
+- **OCR (cloud-only, subscriber-gated):** pages/spine items with no text layer are OCR'd via
+  `WorkerOCRService` → Worker `/pdf/ocr` → Cloudflare AI Gateway → Gemini. Both `PDFImporter`
+  (scanned pages) and `EPUBImporter` (image-only/fixed-layout spine items) use it, in
+  bounded-memory windows. `Importer.ocrPageCount` drives a "read N pages with AI?" confirm.
+  A non-subscriber's scanned import yields no recognizer → `ImportError.ocrUnavailable`
+  (a Membership prompt). On-device Vision OCR was removed (quality too low).
+
+## Invariants (don't break without cause)
+
+- **`CharTokenMapper` is load-bearing.** Keep `CharTokenMapperTests` + `AlignmentFixtureTests` green.
+- **Read `alignment`, never `normalized_alignment`** from the TTS response — only `alignment`
+  tracks the displayed/tokenized text.
+- **Normalize once (NFKC), identically everywhere** (`Normalize.nfkc`): tokenizer, TTS request,
+  and `ContentKey` all normalize at their boundary. Import does NOT normalize — it happens
+  downstream so every ingestion path shares one normalization.
+- **`Chunker.split(text).joined()` must equal the input exactly** (lossless); `AlignmentStitcher`
+  keeps token starts monotonic across stitched segments.
+- **Subscription gates speech generation AND scanned/image OCR only.** Reading extracted text
+  (EPUB / TXT / born-digital PDF) with furigana, tap-to-define, themes, and settings is free.
+  `isSubscribed()` (RevenueCat `reader Pro` entitlement) is checked **locally** so the paid Worker
+  is never hit for a non-subscriber; the Worker's 403 is the backstop. Synthesis is lazy (first Play).
 - **Theme via the SwiftUI Environment, not props** — three themes (paper / sepia / night).
-- **i18n: chrome localizes (system locale), reader content stays Japanese** — add UI strings to
-  `L10n` + both `.lproj`; never localize reader content.
-- **Subscription gates speech generation AND scanned-PDF OCR** — reading EXTRACTED text
-  (EPUB / TXT / born-digital PDF + furigana, tap-to-define, themes, settings) is free; a
-  non-subscriber importing a *scanned* PDF gets `ImportError.ocrUnavailable` (a Membership
-  prompt). Synthesis is lazy (first Play). Local `isSubscribed()` (RevenueCat `reader Pro`)
-  decides the UI; the Worker's 403 is the backstop.
-- **Fixtures are the golden record + DEBUG offline fallback** — commit `fixtures/*.json`
-  (`*.mp3` gitignored); release uses the Worker only.
+- **i18n: chrome localizes (en/ja, system locale), reader content stays Japanese.** Add UI strings
+  to `L10n` + both `.lproj`; never localize reader content.
+- **Fixtures are the golden record:** commit `ReaderCore/Tests/.../fixtures/*.json`; `*.mp3` is
+  gitignored and regenerable.
 
-## Architecture at a glance
+## Commands
 
-- **TTS:** ElevenLabs `with-timestamps` via the aiwork Worker `POST /tts/aligned` (gated by
-  `revenueCatAuth`, needs a subscribed `X-User-ID`). `WorkerTTSService` → `ChunkingTTSService`
-  (splits >9k-char chapters with 429 backoff, then stitches). `DiskAudioStore` content-addresses
-  `<key>.mp3` + `<key>.json` by `ContentKey = sha256(nfkc(text)+voice+model)`, so re-reads play offline.
-- **Reader:** `ReaderModel` (`AVAudioPlayer` + `CADisplayLink`; highlight via `SpanTimeline.index(at:)`)
-  renders `RubyTextView`. `LoadState` (surface) is split from `AudioState` (gate/synth).
-- **Dictionary:** `SQLiteDictionaryService` over a compact ~43 MB jisho DB (`build-compact-dict.sh`,
-  gitignored), keyed on `dictionaryForm`; falls back to a mock if the DB is absent.
-- **Import:** `Importer` routes by extension → `EPUBImporter` (ZIPFoundation, OPF **spine** order) /
-  `PDFImporter` / `TextImporter` (encoding sniff). One `Chapter` per spine item / PDF page;
-  multi-chapter docs get a chapter-nav sheet.
-- **PDF OCR (cloud-only, gated):** `PDFImporter` OCRs pages with no text layer via
-  `WorkerOCRService` → Worker `POST /pdf/ocr` → Cloudflare AI Gateway (Unified Billing,
-  `cf-aig-authorization`, no provider key) → **Gemini 2.5 Flash**. Bounded-memory windows.
-  Subscriber-only — a non-subscriber's scanned PDF throws `.ocrUnavailable`. On-device Vision
-  OCR was removed (quality too low for a reader). The route also accepts `{text}` for a
-  guarded cleanup pass, but the app never LLM-rewrites already-extracted text (fidelity).
-- **Settings / persistence:** reading font + size. Theme + font + size persist via
-  `UserDefaults`. Chrome controls are SF Symbols (language-neutral).
+```bash
+# ReaderCore — fast, no simulator. Run after ANY ReaderCore change.
+cd ReaderCore && swift test
+swift test --filter CharTokenMapperTests          # a single test class
+
+# App-target tests (importers + OCR) — needs a simulator.
+cd app && xcodebuild test -project Reader.xcodeproj -scheme Reader \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath build
+#   single class: add  -only-testing:ReaderTests/EPUBImporterTests
+
+# First-time / after editing project structure:
+scripts/build-compact-dict.sh                        # build the tap-to-define DB (gitignored output)
+cp app/Signing.xcconfig.example app/Signing.xcconfig # once: set DEVELOPMENT_TEAM (gitignored; xcodegen needs it)
+cd app && xcodegen generate                          # regenerate the .xcodeproj after adding files / editing project.yml
+
+# Build/run:
+cd app && xcodebuild -project Reader.xcodeproj -scheme Reader \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath build build
+```
+
+First `swift test` compiles MeCab (~1 min) and downloads IPADic (~50 MB); later runs are instant.
+
+## Project mechanics
+
+- **The Xcode project is generated — edit `app/project.yml`, never the `.xcodeproj`** (gitignored).
+  Run `xcodegen generate` after adding/removing files. App deps: ZIPFoundation (pinned to the
+  **0.9.x** line for its failable `Archive(url:accessMode:)` API), RevenueCat.
+- **No DEBUG launch-env (`READER_*`) overrides exist anymore.** App config comes from the gitignored
+  `app/Signing.xcconfig` (`WORKER_HOST`, `REVENUECAT_KEY`, `DEVELOPMENT_TEAM`) → `Info.plist`
+  (`WorkerBaseURL`, `RevenueCatKey`). Empty values fall back to a non-functional placeholder host,
+  so a fresh clone still builds. `.env` is read ONLY by `scripts/capture-alignment.mjs` (`ELEVEN_KEY`).
+- **Library starts empty** — users import their own books. Swipe-to-delete a row also purges its
+  cached narration (`AppServices.purgeAudio`). Settings has a "clear audio cache" control
+  (`audioStore.clear()` / `totalBytes()`). Reading font/size/orientation/furigana + theme persist
+  via `UserDefaults` in `AppModel`.
+- **Local purchase testing:** `Reader.storekit` is wired into the scheme (run from Xcode, no sandbox
+  account needed). The paywall is crash-guarded when RevenueCat is unconfigured. `test_…` RevenueCat
+  keys are skipped on physical devices (they crash against real StoreKit). See `docs/testflight.md`.
 
 ## Layout
 
 ```
 reader/
-├── ReaderCore/                      # SwiftPM (1 dep: MeCab-Swift) — non-UI logic + contracts; swift test-able on macOS
-│   └── Sources/ReaderCore/          #   CharTokenMapper, Chunker, AlignmentStitcher, SpanTimeline,
-│                                    #   MeCabTokenizer, Normalize, ContentKey, JapaneseTextDecoder,
-│                                    #   models (Document/Chapter/...) + protocols (TTS/Dictionary/stores/DocumentImporter)
-├── app/                             # xcodegen — edit project.yml, not the .xcodeproj (gitignored)
-│   ├── Reader/                      #   the product app (Yomi)
-│   │   ├── App/Theme/L10n + RootView/Components
+├── ReaderCore/Sources/ReaderCore/   # headless logic + contracts (swift test-able on macOS)
+├── ReaderCore/Tests/                #   incl. fixtures/ (committed *.json; *.mp3 gitignored)
+├── app/
+│   ├── project.yml                  # xcodegen source of truth (edit THIS, not the .xcodeproj)
+│   ├── Reader/                      # the product app — App / Theme / L10n / RootView / Components
 │   │   ├── Library/  Reader/  Settings/
-│   │   └── Services/                #   TTS stack, DiskAudioStore/DiskLibraryStore, dictionary,
-│   │                                #   importers (EPUB/PDF/Text), PDF OCR (WorkerOCRService → AI Gateway → Gemini)
-│   └── ReaderTests/                 #   app-target tests (importers + OCR), runtime-generated fixtures
-├── docs/                            # char-token-sync.md, design-prompt.md
-└── scripts/                         # capture-alignment.mjs, build-compact-dict.sh
+│   │   └── Services/                #   AppServices wiring, TTS stack, Disk*Store, dictionary, importers, OCR
+│   └── ReaderTests/                 # app-target importer + OCR tests (runtime-generated fixtures)
+├── docs/                            # char-token-sync.md (the algorithm), testflight.md, design-prompt.md
+└── scripts/                         # build-compact-dict.sh, capture-alignment.mjs
 ```
-
-## Commands
-
-```bash
-# Non-UI pipeline + contracts — fast, no simulator. Run after ANY ReaderCore change. (42 tests)
-cd ReaderCore && swift test
-
-# App-target tests (importers + OCR) — needs the simulator. (34 tests)
-cd app && xcodebuild test -project Reader.xcodeproj -scheme Reader \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath build
-
-# Build/run the app:
-scripts/build-compact-dict.sh                          # build the tap-to-define DB once (gitignored output)
-cp app/Signing.xcconfig.example app/Signing.xcconfig   # once: set your Team ID (gitignored; xcodegen requires it)
-cd app && xcodegen generate                            # after adding files / editing project.yml
-xcodebuild -project Reader.xcodeproj -scheme Reader \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath build build
-
-# Production TTS Worker (USER runs — mutates the live Worker):
-cd ~/Projects/cloudflare/aiwork && npx wrangler deploy
-```
-
-First `swift test` compiles MeCab (~1 min) and downloads IPADic (~50 MB); later runs are instant.
-
-**DEBUG launch hooks** (`#if DEBUG`; pass via `SIMCTL_CHILD_<VAR>` to a sim launch, or as Xcode
-scheme env vars on device). The library is **empty by default**:
-- Library/reader: `READER_SEED=1`, `READER_RESET=1`, `READER_OPEN=<index>`, `READER_THEME`,
-  `READER_FONT`, `READER_SIZE`, `READER_ORI=tate|yoko`, `READER_FURIGANA=0|1`, `READER_SEEK=<sec>`,
-  `READER_AUTOPLAY=1`, `READER_SHEET=<token>`, `READER_CHAPTERS=1`, `READER_SETTINGS=1`.
-- Import / OCR: `READER_IMPORT=<host path>` (epub/pdf/txt; a scanned PDF needs the Worker OCR —
-  subscriber-gated — so set `READER_WORKER_URL` + a subscribed/primed `READER_USER_ID`).
-- Worker / subscription: `READER_FORCE_WORKER=1`, `READER_WORKER_URL=<url>`, `READER_USER_ID=<id>`,
-  `READER_RC_KEY` / `READER_RC_USER`, `READER_PAYWALL=1`. Test purchases locally with a **StoreKit
-  Configuration file** (`Reader.storekit`, wired into the scheme), run from Xcode. (`.env` gitignored.)
-
-## Status
-
-The sync pipeline, product app (Library / Reader / Dictionary, 3 themes, tategaki + yokogaki with
-furigana + synced highlight), caching, reading-progress writeback, import (EPUB / PDF / TXT +
-scanned-PDF OCR via the Worker/Gemini path), the subscription gate (audio + scanned-PDF OCR), and
-Settings are all **built and verified**.
-
-**Standing gap:** the live Worker paths are deployed and verified — `/tts/aligned` (ElevenLabs) and
-`/pdf/ocr` (**Gemini 2.5 Flash via Cloudflare AI Gateway, Unified Billing**, end-to-end tested on
-real scans). The App Store↔RevenueCat binding is mostly done: `REVENUECAT_KEY = appl_…` is set in
-`Signing.xcconfig`, the build bumped, and an App Store app created in the `reader` RevenueCat
-project. What remains to mint a real subscriber (needed for live TTS synth + device OCR): finish the
-ASC subscription metadata (`app.reader.app.monthly` → Ready to Submit), import/attach it in RevenueCat
-+ add it to the offering, then a TestFlight sandbox purchase. See `docs/testflight.md`. The paywall is
-crash-guarded when RevenueCat is unconfigured. On the sim, shortcut the gate with
-`READER_FORCE_WORKER=1` + a subscribed `READER_USER_ID`.
-
-Library rows support swipe-to-delete (confirmed via an alert); deleting a document also purges its
-cached narration (`AppServices.purgeAudio`). Chunked chapters prune their per-segment cache entries
-after a successful stitch (`ChunkingTTSService`), so only the whole-chapter entry persists.
-
-**Open follow-ups (low):** memoize `LibraryModel.load`'s `ContentKey` hashing; reading-override
-table for homograph furigana; optional in-app language toggle / AVAudioEngine if drift appears /
-batch pre-gen for offline.

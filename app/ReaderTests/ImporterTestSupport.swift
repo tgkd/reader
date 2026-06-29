@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import ZIPFoundation
+@testable import Reader
 
 /// Runtime fixture generators for the importer tests. Nothing is committed as a
 /// binary: EPUBs are zipped on the fly (so spine/manifest/linear variations are
@@ -121,8 +122,11 @@ enum Fixture {
 
     /// Build a valid EPUB (a ZIP) from a manifest + an explicit spine. The spine
     /// order is independent of manifest order, so reading-order tests are exact.
+    /// `extraFiles` (href relative to the OPF dir → bytes) drops non-XHTML resources
+    /// — e.g. the images an image-only spine item references — into the archive.
     static func epub(manifest: [EPUBItem], spine: [SpineRef],
-                     opfDir: String = "OEBPS", containerXML: String? = nil) throws -> URL {
+                     opfDir: String = "OEBPS", containerXML: String? = nil,
+                     extraFiles: [String: Data] = [:]) throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ReaderTests-epub-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -172,6 +176,15 @@ enum Fixture {
             try item.content.write(to: fileURL, atomically: true, encoding: .utf8)
         }
 
+        // Extra (binary) resources — images an image-only page points at.
+        for (href, bytes) in extraFiles {
+            let rel = opfDir.isEmpty ? href : "\(opfDir)/\(href)"
+            let fileURL = root.appendingPathComponent(rel)
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try bytes.write(to: fileURL)
+        }
+
         let epubURL = uniqueURL(ext: "epub")
         try FileManager.default.zipItem(at: root, to: epubURL, shouldKeepParent: false)
         return epubURL
@@ -184,5 +197,60 @@ enum Fixture {
                      content: xhtml(body: "<p>\($0.element)</p>"))
         }
         return try epub(manifest: items, spine: items.map { SpineRef($0.id) })
+    }
+
+    /// An EPUB whose spine pages have NO extractable text: each is a single `<img>`
+    /// referencing a real JPEG stored in the archive (a fixed-layout / scanned book).
+    /// Exercises the EPUB image→OCR fallback.
+    static func imageEPUB(pages count: Int) throws -> URL {
+        var manifest: [EPUBItem] = []
+        var images: [String: Data] = [:]
+        for i in 0..<count {
+            let href = "images/p\(i).jpg"
+            images[href] = jpeg("PAGE\(i)")
+            manifest.append(EPUBItem(id: "p\(i)", href: "p\(i).xhtml",
+                                     content: xhtml(body: "<p><img src=\"\(href)\" alt=\"\"/></p>")))
+        }
+        return try epub(manifest: manifest, spine: manifest.map { SpineRef($0.id) }, extraFiles: images)
+    }
+
+    /// A small, genuinely decodable JPEG (so `UIImage(data:)` succeeds). The pixels are
+    /// irrelevant to the stub recognizers, which ignore image content.
+    static func jpeg(_ label: String) -> Data {
+        textImage(label, size: CGSize(width: 320, height: 480)).jpegData(compressionQuality: 0.8)!
+    }
+}
+
+// MARK: - Shared OCR stubs
+
+/// Canned recognizer for the importer tests: returns `perImage` text in order and
+/// records how it was called.
+final class StubRecognizer: PDFTextRecognizer, @unchecked Sendable {
+    private let perImage: [String]
+    private(set) var callCount = 0
+    private(set) var imageCount = 0
+
+    init(perImage: [String]) { self.perImage = perImage }
+
+    func recognize(_ images: [CGImage],
+                   progress: (@Sendable (Int, Int) -> Void)?) async throws -> [String] {
+        callCount += 1
+        imageCount += images.count
+        return images.enumerated().map { i, _ in i < perImage.count ? perImage[i] : "" }
+    }
+}
+
+/// Returns globally-incrementing "P{n}" per image and counts how many batched calls it
+/// received — proves windowed processing preserves order across passes.
+final class OCRCounter: PDFTextRecognizer, @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var calls = 0
+    private var next = 0
+
+    func recognize(_ images: [CGImage],
+                   progress: (@Sendable (Int, Int) -> Void)?) async throws -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        calls += 1
+        return images.map { _ in defer { next += 1 }; return "P\(next)" }
     }
 }

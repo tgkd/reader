@@ -60,37 +60,6 @@ final class AppModel {
         if let raw = defaults.string(forKey: Self.sizeKey), let s = ReadingSize(rawValue: raw) { readingSize = s }
         if let raw = defaults.string(forKey: Self.orientationKey), let o = Orientation(rawValue: raw) { readingOrientation = o }
         if defaults.object(forKey: Self.furiganaKey) != nil { showFurigana = defaults.bool(forKey: Self.furiganaKey) }
-
-        #if DEBUG
-        // Deterministic launch hooks for screenshots (pass via SIMCTL_CHILD_*):
-        //   READER_THEME=paper|sepia|night, READER_OPEN=<library index>,
-        //   READER_FONT=mincho|gothic|rounded, READER_SIZE=small|medium|large,
-        //   READER_FURIGANA=0|1.
-        let env = ProcessInfo.processInfo.environment
-        if let t = env["READER_THEME"], let name = ThemeName(rawValue: t) { themeName = name }
-        if let f = env["READER_FONT"], let rf = ReadingFont(rawValue: f) { readingFont = rf }
-        if let s = env["READER_SIZE"], let rs = ReadingSize(rawValue: s) { readingSize = rs }
-        if let o = env["READER_ORI"], let ori = Orientation(rawValue: o) { readingOrientation = ori }
-        if let v = env["READER_FURIGANA"] { showFurigana = (v == "1") }
-        if let raw = env["READER_OPEN"], let i = Int(raw) {
-            let docs = services.library.all()
-            if docs.indices.contains(i) { route = .reader(docs[i]) }
-        }
-        // Import a file from a host path and open it (verifies the ingestion path).
-        // Scanned PDFs need the Worker OCR (subscriber-gated) — set READER_WORKER_URL.
-        if let path = env["READER_IMPORT"] {
-            Task { @MainActor in
-                let ocr = await services.ocrRecognizer()
-                if let doc = try? await Importer.document(from: URL(fileURLWithPath: path), ocr: ocr) {
-                    services.library.save(doc)
-                    route = .reader(doc)
-                }
-            }
-        }
-        // Force-show the paywall for local testing (the sim's appUserID is already
-        // entitled, so the real gate wouldn't trigger).
-        if env["READER_PAYWALL"] == "1" { showPaywall = true }
-        #endif
     }
 
     func cycleTheme() { themeName = themeName.next }

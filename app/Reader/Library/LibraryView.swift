@@ -13,6 +13,19 @@ struct LibraryView: View {
     @State private var showingSettings = false
     /// Row the user swiped to delete, pending the confirmation alert.
     @State private var pendingDelete: LibraryModel.Item?
+    /// A subscriber import that found no extractable text but has OCR-able image pages,
+    /// awaiting the "read N pages with AI?" confirm. Holds the temp copy alive across the
+    /// prompt; the temp is removed when the prompt resolves either way.
+    @State private var pendingOCR: PendingOCR?
+
+    /// An import deferred on the OCR confirm prompt (see `pendingOCR`).
+    private struct PendingOCR: Identifiable {
+        let id = UUID()
+        let url: URL
+        let title: String
+        let pageCount: Int
+        let recognizer: PDFTextRecognizer
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,9 +57,6 @@ struct LibraryView: View {
         }
         .onAppear {
             model.load(app.services)
-            #if DEBUG
-            if ProcessInfo.processInfo.environment["READER_SETTINGS"] == "1" { showingSettings = true }
-            #endif
         }
         .fileImporter(isPresented: $importing,
                       allowedContentTypes: [.epub, .pdf, .plainText, .text],
@@ -63,6 +73,12 @@ struct LibraryView: View {
             Button(L10n.commonCancel, role: .cancel) {}
         } message: { item in
             Text(L10n.libraryDeleteBody(item.document.title))
+        }
+        .alert(L10n.importOCRConfirmTitle, isPresented: showOCRConfirm, presenting: pendingOCR) { p in
+            Button(L10n.importOCRConfirmAction) { runOCRImport(p) }
+            Button(L10n.commonCancel, role: .cancel) { try? FileManager.default.removeItem(at: p.url) }
+        } message: { p in
+            Text(L10n.importOCRConfirmBody(p.pageCount))
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
@@ -94,6 +110,10 @@ struct LibraryView: View {
         Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
     }
 
+    private var showOCRConfirm: Binding<Bool> {
+        Binding(get: { pendingOCR != nil }, set: { if !$0 { pendingOCR = nil } })
+    }
+
     /// Import the picked file (EPUB / PDF / .txt) into the library. The file is
     /// copied into the sandbox inside the security-scoped window (fast), then
     /// parsed off the main actor so a large EPUB/PDF doesn't freeze the UI; the new
@@ -117,27 +137,59 @@ struct LibraryView: View {
         if scoped { url.stopAccessingSecurityScopedResource() }
 
         Task { @MainActor in
+            // Phase 1: local-only extraction — no API spend, handles the common case
+            // (born-digital EPUB/PDF, .txt). OCR is deliberately withheld here.
+            do {
+                let document = try await Task.detached(priority: .userInitiated) {
+                    try await Importer.document(from: temp, ocr: nil)
+                }.value
+                save(document, title: displayName)
+                try? FileManager.default.removeItem(at: temp)
+            } catch {
+                // Local extraction found nothing. For a non-subscriber (no OCR engine),
+                // or a file OCR can't help, surface the local error as-is. For a
+                // subscriber whose book is image-only, offer the gated AI path.
+                let ocr = await app.services.ocrRecognizer()
+                let pages = ocr == nil ? 0
+                    : await Task.detached { Importer.ocrPageCount(for: temp) }.value
+                guard let ocr, pages > 0 else {
+                    importError = error.localizedDescription
+                    try? FileManager.default.removeItem(at: temp)
+                    return
+                }
+                pendingOCR = PendingOCR(url: temp, title: displayName, pageCount: pages, recognizer: ocr)
+            }
+        }
+    }
+
+    /// Phase 2: the user confirmed AI parsing of an image-only book. Run OCR (with the
+    /// determinate banner) and save; the temp copy is released either way.
+    private func runOCRImport(_ p: PendingOCR) {
+        Task { @MainActor in
             let model = self.model
             defer {
-                try? FileManager.default.removeItem(at: temp)
+                try? FileManager.default.removeItem(at: p.url)
                 model.importProgress = nil
             }
-            // Scanned-PDF OCR is the Worker's (subscriber-gated); nil → a scanned PDF
-            // surfaces a Membership prompt. Text / EPUB / .txt never need it.
-            let ocr = await app.services.ocrRecognizer()
             do {
-                var document = try await Task.detached(priority: .userInitiated) {
-                    try await Importer.document(from: temp, ocr: ocr) { done, total in
+                let document = try await Task.detached(priority: .userInitiated) {
+                    try await Importer.document(from: p.url, ocr: p.recognizer) { done, total in
                         Task { @MainActor in model.importProgress = (done, total) }
                     }
                 }.value
-                document.title = displayName
-                app.services.library.save(document)
-                model.load(app.services)
+                save(document, title: p.title)
             } catch {
                 importError = error.localizedDescription
             }
         }
+    }
+
+    /// Title the parsed document, persist it, and refresh the shelf.
+    private func save(_ document: Document, title: String) {
+        var document = document
+        document.title = title
+        app.services.library.save(document)
+        model.load(app.services)
     }
 
     /// Shown when no books have been imported yet (the default on a fresh install,
