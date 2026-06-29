@@ -19,6 +19,11 @@
 "settings.size.medium" = "Medium";
 "settings.size.large" = "Large";
 
+/* Settings — enhanced OCR (subscriber-only; scanned-PDF text quality) */
+"settings.section.ocr" = "Scanned PDFs";
+"settings.ocr.toggle" = "Enhanced OCR (Membership)";
+"settings.ocr.note" = "Improves recovered text from scanned and vertical PDFs. Page images are sent to a cloud service for recognition.";
+
 /* Library — reading-progress status labels */
 "library.status.unread" = "Unread";
 "library.status.done" = "Done";
@@ -42,6 +47,9 @@
 "reader.subscribe.body" = "Subscribe to generate and play the word-synced narration.";
 "reader.subscribe.cta" = "View Membership";
 
+/* Shown if the paywall is opened on a build where RevenueCat isn't configured */
+"membership.unavailable" = "Membership isn’t available right now.";
+
 /* Reader — chapter navigation (multi-chapter imports) */
 "reader.chapters" = "Chapters";
 /* Fallback title for an untitled imported chapter; %d is the 1-based index. */
@@ -52,6 +60,9 @@
 "import.unsupported" = "Unsupported file type";
 "import.unreadable" = "Couldn’t read this file";
 "import.empty" = "No readable text found";
+"import.ocrFailed" = "Couldn’t read text from this scanned PDF";
+/* OCR progress while importing a scanned PDF; %1$d done of %2$d pages. */
+"import.recognizing.format" = "Recognizing text… %1$d / %2$d";
 
 /* Accessibility — VoiceOver labels for icon-only / custom-drawn controls */
 "a11y.back" = "Back";

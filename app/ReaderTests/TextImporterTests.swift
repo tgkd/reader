@@ -7,43 +7,50 @@ import ReaderCore
 final class TextImporterTests: XCTestCase {
     private let sample = "吾輩は猫である。\n名前はまだ無い。"
 
-    private func text(_ url: URL) throws -> String {
-        let chapters = try TextImporter(url: url).chapters()
+    private func text(_ url: URL) async throws -> String {
+        let chapters = try await TextImporter(url: url).chapters()
         XCTAssertEqual(chapters.count, 1)   // the whole file is a single chapter
         return chapters[0].text
     }
 
-    func testUTF8() throws {
+    func testUTF8() async throws {
         let url = Fixture.textFile(sample, encoding: .utf8)
-        XCTAssertEqual(try text(url), sample)
+        let decoded = try await text(url)
+        XCTAssertEqual(decoded, sample)
     }
 
-    func testShiftJIS() throws {
+    func testShiftJIS() async throws {
         let url = Fixture.textFile(sample, encoding: .shiftJIS)
-        XCTAssertEqual(try text(url), sample)
+        let decoded = try await text(url)
+        XCTAssertEqual(decoded, sample)
     }
 
-    func testEUCJP() throws {
+    func testEUCJP() async throws {
         let url = Fixture.textFile(sample, encoding: .japaneseEUC)
-        XCTAssertEqual(try text(url), sample)
+        let decoded = try await text(url)
+        XCTAssertEqual(decoded, sample)
     }
 
-    func testUTF8BOMIsStripped() throws {
+    func testUTF8BOMIsStripped() async throws {
         let url = Fixture.textFile(sample, encoding: .utf8, bom: [0xEF, 0xBB, 0xBF])
-        let decoded = try text(url)
+        let decoded = try await text(url)
         XCTAssertEqual(decoded, sample)
         XCTAssertFalse(decoded.unicodeScalars.contains("\u{FEFF}"))   // BOM gone
     }
 
-    func testTextExtensionAlsoWorks() throws {
+    func testTextExtensionAlsoWorks() async throws {
         let url = Fixture.textFile(sample, encoding: .utf8, ext: "text")
-        XCTAssertEqual(try text(url), sample)
+        let decoded = try await text(url)
+        XCTAssertEqual(decoded, sample)
     }
 
-    func testWhitespaceOnlyThrowsUnreadable() {
+    func testWhitespaceOnlyThrowsUnreadable() async {
         let url = Fixture.textFile("   \n\t  \n", encoding: .utf8)
-        XCTAssertThrowsError(try TextImporter(url: url).chapters()) {
-            XCTAssertEqual($0 as? ImportError, .unreadable)
+        do {
+            _ = try await TextImporter(url: url).chapters()
+            XCTFail("expected unreadable")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .unreadable)
         }
     }
 }

@@ -66,6 +66,35 @@ enum Fixture {
         return url
     }
 
+    /// A PDF whose pages have NO text layer: each string is rasterized to an image
+    /// and drawn as an image XObject, so `PDFPage.string` is empty — simulating a
+    /// scanned / image-only PDF. Exercises the OCR fallback path. The rasterized
+    /// text is legible (black on white, large) so a real recognizer can read it.
+    static func imagePDF(_ pages: [String]) -> URL {
+        let url = uniqueURL(ext: "pdf")
+        let bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let renderer = UIGraphicsPDFRenderer(bounds: bounds)
+        try! renderer.writePDF(to: url) { ctx in
+            for text in pages {
+                ctx.beginPage()
+                guard !text.isEmpty else { continue }
+                textImage(text, size: bounds.size).draw(in: bounds)
+            }
+        }
+        return url
+    }
+
+    /// Rasterize `text` onto a white image (drawn into a PDF → no text layer).
+    private static func textImage(_ text: String, size: CGSize) -> UIImage {
+        UIGraphicsImageRenderer(size: size).image { _ in
+            UIColor.white.setFill()
+            UIRectFill(CGRect(origin: .zero, size: size))
+            (text as NSString).draw(in: CGRect(origin: .zero, size: size).insetBy(dx: 48, dy: 60),
+                                    withAttributes: [.font: UIFont.systemFont(ofSize: 44),
+                                                     .foregroundColor: UIColor.black])
+        }
+    }
+
     // MARK: - EPUB
 
     struct EPUBItem {

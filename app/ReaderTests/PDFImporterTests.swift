@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 import ReaderCore
 @testable import Reader
 
@@ -6,38 +7,126 @@ import ReaderCore
 /// page, blank pages skipped, and the unreadable error case. Page text is ASCII so
 /// extraction assertions don't depend on PDFKit's CJK glyph handling.
 final class PDFImporterTests: XCTestCase {
-    private func chapters(_ url: URL) throws -> [Chapter] {
-        try PDFImporter(url: url).chapters()
+    private func chapters(_ url: URL, recognizer: PDFTextRecognizer? = nil) async throws -> [Chapter] {
+        try await PDFImporter(url: url, recognizer: recognizer).chapters()
     }
 
-    func testSinglePageBecomesSingleChapter() throws {
+    func testSinglePageBecomesSingleChapter() async throws {
         let url = Fixture.pdf(pages: ["Alpha page"])
-        let result = try chapters(url)
+        let result = try await chapters(url)
         XCTAssertEqual(result.count, 1)
         XCTAssertTrue(result[0].text.contains("Alpha"), result[0].text)
     }
 
-    func testEachPageBecomesAChapterInOrder() throws {
+    func testEachPageBecomesAChapterInOrder() async throws {
         let url = Fixture.pdf(pages: ["Alpha", "Bravo", "Charlie"])
-        let result = try chapters(url)
+        let result = try await chapters(url)
         XCTAssertEqual(result.count, 3)
         XCTAssertTrue(result[0].text.contains("Alpha"))
         XCTAssertTrue(result[1].text.contains("Bravo"))
         XCTAssertTrue(result[2].text.contains("Charlie"))
     }
 
-    func testBlankPagesAreSkipped() throws {
+    func testBlankPagesAreSkipped() async throws {
         let url = Fixture.pdf(pages: ["Alpha", "", "Bravo"])
-        let result = try chapters(url)
+        let result = try await chapters(url)
         XCTAssertEqual(result.count, 2)   // the blank middle page is dropped
         XCTAssertTrue(result[0].text.contains("Alpha"))
         XCTAssertTrue(result[1].text.contains("Bravo"))
     }
 
-    func testNonPDFThrowsUnreadable() {
+    func testNonPDFThrowsUnreadable() async {
         let url = Fixture.write(Data("not a pdf".utf8), ext: "pdf")
-        XCTAssertThrowsError(try chapters(url)) {
-            XCTAssertEqual($0 as? ImportError, .unreadable)
+        do {
+            _ = try await chapters(url)
+            XCTFail("expected unreadable")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .unreadable)
         }
+    }
+
+    // MARK: - OCR fallback (pages with no text layer)
+
+    /// A page with no text layer is OCR'd; recovered text becomes the chapter, in
+    /// page order. Born-digital pages (real text layer) NEVER invoke the recognizer.
+    func testScannedPagesAreOCRdInOrderAndTextLayerBypassesOCR() async throws {
+        let url = Fixture.imagePDF(["スキャン一", "スキャン二"])
+        let stub = StubRecognizer(perImage: ["認識テキストA", "認識テキストB"])
+        let result = try await chapters(url, recognizer: stub)
+        XCTAssertEqual(result.map(\.text), ["認識テキストA", "認識テキストB"])
+        XCTAssertEqual(stub.callCount, 1)              // one batched call
+        XCTAssertEqual(stub.imageCount, 2)            // both scanned pages
+    }
+
+    func testTextLayerPageDoesNotInvokeRecognizer() async throws {
+        let url = Fixture.pdf(pages: ["Real text layer"])   // selectable glyphs
+        let stub = StubRecognizer(perImage: ["SHOULD NOT APPEAR"])
+        let result = try await chapters(url, recognizer: stub)
+        XCTAssertEqual(result.count, 1)
+        XCTAssertTrue(result[0].text.contains("Real text layer"))
+        XCTAssertEqual(stub.imageCount, 0)            // OCR never ran
+    }
+
+    func testScannedPDFWithNoRecognizerThrowsEmpty() async {
+        let url = Fixture.imagePDF(["スキャン"])
+        do {
+            _ = try await chapters(url, recognizer: nil)
+            XCTFail("expected empty")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .empty)
+        }
+    }
+
+    func testOCRYieldingNothingThrowsOCRFailed() async {
+        let url = Fixture.imagePDF(["スキャン一", "スキャン二"])
+        let stub = StubRecognizer(perImage: ["", "   "])   // OCR recovered nothing
+        do {
+            _ = try await chapters(url, recognizer: stub)
+            XCTFail("expected ocrFailed")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .ocrFailed)
+        }
+    }
+
+    /// More OCR pages than the render window → multiple render/recognize passes
+    /// (bounded memory). Recovered text must stay in global page order across passes.
+    func testOCRWindowingPreservesOrderAcrossWindows() async throws {
+        let url = Fixture.imagePDF((0..<10).map { "page\($0)" })
+        let counter = OCRCounter()
+        let result = try await chapters(url, recognizer: counter)
+        XCTAssertEqual(result.map(\.text), (0..<10).map { "P\($0)" })
+        XCTAssertGreaterThanOrEqual(counter.calls, 2)   // processed in >1 window
+    }
+}
+
+/// Returns globally-incrementing "P{n}" per image and counts how many batched calls
+/// it received — proves windowed processing preserves order across passes.
+private final class OCRCounter: PDFTextRecognizer, @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var calls = 0
+    private var next = 0
+
+    func recognize(_ images: [CGImage],
+                   progress: (@Sendable (Int, Int) -> Void)?) async throws -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        calls += 1
+        return images.map { _ in defer { next += 1 }; return "P\(next)" }
+    }
+}
+
+/// Canned recognizer for the importer tests: returns `perImage` text in order and
+/// records how it was called.
+private final class StubRecognizer: PDFTextRecognizer, @unchecked Sendable {
+    private let perImage: [String]
+    private(set) var callCount = 0
+    private(set) var imageCount = 0
+
+    init(perImage: [String]) { self.perImage = perImage }
+
+    func recognize(_ images: [CGImage],
+                   progress: (@Sendable (Int, Int) -> Void)?) async throws -> [String] {
+        callCount += 1
+        imageCount += images.count
+        return images.enumerated().map { i, _ in i < perImage.count ? perImage[i] : "" }
     }
 }

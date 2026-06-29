@@ -8,6 +8,14 @@ which is skipped on real devices (it crashes against real StoreKit — see
 `AppServices.configureRevenueCat`). A device/TestFlight build needs a real **App
 Store `appl_` key** + a real **auto-renewable subscription** in App Store Connect.
 
+**Current state (where you are):**
+- App Store Connect: the app **Yomi — Japanese Reader** exists; subscription
+  **`app.reader.app.monthly`** is created in group *membership* but shows **Missing Metadata**
+  → needs localization (§A).
+- RevenueCat (project **reader**): the **`reader Pro`** entitlement, a **Test Store** product,
+  and the **default** offering exist — but there is **no App Store app yet**, so the build still
+  carries a `test_` SDK key. Remaining: bind the App Store side (§B), then swap the key (§C).
+
 **Already done (no action needed):**
 - Prod Worker verifies the **reader** RevenueCat project (`REVENUECAT_PROJECT_ID_READER`
   = `<reader project id>`) with a v2 secret key, and has `ELEVENLABS_KEY`. So once a real
@@ -15,7 +23,9 @@ Store `appl_` key** + a real **auto-renewable subscription** in App Store Connec
 - The app reads `WorkerBaseURL` + `RevenueCatKey` from the Info.plist (baked from the
   gitignored `Signing.xcconfig`: `WORKER_HOST` is set; you'll add `REVENUECAT_KEY`).
 - The gate (`isSubscribed` / `reader Pro`), paywall (`PaywallView`), and unlock-reload
-  are wired and verified in the sim.
+  are wired and verified in the sim. The paywall is **crash-guarded** when RevenueCat is
+  unconfigured (a `test_`/empty key on a real device) — it shows a dismissable fallback instead
+  of `fatalError`-ing on `Purchases.shared`.
 
 Identifiers used below: bundle id **`app.reader.app`**, Team **`<your Team ID — from Signing.xcconfig>`**,
 RevenueCat project **reader (`<reader project id>`)**, entitlement **`reader Pro`**.
@@ -23,6 +33,10 @@ RevenueCat project **reader (`<reader project id>`)**, entitlement **`reader Pro
 ---
 
 ## A. App Store Connect
+
+The app record (3) and the subscription (4) already exist — the **only remaining ASC work is
+the Paid Apps Agreement (1) and clearing the subscription's "Missing Metadata"** (the
+localization in 4). Steps 2–3 are kept for reference.
 
 1. **Paid Applications Agreement** — App Store Connect → Business → Agreements. It
    **must be Active**, or subscription products never load (silent failure). Requires
@@ -44,6 +58,12 @@ RevenueCat project **reader (`<reader project id>`)**, entitlement **`reader Pro
      without full review).
 
 ## B. RevenueCat (project: reader)
+
+**The key idea:** RevenueCat's **Test Store** (what you have now → the `test_` key) is
+sandbox-only and unrelated to Apple. To take real money you add a **separate App Store app**
+inside the same project; the bridge is an In-App Purchase `.p8`. Leave the Test Store product
+attached for the sim — just **add the App Store product alongside it** on the entitlement (4)
+and the offering (5).
 
 1. **In-App Purchase key** — App Store Connect → Users and Access → **Integrations →
    In-App Purchase** → generate a key, download the `.p8`. (RevenueCat needs this to

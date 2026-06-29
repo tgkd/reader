@@ -21,6 +21,11 @@ final class LibraryModel {
 
     private(set) var items: [Item] = []
 
+    /// OCR progress for a scanned-PDF import (`completed`, `total`), driving a
+    /// determinate banner. `nil` when not importing or for instant (text-layer)
+    /// imports. Set on the main actor from the import progress callback.
+    var importProgress: (completed: Int, total: Int)?
+
     /// Cache the (expensive, SHA-256) `ContentKey` per document so reappearing
     /// in the library — which calls `load` each time — doesn't re-hash every
     /// first-chapter text on the main thread. Keyed by id; a doc's first-chapter

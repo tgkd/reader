@@ -19,24 +19,27 @@ final class ImporterRoutingTests: XCTestCase {
         XCTAssertNil(importer("book.docx"))                       // unsupported
     }
 
-    func testUnsupportedExtensionThrows() {
+    func testUnsupportedExtensionThrows() async {
         let url = URL(fileURLWithPath: "/tmp/whatever.docx")
-        XCTAssertThrowsError(try Importer.document(from: url)) {
-            XCTAssertEqual($0 as? ImportError, .unsupported)
+        do {
+            _ = try await Importer.document(from: url)
+            XCTFail("expected unsupported")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .unsupported)
         }
     }
 
-    func testDocumentFromEPUBKeepsChapterOrderAndTitlesFromFilename() throws {
+    func testDocumentFromEPUBKeepsChapterOrderAndTitlesFromFilename() async throws {
         let epub = try Fixture.simpleEPUB(["第一章の本文", "第二章の本文"])
         let named = Fixture.renamed(epub, to: "銀河鉄道の夜.epub")
-        let doc = try Importer.document(from: named)
+        let doc = try await Importer.document(from: named)
         XCTAssertEqual(doc.title, "銀河鉄道の夜")
         XCTAssertEqual(doc.chapters.map(\.text), ["第一章の本文", "第二章の本文"])
     }
 
-    func testDocumentFromTextFile() throws {
+    func testDocumentFromTextFile() async throws {
         let url = Fixture.renamed(Fixture.textFile("ただのテキスト", encoding: .utf8), to: "メモ.txt")
-        let doc = try Importer.document(from: url)
+        let doc = try await Importer.document(from: url)
         XCTAssertEqual(doc.title, "メモ")
         XCTAssertEqual(doc.chapters.count, 1)
         XCTAssertEqual(doc.chapters[0].text, "ただのテキスト")

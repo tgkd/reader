@@ -12,7 +12,7 @@ import ReaderCore
 struct EPUBImporter: DocumentImporter {
     let url: URL
 
-    func chapters() throws -> [Chapter] {
+    func chapters() async throws -> [Chapter] {
         guard let archive = Archive(url: url, accessMode: .read) else { throw ImportError.unreadable }
 
         let opfPath = try locateOPF(in: archive)

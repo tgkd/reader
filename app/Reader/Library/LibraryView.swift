@@ -49,6 +49,20 @@ struct LibraryView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(theme.bg)
         }
+        .overlay(alignment: .bottom) {
+            if let p = model.importProgress { importBanner(p) }
+        }
+    }
+
+    /// Determinate banner while a scanned PDF is being OCR'd (the only slow import
+    /// path; text-layer imports are instant and show nothing).
+    private func importBanner(_ p: (completed: Int, total: Int)) -> some View {
+        Text(L10n.importRecognizing(p.completed, p.total))
+            .font(.system(size: 12.5).monospacedDigit()).foregroundStyle(theme.bg)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(Capsule().fill(theme.ink))
+            .padding(.bottom, 28)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private var showImportError: Binding<Bool> {
@@ -78,10 +92,18 @@ struct LibraryView: View {
         if scoped { url.stopAccessingSecurityScopedResource() }
 
         Task { @MainActor in
-            defer { try? FileManager.default.removeItem(at: temp) }
+            let model = self.model
+            defer {
+                try? FileManager.default.removeItem(at: temp)
+                model.importProgress = nil
+            }
+            // Default = on-device Vision; subscribers who opted in get Worker OCR.
+            let ocr = await app.services.ocrRecognizer(enhanced: app.enhancedOCR)
             do {
                 var document = try await Task.detached(priority: .userInitiated) {
-                    try Importer.document(from: temp)
+                    try await Importer.document(from: temp, ocr: ocr) { done, total in
+                        Task { @MainActor in model.importProgress = (done, total) }
+                    }
                 }.value
                 document.title = displayName
                 app.services.library.save(document)

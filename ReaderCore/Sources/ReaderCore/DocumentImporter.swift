@@ -14,5 +14,5 @@ import Foundation
 /// NFKC normalization is NOT applied here — it happens once downstream, at the
 /// tokenize/TTS boundary, so every ingestion path shares the same normalization.
 public protocol DocumentImporter {
-    func chapters() throws -> [Chapter]
+    func chapters() async throws -> [Chapter]
 }

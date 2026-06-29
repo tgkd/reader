@@ -7,7 +7,7 @@ import ReaderCore
 struct TextImporter: DocumentImporter {
     let url: URL
 
-    func chapters() throws -> [Chapter] {
+    func chapters() async throws -> [Chapter] {
         let data = try Data(contentsOf: url)
         guard let text = JapaneseTextDecoder.decode(data),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
