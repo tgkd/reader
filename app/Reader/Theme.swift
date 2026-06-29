@@ -22,6 +22,15 @@ enum ThemeName: String, CaseIterable, Codable {
         return all[(all.firstIndex(of: self)! + 1) % all.count]
     }
 
+    /// Localized name for the Settings theme picker (chrome).
+    var displayName: String {
+        switch self {
+        case .paper: return L10n.themePaper
+        case .sepia: return L10n.themeSepia
+        case .night: return L10n.themeNight
+        }
+    }
+
     var isDark: Bool { self == .night }
     var theme: Theme { Theme(name: self) }
 }

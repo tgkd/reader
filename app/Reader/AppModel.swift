@@ -25,9 +25,15 @@ final class AppModel {
     var readingSize: ReadingSize = .medium {
         didSet { UserDefaults.standard.set(readingSize.rawValue, forKey: Self.sizeKey) }
     }
+    /// Writing direction (vertical / horizontal). Global + persisted; the reader's
+    /// quick-toggle and the Settings picker both drive it.
+    var readingOrientation: Orientation = .tate {
+        didSet { UserDefaults.standard.set(readingOrientation.rawValue, forKey: Self.orientationKey) }
+    }
     private static let themeKey = "reader.themeName"
     private static let fontKey = "reader.readingFont"
     private static let sizeKey = "reader.readingSize"
+    private static let orientationKey = "reader.readingOrientation"
     /// Bumped when a purchase/restore completes — the reader observes it to reload
     /// the chapter (now that `reader Pro` is active).
     var entitlementTick = 0
@@ -46,6 +52,7 @@ final class AppModel {
         if let raw = defaults.string(forKey: Self.themeKey), let t = ThemeName(rawValue: raw) { themeName = t }
         if let raw = defaults.string(forKey: Self.fontKey), let f = ReadingFont(rawValue: raw) { readingFont = f }
         if let raw = defaults.string(forKey: Self.sizeKey), let s = ReadingSize(rawValue: raw) { readingSize = s }
+        if let raw = defaults.string(forKey: Self.orientationKey), let o = Orientation(rawValue: raw) { readingOrientation = o }
 
         #if DEBUG
         // Deterministic launch hooks for screenshots (pass via SIMCTL_CHILD_*):
@@ -55,6 +62,7 @@ final class AppModel {
         if let t = env["READER_THEME"], let name = ThemeName(rawValue: t) { themeName = name }
         if let f = env["READER_FONT"], let rf = ReadingFont(rawValue: f) { readingFont = rf }
         if let s = env["READER_SIZE"], let rs = ReadingSize(rawValue: s) { readingSize = rs }
+        if let o = env["READER_ORI"], let ori = Orientation(rawValue: o) { readingOrientation = ori }
         if let raw = env["READER_OPEN"], let i = Int(raw) {
             let docs = services.library.all()
             if docs.indices.contains(i) { route = .reader(docs[i]) }

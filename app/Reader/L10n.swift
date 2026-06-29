@@ -23,6 +23,13 @@ enum L10n {
     static var sizeSmall: String { String(localized: "settings.size.small") }
     static var sizeMedium: String { String(localized: "settings.size.medium") }
     static var sizeLarge: String { String(localized: "settings.size.large") }
+    static var settingsDirection: String { String(localized: "settings.section.direction") }
+    static var directionVertical: String { String(localized: "direction.vertical") }
+    static var directionHorizontal: String { String(localized: "direction.horizontal") }
+    static var settingsTheme: String { String(localized: "settings.section.theme") }
+    static var themePaper: String { String(localized: "theme.paper") }
+    static var themeSepia: String { String(localized: "theme.sepia") }
+    static var themeNight: String { String(localized: "theme.night") }
 
     static var statusUnread: String { String(localized: "library.status.unread") }
     static var statusDone: String { String(localized: "library.status.done") }

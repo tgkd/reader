@@ -17,7 +17,6 @@ final class ReaderModel {
     /// synthesize), `.synthesizing` = generating, `.ready` = player + timed spans
     /// loaded, `.notGenerated`/`.failed` = synth had no offline audio / errored.
     enum AudioState: Equatable { case locked, idle, synthesizing, ready, notGenerated, failed(String) }
-    enum Orientation { case tate, yoko }
 
     let document: Document
     private let services: AppServices
@@ -35,7 +34,6 @@ final class ReaderModel {
     private(set) var isPlaying = false
 
     var speed: Double = 1.0
-    var orientation: Orientation = .tate
     var chromeVisible = true
 
     // Chapters (multi-chapter imports; single-chapter docs just read .first)
@@ -225,12 +223,12 @@ final class ReaderModel {
 
     #if DEBUG
     /// Launch hooks for deterministic screenshots (pass via SIMCTL_CHILD_*):
-    ///   READER_ORI=tate|yoko, READER_SEEK=<seconds> (render highlight paused),
-    ///   READER_AUTOPLAY=1, READER_SHEET=<token index>. Seek/autoplay need generated
-    ///   audio; with lazy synthesis the player may not exist yet, so generate first.
+    ///   READER_SEEK=<seconds> (render highlight paused), READER_AUTOPLAY=1,
+    ///   READER_SHEET=<token index>. (Orientation is `READER_ORI`, handled in
+    ///   `AppModel` now that it's a persisted preference.) Seek/autoplay need
+    ///   generated audio; with lazy synthesis the player may not exist yet, so generate first.
     private func applyDebugHooks() {
         let env = ProcessInfo.processInfo.environment
-        if let o = env["READER_ORI"] { orientation = (o == "yoko") ? .yoko : .tate }
         if let raw = env["READER_SHEET"], let i = Int(raw) { tapToken(i) }
 
         let seek = env["READER_SEEK"].flatMap(Double.init)
@@ -285,7 +283,6 @@ final class ReaderModel {
         activeIndex = timeline.index(at: clamped)
     }
 
-    func toggleOrientation() { orientation = orientation == .tate ? .yoko : .tate }
     func toggleChrome() { chromeVisible.toggle() }
 
     /// Switch to another chapter: save the current spot, tear down, reload. The

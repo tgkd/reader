@@ -56,3 +56,20 @@ enum ReadingSize: String, CaseIterable, Codable, Identifiable {
         }
     }
 }
+
+/// Reader writing direction — vertical (縦書き) or horizontal (横書き). A global
+/// preference persisted in `AppModel`; the reader's quick-toggle and the Settings
+/// picker both drive it. `tate` (vertical) is the default for Japanese prose.
+enum Orientation: String, CaseIterable, Codable, Identifiable {
+    case tate, yoko
+
+    var id: String { rawValue }
+    var isVertical: Bool { self == .tate }
+
+    var displayName: String {
+        switch self {
+        case .tate: return L10n.directionVertical
+        case .yoko: return L10n.directionHorizontal
+        }
+    }
+}

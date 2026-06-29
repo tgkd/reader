@@ -29,6 +29,20 @@ struct SettingsView: View {
                               font: .custom(app.readingFont.psName, size: 15 * size.scale),
                               selected: app.readingSize == size) { app.readingSize = size }
                 }
+
+                sectionHeader(L10n.settingsDirection)
+                ForEach(Orientation.allCases) { ori in
+                    optionRow(ori.displayName,
+                              font: .system(size: 16),
+                              selected: app.readingOrientation == ori) { app.readingOrientation = ori }
+                }
+
+                sectionHeader(L10n.settingsTheme)
+                ForEach(ThemeName.allCases, id: \.self) { name in
+                    optionRow(name.displayName,
+                              font: .system(size: 16),
+                              selected: app.themeName == name) { app.themeName = name }
+                }
             }
             .padding(.bottom, 24)
         }

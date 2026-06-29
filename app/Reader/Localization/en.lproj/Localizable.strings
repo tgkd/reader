@@ -19,6 +19,15 @@
 "settings.size.medium" = "Medium";
 "settings.size.large" = "Large";
 
+/* Settings — writing direction + theme */
+"settings.section.direction" = "Writing direction";
+"direction.vertical" = "Vertical";
+"direction.horizontal" = "Horizontal";
+"settings.section.theme" = "Theme";
+"theme.paper" = "Paper";
+"theme.sepia" = "Sepia";
+"theme.night" = "Night";
+
 /* Library — reading-progress status labels */
 "library.status.unread" = "Unread";
 "library.status.done" = "Done";

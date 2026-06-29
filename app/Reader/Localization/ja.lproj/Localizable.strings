@@ -17,6 +17,15 @@
 "settings.size.medium" = "中";
 "settings.size.large" = "大";
 
+/* 設定 — 書字方向・テーマ */
+"settings.section.direction" = "書字方向";
+"direction.vertical" = "縦書き";
+"direction.horizontal" = "横書き";
+"settings.section.theme" = "テーマ";
+"theme.paper" = "紙";
+"theme.sepia" = "セピア";
+"theme.night" = "夜";
+
 /* ライブラリ — 進捗ラベル */
 "library.status.unread" = "未読";
 "library.status.done" = "読了";

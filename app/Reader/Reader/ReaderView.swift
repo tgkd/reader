@@ -82,7 +82,7 @@ struct ReaderView: View {
                     spans: model.spans,
                     structureVersion: model.structureVersion,
                     activeIndex: model.activeIndex,
-                    vertical: model.orientation == .tate,
+                    vertical: app.readingOrientation.isVertical,
                     theme: theme,
                     fontName: app.readingFont.psName,
                     fontScale: app.readingSize.scale,
@@ -135,10 +135,10 @@ struct ReaderView: View {
                         model.chaptersVisible = true
                     }
                 }
-                IconButton(systemImage: model.orientation == .tate ? "arrow.up.and.down" : "arrow.left.and.right",
+                IconButton(systemImage: app.readingOrientation.isVertical ? "arrow.up.and.down" : "arrow.left.and.right",
                            foreground: theme.ink, outline: .rounded,
                            label: L10n.a11yOrientation) {
-                    model.toggleOrientation()
+                    app.readingOrientation = app.readingOrientation == .tate ? .yoko : .tate
                 }
                 IconButton(systemImage: app.themeName.symbol,
                            foreground: theme.muted, outline: .rounded,
