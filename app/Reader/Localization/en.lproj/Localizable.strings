@@ -52,8 +52,6 @@
 "library.empty.body" = "Tap + to add an EPUB, PDF, or text file.";
 
 /* Dictionary sheet */
-"dict.save" = "Save to list";
-"dict.saved" = "Saved to your list";
 "dict.notFound" = "Not in dictionary";
 
 /* Reader — chapter load states */
@@ -95,5 +93,4 @@
 "a11y.orientation" = "Toggle writing direction";
 "a11y.position" = "Playback position";
 "a11y.playWord" = "Play pronunciation";
-"a11y.saveWord" = "Save word";
 "a11y.audioCached" = "Audio downloaded";

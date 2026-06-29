@@ -1,12 +1,13 @@
 import SwiftUI
 import ReaderCore
 
-/// The tap-to-define bottom sheet: headword + reading, play/save controls,
+/// The tap-to-define bottom sheet: headword + reading, play control,
 /// part-of-speech, numbered senses, and an optional example. Matches the design;
 /// data comes from the `DictionaryService` (mock now, jisho-seed.db later).
 struct DefinitionSheet: View {
     let model: ReaderModel
     @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var app
 
     private var entry: DictionaryEntry? { model.entry }
 
@@ -35,7 +36,7 @@ struct DefinitionSheet: View {
 
                 if let ex = entry?.example {
                     VStack(alignment: .leading, spacing: 7) {
-                        Text(ex.japanese).font(Mincho.font(17)).foregroundStyle(theme.ink).tracking(0.5)
+                        Text(ex.japanese).font(app.readingFont.font(17)).foregroundStyle(theme.ink).tracking(0.5)
                         Text(ex.english).font(.system(size: 12.5)).foregroundStyle(theme.muted)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 14)
@@ -44,50 +45,30 @@ struct DefinitionSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .padding(.top, 18)
                 }
-
-                Button { model.toggleSaved() } label: {
-                    Text(model.saved ? L10n.dictSaved : L10n.dictSave)
-                        .font(.system(size: 14)).tracking(1).foregroundStyle(theme.ink)
-                        .frame(maxWidth: .infinity).padding(13)
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(theme.hair, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 20)
             }
             .padding(.horizontal, 24)
-            .padding(.top, 8)
+            .padding(.top, 28)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry?.reading ?? "")
-                    .font(.system(size: 13)).foregroundStyle(theme.muted).tracking(1)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 14) {
                 Text(entry?.word ?? "")
-                    .font(Mincho.font(36)).foregroundStyle(theme.ink).tracking(1)
-            }
-            Spacer()
-            HStack(spacing: 9) {
-                // TODO: wire word-pronunciation playback (currently a no-op stub).
-                Button { } label: {
+                    .font(app.readingFont.font(36)).foregroundStyle(theme.ink).tracking(1)
+                Spacer()
+                Button { model.pronounceEntry() } label: {
                     PlayTriangle().fill(theme.accent).frame(width: 10, height: 13).offset(x: 1)
                         .frame(width: 38, height: 38).overlay(Circle().stroke(theme.hair, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(L10n.a11yPlayWord)
-                Button { model.toggleSaved() } label: {
-                    Text(model.saved ? "♥" : "♡")
-                        .font(.system(size: 17)).foregroundStyle(theme.accent)
-                        .frame(width: 38, height: 38).overlay(Circle().stroke(theme.hair, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(L10n.a11ySaveWord)
-                .accessibilityAddTraits(model.saved ? .isSelected : [])
+                .padding(.top, 6)
             }
-            .padding(.top, 6)
+            Text(entry?.reading ?? "")
+                .font(app.readingFont.font(14)).foregroundStyle(theme.muted).tracking(1)
         }
     }
 

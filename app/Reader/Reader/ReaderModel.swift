@@ -43,9 +43,11 @@ final class ReaderModel {
     // Dictionary sheet
     private(set) var entry: DictionaryEntry?
     var sheetVisible = false
-    var saved = false
 
     private var player: AVAudioPlayer?
+    /// On-device speech for the tap-to-define pronunciation button. Free and
+    /// ungated — distinct from the subscription-gated chapter narration.
+    private let speech = AVSpeechSynthesizer()
     private let link = DisplayLinkProxy()
     private var isSwitchingChapter = false
     /// Bumped at the top of every `load()`. A load that finds itself superseded
@@ -364,11 +366,21 @@ final class ReaderModel {
         entry = services.dictionary.lookup(dictionaryForm: lemma, reading: span.reading)
             ?? DictionaryEntry(id: -1, word: span.surface, reading: span.reading ?? "",
                                senses: [Sense(glosses: [L10n.dictNotFound], partsOfSpeech: ["—"])])
-        saved = false
         sheetVisible = true
     }
 
-    func toggleSaved() { saved.toggle() }
+    /// Speak the current headword with the built-in Japanese voice. Prefers the
+    /// reading (unambiguous kana) over the surface word to avoid homograph
+    /// mispronunciation.
+    func pronounceEntry() {
+        guard let entry else { return }
+        let text = entry.reading.isEmpty ? entry.word : entry.reading
+        guard !text.isEmpty else { return }
+        speech.stopSpeaking(at: .immediate)
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "ja-JP")
+        speech.speak(utterance)
+    }
 
     // MARK: - Helpers
 

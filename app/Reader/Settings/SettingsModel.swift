@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Reading preferences exposed in Settings. The face applies to the reader body
-/// AND the Japanese content titles (library rows, reader title); the size applies
-/// to the reader body only. The wordmark, UI labels, and dictionary keep Mincho.
+/// Reading preferences exposed in Settings. The face applies to the reader body,
+/// the Japanese content titles (library rows, reader title), AND the dictionary
+/// card; the size applies to the reader body only. The wordmark and UI labels keep Mincho.
 
 /// Reading typeface. Each maps to a system Japanese font's PostScript name;
 /// `UIFont(name:)` falls back to the system font if a face is unavailable.

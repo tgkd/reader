@@ -50,8 +50,6 @@
 "library.empty.body" = "＋ から EPUB・PDF・テキストを追加できます。";
 
 /* 辞書シート */
-"dict.save" = "単語帳に保存";
-"dict.saved" = "保存済み — 単語帳に追加しました";
 "dict.notFound" = "辞書に未収録";
 
 /* リーダー — 章の読み込み状態 */
@@ -93,5 +91,4 @@
 "a11y.orientation" = "縦書き・横書きの切り替え";
 "a11y.position" = "再生位置";
 "a11y.playWord" = "発音を再生";
-"a11y.saveWord" = "単語を保存";
 "a11y.audioCached" = "音声ダウンロード済み";

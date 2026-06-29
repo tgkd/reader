@@ -53,8 +53,6 @@ enum L10n {
     static var libraryEmptyTitle: String { String(localized: "library.empty.title") }
     static var libraryEmptyBody: String { String(localized: "library.empty.body") }
 
-    static var dictSave: String { String(localized: "dict.save") }
-    static var dictSaved: String { String(localized: "dict.saved") }
     static var dictNotFound: String { String(localized: "dict.notFound") }
 
     static var readerNotGeneratedTitle: String { String(localized: "reader.notGenerated.title") }
@@ -94,6 +92,5 @@ enum L10n {
     static var a11yOrientation: String { String(localized: "a11y.orientation") }
     static var a11yPosition: String { String(localized: "a11y.position") }
     static var a11yPlayWord: String { String(localized: "a11y.playWord") }
-    static var a11ySaveWord: String { String(localized: "a11y.saveWord") }
     static var a11yAudioCached: String { String(localized: "a11y.audioCached") }
 }
