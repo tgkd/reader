@@ -33,7 +33,15 @@ final class ChunkingTTSService: TTSService {
         if segments.count <= 1 { return try await inner.synthesize(request) }
 
         let ordered = try await synthesizeSegments(segments, voice: request.voice, model: request.model)
-        return AlignmentStitcher.stitch(ordered)
+        let stitched = AlignmentStitcher.stitch(ordered)
+        // The caller caches the whole chapter under its own key, so the per-segment
+        // entries written during synthesis are now dead weight — reclaim them. Only
+        // runs on success: a partially-failed batch throws before here, leaving its
+        // segments cached so a retry resumes cheaply.
+        for segment in segments {
+            store?.remove(SynthesisRequest(text: segment, voice: request.voice, model: request.model).cacheKey)
+        }
+        return stitched
     }
 
     /// Synthesize the segments in order with at most `maxConcurrent` in flight,

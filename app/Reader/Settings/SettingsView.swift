@@ -6,6 +6,9 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.theme) private var theme
+    /// Bytes of cached narration on disk; refreshed on appear and after clearing.
+    @State private var cacheBytes = 0
+    @State private var showClearConfirm = false
 
     var body: some View {
         ScrollView {
@@ -37,14 +40,55 @@ struct SettingsView: View {
                               selected: app.readingOrientation == ori) { app.readingOrientation = ori }
                 }
 
+                sectionHeader(L10n.settingsFurigana)
+                optionRow(L10n.furiganaShow, font: .system(size: 16),
+                          selected: app.showFurigana) { app.showFurigana = true }
+                optionRow(L10n.furiganaHide, font: .system(size: 16),
+                          selected: !app.showFurigana) { app.showFurigana = false }
+
                 sectionHeader(L10n.settingsTheme)
                 ForEach(ThemeName.allCases, id: \.self) { name in
                     optionRow(name.displayName,
                               font: .system(size: 16),
                               selected: app.themeName == name) { app.themeName = name }
                 }
+
+                sectionHeader(L10n.settingsStorage)
+                storageRow
             }
             .padding(.bottom, 24)
+        }
+        .onAppear { cacheBytes = app.services.audioStore.totalBytes() }
+        .alert(L10n.storageClearTitle, isPresented: $showClearConfirm) {
+            Button(L10n.storageClear, role: .destructive) {
+                app.services.audioStore.clear()
+                cacheBytes = app.services.audioStore.totalBytes()
+            }
+            Button(L10n.commonCancel, role: .cancel) {}
+        } message: {
+            Text(L10n.storageClearBody)
+        }
+    }
+
+    /// Destructive action row: the cache size on the right, tapping it confirms a
+    /// full clear. Disabled (and muted) when nothing is cached.
+    private var storageRow: some View {
+        let empty = cacheBytes <= 0
+        return Button { showClearConfirm = true } label: {
+            HStack {
+                Text(L10n.storageClear)
+                    .font(.system(size: 16)).foregroundStyle(empty ? theme.muted : theme.accent)
+                Spacer(minLength: 12)
+                Text(ByteCountFormatter.string(fromByteCount: Int64(cacheBytes), countStyle: .file))
+                    .font(.system(size: 13)).monospacedDigit().foregroundStyle(theme.muted)
+            }
+            .padding(.horizontal, 24).padding(.vertical, 15)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(empty)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 24)
         }
     }
 

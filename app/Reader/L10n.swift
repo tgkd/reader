@@ -12,6 +12,15 @@ enum L10n {
     static var wordmark: String { String(localized: "brand.wordmark") }
 
     static var commonOK: String { String(localized: "common.ok") }
+    static var commonCancel: String { String(localized: "common.cancel") }
+
+    // Library — swipe-to-delete a text + its cached audio.
+    static var libraryDelete: String { String(localized: "library.delete") }
+    static var libraryDeleteTitle: String { String(localized: "library.delete.title") }
+    /// Confirmation body; %@ is the text's title.
+    static func libraryDeleteBody(_ title: String) -> String {
+        String(format: String(localized: "library.delete.body.format"), title)
+    }
 
     // Settings — reading preferences (font + size)
     static var settings: String { String(localized: "settings.title") }
@@ -26,7 +35,15 @@ enum L10n {
     static var settingsDirection: String { String(localized: "settings.section.direction") }
     static var directionVertical: String { String(localized: "direction.vertical") }
     static var directionHorizontal: String { String(localized: "direction.horizontal") }
+    static var settingsFurigana: String { String(localized: "settings.section.furigana") }
+    static var furiganaShow: String { String(localized: "furigana.show") }
+    static var furiganaHide: String { String(localized: "furigana.hide") }
     static var settingsTheme: String { String(localized: "settings.section.theme") }
+    // Settings — storage: clear the on-disk narration cache.
+    static var settingsStorage: String { String(localized: "settings.section.storage") }
+    static var storageClear: String { String(localized: "settings.storage.clear") }
+    static var storageClearTitle: String { String(localized: "settings.storage.clear.title") }
+    static var storageClearBody: String { String(localized: "settings.storage.clear.body") }
     static var themePaper: String { String(localized: "theme.paper") }
     static var themeSepia: String { String(localized: "theme.sepia") }
     static var themeNight: String { String(localized: "theme.night") }

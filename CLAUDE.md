@@ -113,8 +113,8 @@ First `swift test` compiles MeCab (~1 min) and downloads IPADic (~50 MB); later 
 **DEBUG launch hooks** (`#if DEBUG`; pass via `SIMCTL_CHILD_<VAR>` to a sim launch, or as Xcode
 scheme env vars on device). The library is **empty by default**:
 - Library/reader: `READER_SEED=1`, `READER_RESET=1`, `READER_OPEN=<index>`, `READER_THEME`,
-  `READER_FONT`, `READER_SIZE`, `READER_ORI=tate|yoko`, `READER_SEEK=<sec>`, `READER_AUTOPLAY=1`,
-  `READER_SHEET=<token>`, `READER_CHAPTERS=1`, `READER_SETTINGS=1`.
+  `READER_FONT`, `READER_SIZE`, `READER_ORI=tate|yoko`, `READER_FURIGANA=0|1`, `READER_SEEK=<sec>`,
+  `READER_AUTOPLAY=1`, `READER_SHEET=<token>`, `READER_CHAPTERS=1`, `READER_SETTINGS=1`.
 - Import / OCR: `READER_IMPORT=<host path>` (epub/pdf/txt; a scanned PDF needs the Worker OCR —
   subscriber-gated — so set `READER_WORKER_URL` + a subscribed/primed `READER_USER_ID`).
 - Worker / subscription: `READER_FORCE_WORKER=1`, `READER_WORKER_URL=<url>`, `READER_USER_ID=<id>`,
@@ -138,6 +138,10 @@ ASC subscription metadata (`app.reader.app.monthly` → Ready to Submit), import
 crash-guarded when RevenueCat is unconfigured. On the sim, shortcut the gate with
 `READER_FORCE_WORKER=1` + a subscribed `READER_USER_ID`.
 
-**Open follow-ups (low):** prune per-segment cache entries after a successful stitch; memoize
-`LibraryModel.load`'s `ContentKey` hashing; reading-override table for homograph furigana; optional
-in-app language toggle / AVAudioEngine if drift appears / batch pre-gen for offline.
+Library rows support swipe-to-delete (confirmed via an alert); deleting a document also purges its
+cached narration (`AppServices.purgeAudio`). Chunked chapters prune their per-segment cache entries
+after a successful stitch (`ChunkingTTSService`), so only the whole-chapter entry persists.
+
+**Open follow-ups (low):** memoize `LibraryModel.load`'s `ContentKey` hashing; reading-override
+table for homograph furigana; optional in-app language toggle / AVAudioEngine if drift appears /
+batch pre-gen for offline.

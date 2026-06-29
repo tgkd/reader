@@ -11,6 +11,10 @@ import ReaderCore
 ///  • the synced highlight drawn as a rounded fill behind the active token, whose
 ///    text is recolored to `hiInk`,
 ///  • taps hit-tested against the same per-token rects → token index.
+///
+/// The drawer (`RubyContentView`) is sized to the WHOLE chapter and hosted in a
+/// `RubyScrollView` so long texts scroll — vertically for yokogaki, horizontally
+/// (right-to-left) for tategaki — and the playing highlight is kept in view.
 struct RubyTextView: UIViewRepresentable {
     let spans: [TokenSpan]
     /// Increments only when `spans` is replaced. Lets the view decide whether to
@@ -23,28 +27,154 @@ struct RubyTextView: UIViewRepresentable {
     /// Reading typeface (PostScript name) + size multiplier, from Settings.
     let fontName: String
     let fontScale: CGFloat
+    /// Furigana on/off, from Settings.
+    let showFurigana: Bool
     var onTapToken: (Int) -> Void
     var onTapBackground: () -> Void
 
-    func makeUIView(context: Context) -> RubyUIView {
-        let v = RubyUIView()
-        v.onTapToken = onTapToken
-        v.onTapBackground = onTapBackground
-        return v
+    func makeUIView(context: Context) -> RubyScrollView {
+        let sv = RubyScrollView()
+        sv.content.onTapToken = onTapToken
+        sv.content.onTapBackground = onTapBackground
+        return sv
     }
 
-    func updateUIView(_ v: RubyUIView, context: Context) {
-        v.onTapToken = onTapToken
-        v.onTapBackground = onTapBackground
-        v.configure(spans: spans, structureVersion: structureVersion,
-                    activeIndex: activeIndex, vertical: vertical,
-                    fontName: fontName, fontScale: fontScale,
-                    ink: theme.ink.ui, ruby: theme.muted.ui, hi: theme.hi.ui, hiInk: theme.hiInk.ui)
+    func updateUIView(_ sv: RubyScrollView, context: Context) {
+        sv.content.onTapToken = onTapToken
+        sv.content.onTapBackground = onTapBackground
+        sv.configure(spans: spans, structureVersion: structureVersion,
+                     activeIndex: activeIndex, vertical: vertical,
+                     fontName: fontName, fontScale: fontScale, showFurigana: showFurigana,
+                     ink: theme.ink.ui, hi: theme.hi.ui, hiInk: theme.hiInk.ui)
     }
 }
 
-/// The CoreText-drawing UIView behind `RubyTextView`.
-final class RubyUIView: UIView {
+/// Scrolls the full-chapter CoreText drawer and follows the active token. Sizes
+/// the content to the whole text on the cross-axis it can't scroll (width for
+/// yokogaki, height for tategaki) and lets it grow along the other.
+final class RubyScrollView: UIScrollView {
+    let content = RubyContentView()
+
+    private var vertical = true
+    /// Recompute content size + reset the start offset on the next layout pass.
+    private var needsResize = true
+    private var didPlaceInitialOffset = false
+    private var lastCrossAxis: CGFloat = -1
+
+    /// Cross-axis reading margin INSIDE the scroll view: keeps the text column off
+    /// the screen sides and clear of the scroll indicator, which rides the scroll
+    /// view's outer edge (full-bleed) rather than the text edge.
+    private let readingInset: CGFloat = 30
+    /// Tategaki main-axis end margin: keeps the first (right) / last (left) column
+    /// off the screen corner, since horizontal is the scroll axis there.
+    private let columnEndInset: CGFloat = 24
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        showsVerticalScrollIndicator = true
+        showsHorizontalScrollIndicator = true
+        // The reader provides its own top/bottom chrome insets; don't let the system
+        // add safe-area insets on top.
+        contentInsetAdjustmentBehavior = .never
+        delaysContentTouches = false       // taps reach a token without a press delay
+        alwaysBounceVertical = false
+        alwaysBounceHorizontal = false
+        addSubview(content)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(spans: [TokenSpan], structureVersion: Int, activeIndex: Int?, vertical: Bool,
+                   fontName: String, fontScale: CGFloat, showFurigana: Bool,
+                   ink: UIColor, hi: UIColor, hiInk: UIColor) {
+        let orientationChanged = (self.vertical != vertical)
+        self.vertical = vertical
+        let structureChanged = content.configure(
+            spans: spans, structureVersion: structureVersion, activeIndex: activeIndex,
+            vertical: vertical, fontName: fontName, fontScale: fontScale, showFurigana: showFurigana,
+            ink: ink, hi: hi, hiInk: hiInk)
+
+        if structureChanged || orientationChanged {
+            needsResize = true
+            didPlaceInitialOffset = false
+            setNeedsLayout()
+        } else {
+            // Only the active token (or colors) changed — keep the reader's place and
+            // just follow the moving highlight.
+            followActive(animated: true)
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 1, bounds.height > 1 else { return }
+
+        // The text lays out within the cross-axis minus the reading margin on both
+        // sides; the scroll view itself spans full-bleed so its indicator sits at
+        // the screen edge, outside the column.
+        let cross = (vertical ? bounds.height : bounds.width) - readingInset * 2
+        if needsResize || cross != lastCrossAxis {
+            lastCrossAxis = cross
+            needsResize = false
+            let text = content.fittingSize(crossAxis: cross)
+            if vertical {
+                // Tategaki: scroll horizontally, reading right-to-left. Right-align the
+                // columns (margin `columnEndInset` from the right edge) so a SHORT text
+                // sits at the right — where reading starts — instead of the left; a long
+                // text overflows leftward and scrolls. Column band inset top/bottom.
+                let columns = text.width
+                let contentW = max(bounds.width, columns + columnEndInset * 2)
+                content.frame = CGRect(x: contentW - columnEndInset - columns, y: readingInset,
+                                       width: columns, height: cross)
+                contentSize = CGSize(width: contentW, height: bounds.height)
+            } else {
+                // Yokogaki: scroll vertically; inset the column left/right.
+                content.frame = CGRect(x: readingInset, y: 0, width: cross, height: text.height)
+                contentSize = CGSize(width: bounds.width, height: text.height)
+            }
+            content.setNeedsDisplay()
+        }
+
+        if !didPlaceInitialOffset {
+            didPlaceInitialOffset = true
+            // Tategaki reads right-to-left: start at the right edge.
+            contentOffset = vertical
+                ? CGPoint(x: max(0, contentSize.width - bounds.width), y: 0)
+                : .zero
+            followActive(animated: false)   // jump to a resumed position, if any
+        }
+    }
+
+    /// Bring the active token into a comfortable reading band when it drifts out —
+    /// a line-at-a-time follow during playback that doesn't fight a manual drag.
+    private func followActive(animated: Bool) {
+        guard !isTracking, !isDragging, !isDecelerating,
+              bounds.width > 1, bounds.height > 1,
+              let r0 = content.activeViewRect() else { return }
+        // activeViewRect is in the content view's own coords; the content view is
+        // inset within the scroll view, so shift it into scroll-content space.
+        let r = r0.offsetBy(dx: content.frame.origin.x, dy: content.frame.origin.y)
+        let visible = CGRect(origin: contentOffset, size: bounds.size)
+        if vertical {
+            let margin = bounds.width * 0.22
+            guard r.minX < visible.minX + margin || r.maxX > visible.maxX else { return }
+            let target = r.maxX - bounds.width * 0.75      // ~quarter in from the right
+            let x = min(max(0, target), max(0, contentSize.width - bounds.width))
+            setContentOffset(CGPoint(x: x, y: 0), animated: animated)
+        } else {
+            let margin = bounds.height * 0.22
+            guard r.minY < visible.minY + margin || r.maxY > visible.maxY - margin else { return }
+            let target = r.minY - bounds.height * 0.28     // ~quarter down from the top
+            let y = min(max(0, target), max(0, contentSize.height - bounds.height))
+            setContentOffset(CGPoint(x: 0, y: y), animated: animated)
+        }
+    }
+}
+
+/// The CoreText-drawing view, sized to the whole chapter and hosted in a
+/// `RubyScrollView`.
+final class RubyContentView: UIView {
     var onTapToken: (Int) -> Void = { _ in }
     var onTapBackground: () -> Void = {}
 
@@ -53,7 +183,6 @@ final class RubyUIView: UIView {
     private var vertical = true
     private var fontName: String = Mincho.psName        // reading typeface (Settings)
     private var fontScale: CGFloat = 1                   // size multiplier (Settings)
-    private var rubyColor: UIColor = .secondaryLabel   // baked into the string
     private var inkColor: UIColor = .label             // applied via context fill
     private var hiColor: UIColor = .systemYellow       // draw-time
     private var hiInkColor: UIColor = .label           // draw-time
@@ -64,7 +193,7 @@ final class RubyUIView: UIView {
     private var ctFrame: CTFrame?
     private var frameSize: CGSize = .zero
     private var structureKey = 0
-    private let showFurigana = true
+    private var showFurigana = true
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -95,37 +224,43 @@ final class RubyUIView: UIView {
 
     // MARK: - Configure
 
+    /// Apply new state; returns whether the token list / orientation / font changed
+    /// (i.e. the host must recompute the scrollable content size).
+    @discardableResult
     func configure(spans: [TokenSpan], structureVersion: Int, activeIndex: Int?, vertical: Bool,
-                   fontName: String, fontScale: CGFloat,
-                   ink: UIColor, ruby: UIColor, hi: UIColor, hiInk: UIColor) {
+                   fontName: String, fontScale: CGFloat, showFurigana: Bool,
+                   ink: UIColor, hi: UIColor, hiInk: UIColor) -> Bool {
         // Draw-time colors: changing them only needs a redraw, never a relayout.
         inkColor = ink; hiColor = hi; hiInkColor = hiInk
 
-        // Only a new token list (structureVersion), orientation, ruby color, or the
-        // reading font/size affect layout. The version is a cheap O(1) proxy for
+        // Only a new token list (structureVersion), orientation, furigana on/off, or
+        // the reading font/size affect layout. The version is a cheap O(1) proxy for
         // "spans changed", so this comparison runs every highlight frame without
         // touching the token strings.
-        let key = Self.structureHash(version: structureVersion, vertical: vertical, ruby: ruby,
-                                     fontName: fontName, fontScale: fontScale)
+        let key = Self.structureHash(version: structureVersion, vertical: vertical,
+                                     showFurigana: showFurigana, fontName: fontName, fontScale: fontScale)
+        var structureChanged = false
         if key != structureKey {
             structureKey = key
             self.spans = spans
             self.vertical = vertical
-            self.rubyColor = ruby
+            self.showFurigana = showFurigana
             self.fontName = fontName
             self.fontScale = fontScale
             rebuild()
+            structureChanged = true
         }
         self.activeIndex = activeIndex
         setNeedsDisplay()
+        return structureChanged
     }
 
-    private static func structureHash(version: Int, vertical: Bool, ruby: UIColor,
+    private static func structureHash(version: Int, vertical: Bool, showFurigana: Bool,
                                       fontName: String, fontScale: CGFloat) -> Int {
         var h = Hasher()
         h.combine(version)
         h.combine(vertical)
-        h.combine(ruby)
+        h.combine(showFurigana)
         h.combine(fontName)
         h.combine(fontScale)
         return h.finalize()
@@ -134,9 +269,9 @@ final class RubyUIView: UIView {
     // MARK: - Build the attributed string + framesetter
 
     private func rebuild() {
-        // Base runs take their color from the graphics context's fill color at
-        // draw time (so the active token can be repainted in hiInk without
-        // rebuilding the string); ruby keeps an explicit color.
+        // Base runs (and ruby) take their color from the graphics context's fill
+        // color at draw time (so the active token can be repainted in hiInk without
+        // rebuilding the string). See the ruby annotation note below.
         let fromContext = NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String)
         let font = readingFont(fontSize)
         let baseAttrs: [NSAttributedString.Key: Any] = [.font: font, fromContext: true]
@@ -148,10 +283,13 @@ final class RubyUIView: UIView {
             let piece = NSMutableAttributedString(string: span.surface, attributes: baseAttrs)
             if showFurigana, let reading = span.reading, !reading.isEmpty, Self.containsKanji(span.surface) {
                 let rubyFont = readingFont(fontSize * 0.5)
+                // No explicit ruby color: furigana draws via the context fill (like the
+                // base runs) so it inherits `ink` / `hiInk` with the text. An explicit
+                // color here persists in the context mid-CTFrameDraw and bleeds onto the
+                // following from-context base runs — the "first word inked, rest grayed" bug.
                 let ann = CTRubyAnnotationCreateWithAttributes(
                     .center, .auto, .before, reading as CFString,
-                    [kCTFontAttributeName: rubyFont,
-                     kCTForegroundColorAttributeName: rubyColor.cgColor] as CFDictionary)
+                    [kCTFontAttributeName: rubyFont] as CFDictionary)
                 piece.addAttribute(NSAttributedString.Key(kCTRubyAnnotationAttributeName as String),
                                    value: ann, range: NSRange(location: 0, length: piece.length))
             }
@@ -161,7 +299,7 @@ final class RubyUIView: UIView {
 
         let para = NSMutableParagraphStyle()
         para.lineBreakMode = .byWordWrapping
-        para.lineHeightMultiple = vertical ? 1.0 : 1.55
+        para.lineHeightMultiple = vertical ? 1.0 : 1.2
         let whole = NSRange(location: 0, length: out.length)
         out.addAttributes([.paragraphStyle: para,
                            .kern: fontSize * (vertical ? 0.04 : 0.02)], range: whole)
@@ -178,6 +316,23 @@ final class RubyUIView: UIView {
 
         // The spoken page = the concatenated surfaces (the displayed text).
         accessibilityLabel = spans.map(\.surface).joined()
+    }
+
+    // MARK: - Content sizing
+
+    /// Size needed to lay out the whole chapter given the fixed cross-axis (width
+    /// for yokogaki, height for tategaki). `CTFramesetterSuggestFrameSizeWithConstraints`
+    /// only measures horizontal layout, so vertical text swaps the axes: constrain
+    /// by the available column height and read back the stacked extent as the width.
+    func fittingSize(crossAxis: CGFloat) -> CGSize {
+        guard let framesetter, crossAxis > 1 else { return .zero }
+        let suggest = CTFramesetterSuggestFrameSizeWithConstraints(
+            framesetter, CFRangeMake(0, 0), nil,
+            CGSize(width: crossAxis, height: .greatestFiniteMagnitude), nil)
+        // Slack for ruby overhang / rounding so the final line/column isn't clipped.
+        let main = ceil(suggest.height) + fontSize
+        return vertical ? CGSize(width: main, height: crossAxis)
+                        : CGSize(width: crossAxis, height: main)
     }
 
     // MARK: - Frame caching
@@ -272,6 +427,19 @@ final class RubyUIView: UIView {
             }
         }
         return rects
+    }
+
+    /// The active token's bounding box in this view's (top-left) coordinate space,
+    /// for the scroll-to-follow. `nil` when there's no active token or no frame yet.
+    func activeViewRect() -> CGRect? {
+        guard let active = activeIndex, active >= 0, active < tokenRanges.count,
+              let frame = currentFrame() else { return nil }
+        let rects = tokenRects(tokenRanges[active], frame: frame)
+        guard let first = rects.first else { return nil }
+        let union = rects.dropFirst().reduce(first) { $0.union($1) }
+        // tokenRects are in flipped CoreText space (y from the bottom); flip to view.
+        return CGRect(x: union.minX, y: bounds.height - union.maxY,
+                      width: union.width, height: union.height)
     }
 
     // MARK: - Tap

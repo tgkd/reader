@@ -39,4 +39,23 @@ final class DiskAudioStore: GeneratedAudioStore {
         let side = Sidecar(text: audio.text, alignment: audio.alignment)
         if let data = try? JSONEncoder().encode(side) { try? data.write(to: jsonURL(key), options: .atomic) }
     }
+
+    func remove(_ key: ContentKey) {
+        try? FileManager.default.removeItem(at: mp3URL(key))
+        try? FileManager.default.removeItem(at: jsonURL(key))
+    }
+
+    /// Drop every cached entry by removing and recreating the directory — cheaper
+    /// and more thorough than enumerating files.
+    func clear() {
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    /// Sum of all entry sizes on disk, for the Settings cache-size readout.
+    func totalBytes() -> Int {
+        let fm = FileManager.default
+        guard let urls = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        return urls.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+    }
 }

@@ -86,6 +86,7 @@ struct ReaderView: View {
                     theme: theme,
                     fontName: app.readingFont.psName,
                     fontScale: app.readingSize.scale,
+                    showFurigana: app.showFurigana,
                     onTapToken: { model.tapToken($0) },
                     onTapBackground: { model.toggleChrome() }
                 )
@@ -94,11 +95,14 @@ struct ReaderView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 30)
-        .padding(.top, 94)
-        // Clears the transport chrome (~136pt with the taller scrubber row) so the
-        // last text line can't tuck under the transport's opaque background.
-        .padding(.bottom, 140)
+        // No horizontal padding: the reading surface is full-bleed so its scroll
+        // indicator rides the screen edge. The text column's side margin is applied
+        // INSIDE the scroll view (`readingInset`), clear of the indicator.
+        .padding(.top, 72)
+        // Clear the bottom chrome — only what the current state needs: the full
+        // transport (scrubber + controls) is taller than the single pill / play
+        // states, so reserving the tallest height everywhere left a dead gap.
+        .padding(.bottom, model.audioState == .ready ? 116 : 80)
     }
 
     private func placeholder(_ title: String, _ subtitle: String) -> some View {
@@ -107,6 +111,7 @@ struct ReaderView: View {
             Text(subtitle).font(.system(size: 13)).foregroundStyle(theme.muted)
                 .multilineTextAlignment(.center)
         }
+        .padding(.horizontal, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { model?.toggleChrome() }
@@ -179,8 +184,8 @@ struct ReaderView: View {
             }
         }
         .padding(.horizontal, 22)
-        .padding(.top, 16)
-        .padding(.bottom, 30)
+        .padding(.top, 12)
+        .padding(.bottom, 18)
         .background(theme.bg)
         .overlay(alignment: .top) { Rectangle().fill(theme.hair).frame(height: 1) }
         .opacity(model.chromeVisible ? 1 : 0)

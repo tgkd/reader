@@ -48,4 +48,13 @@ final class LibraryModel {
             return Item(document: doc, cached: cached)
         }
     }
+
+    /// Remove a document from the shelf and reclaim its cached narration, then
+    /// refresh the list. Backs the row's swipe-to-delete (confirmed in the UI).
+    func delete(_ document: Document, _ services: AppServices) {
+        services.library.remove(document.id)
+        services.purgeAudio(for: document)
+        keyCache[document.id] = nil
+        load(services)
+    }
 }

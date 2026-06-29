@@ -5,8 +5,14 @@
 /* App wordmark (logo). Latin on English devices, 読み on Japanese. */
 "brand.wordmark" = "Yomi";
 
-/* Generic — alert dismiss button */
+/* Generic — alert buttons */
 "common.ok" = "OK";
+"common.cancel" = "Cancel";
+
+/* Library — swipe-to-delete a text + its cached audio */
+"library.delete" = "Delete";
+"library.delete.title" = "Delete this text?";
+"library.delete.body.format" = "“%@” and any saved audio will be removed from this device.";
 
 /* Settings — reading preferences (font + size) */
 "settings.title" = "Settings";
@@ -23,7 +29,16 @@
 "settings.section.direction" = "Writing direction";
 "direction.vertical" = "Vertical";
 "direction.horizontal" = "Horizontal";
+"settings.section.furigana" = "Furigana";
+"furigana.show" = "Show";
+"furigana.hide" = "Hide";
 "settings.section.theme" = "Theme";
+
+/* Settings — storage: clear cached narration */
+"settings.section.storage" = "Storage";
+"settings.storage.clear" = "Clear cached audio";
+"settings.storage.clear.title" = "Clear cached audio?";
+"settings.storage.clear.body" = "Saved narration will be removed from this device. Chapters re-download when you play them again.";
 "theme.paper" = "Paper";
 "theme.sepia" = "Sepia";
 "theme.night" = "Night";

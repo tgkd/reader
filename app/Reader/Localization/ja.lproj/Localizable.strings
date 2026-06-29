@@ -3,8 +3,14 @@
 /* アプリのワードマーク（ロゴ） */
 "brand.wordmark" = "読み";
 
-/* 汎用 — アラートの了解ボタン */
+/* 汎用 — アラートのボタン */
 "common.ok" = "OK";
+"common.cancel" = "キャンセル";
+
+/* ライブラリ — スワイプで本とキャッシュ音声を削除 */
+"library.delete" = "削除";
+"library.delete.title" = "この本を削除しますか？";
+"library.delete.body.format" = "「%@」と保存された音声がこの端末から削除されます。";
 
 /* 設定 — 読書の表示（フォント・サイズ） */
 "settings.title" = "設定";
@@ -21,7 +27,16 @@
 "settings.section.direction" = "書字方向";
 "direction.vertical" = "縦書き";
 "direction.horizontal" = "横書き";
+"settings.section.furigana" = "ふりがな";
+"furigana.show" = "表示";
+"furigana.hide" = "非表示";
 "settings.section.theme" = "テーマ";
+
+/* 設定 — ストレージ：保存した音声を削除 */
+"settings.section.storage" = "ストレージ";
+"settings.storage.clear" = "音声キャッシュを削除";
+"settings.storage.clear.title" = "音声キャッシュを削除しますか？";
+"settings.storage.clear.body" = "保存された音声がこの端末から削除されます。再生時に再ダウンロードされます。";
 "theme.paper" = "紙";
 "theme.sepia" = "セピア";
 "theme.night" = "夜";

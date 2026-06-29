@@ -19,8 +19,22 @@ public protocol GeneratedAudioStore {
     /// Cheap existence check for the library "cached" indicator — must not load
     /// the audio bytes. Defaults to a full `load`; disk impls override.
     func has(_ key: ContentKey) -> Bool
+    /// Delete a cached entry (audio + alignment). Used to reclaim space when a
+    /// document is deleted, and to prune redundant per-segment entries once a
+    /// chunked chapter has been stitched. Idempotent. Defaults to a no-op for
+    /// in-memory impls; disk impls override.
+    func remove(_ key: ContentKey)
+    /// Delete every cached entry (the Settings "clear cached audio" action).
+    /// Chapters regenerate on next play. Defaults to a no-op.
+    func clear()
+    /// Total bytes currently on disk, for the Settings cache-size readout.
+    /// Defaults to 0 for impls that don't persist.
+    func totalBytes() -> Int
 }
 
 public extension GeneratedAudioStore {
     func has(_ key: ContentKey) -> Bool { load(key) != nil }
+    func remove(_ key: ContentKey) {}
+    func clear() {}
+    func totalBytes() -> Int { 0 }
 }

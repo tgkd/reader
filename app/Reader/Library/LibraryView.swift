@@ -11,6 +11,8 @@ struct LibraryView: View {
     @State private var importing = false
     @State private var importError: String?
     @State private var showingSettings = false
+    /// Row the user swiped to delete, pending the confirmation alert.
+    @State private var pendingDelete: LibraryModel.Item?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,12 +21,25 @@ struct LibraryView: View {
             if model.items.isEmpty {
                 emptyState
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(model.items) { row($0) }
+                // A plain List (chrome stripped to keep the custom row look) so each
+                // row gets native swipe-to-delete; the destructive action routes
+                // through a confirmation alert rather than deleting on the swipe.
+                List {
+                    ForEach(model.items) { item in
+                        row(item)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(theme.bg)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) { pendingDelete = item } label: {
+                                    Label(L10n.libraryDelete, systemImage: "trash")
+                                }
+                            }
                     }
-                    .padding(.vertical, 6)
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .environment(\.defaultMinListRowHeight, 0)
             }
         }
         .onAppear {
@@ -42,6 +57,12 @@ struct LibraryView: View {
             Button(L10n.commonOK, role: .cancel) {}
         } message: {
             Text(importError ?? "")
+        }
+        .alert(L10n.libraryDeleteTitle, isPresented: showDeleteConfirm, presenting: pendingDelete) { item in
+            Button(L10n.libraryDelete, role: .destructive) { model.delete(item.document, app.services) }
+            Button(L10n.commonCancel, role: .cancel) {}
+        } message: { item in
+            Text(L10n.libraryDeleteBody(item.document.title))
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
@@ -67,6 +88,10 @@ struct LibraryView: View {
 
     private var showImportError: Binding<Bool> {
         Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })
+    }
+
+    private var showDeleteConfirm: Binding<Bool> {
+        Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
     }
 
     /// Import the picked file (EPUB / PDF / .txt) into the library. The file is

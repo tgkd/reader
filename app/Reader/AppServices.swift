@@ -102,6 +102,22 @@ final class AppServices {
         #endif
     }
 
+    /// Reclaim a deleted document's cached narration so it doesn't linger in the
+    /// audio cache. Removes each chapter's whole-chapter entry plus any per-segment
+    /// entries a chunked chapter left behind (normally pruned post-stitch, but a
+    /// crash between synth and the whole-chapter save could orphan some). Mirrors
+    /// `ChunkingTTSService`'s split so the segment keys match. Idempotent.
+    func purgeAudio(for document: Document) {
+        for chapter in document.chapters {
+            let normalized = Normalize.nfkc(chapter.text)
+            audioStore.remove(SynthesisRequest(text: normalized).cacheKey)
+            let segments = Chunker.split(normalized)
+            if segments.count > 1 {
+                for segment in segments { audioStore.remove(SynthesisRequest(text: segment).cacheKey) }
+            }
+        }
+    }
+
     /// Local subscription check backing the reader's paywall gate. When RevenueCat
     /// isn't configured (dev/offline, or a device without an `appl_` key) it's
     /// ungated (`true`), so fixture/Worker behavior is unchanged; otherwise `true`
