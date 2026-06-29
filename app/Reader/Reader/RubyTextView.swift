@@ -280,7 +280,12 @@ final class RubyContentView: UIView {
         var ranges: [NSRange] = []
         for span in spans {
             let start = out.length
-            let piece = NSMutableAttributedString(string: span.surface, attributes: baseAttrs)
+            // In tategaki, half-width ASCII digits have Unicode Vertical_Orientation
+            // = Rotated (CoreText lays them on their side). Swap to full-width twins,
+            // which are Upright, so digits stack straight down the column. Display-only
+            // and 1:1 per scalar, so `tokenRanges` stay aligned with `span.surface`.
+            let display = vertical ? Self.uprightDigits(span.surface) : span.surface
+            let piece = NSMutableAttributedString(string: display, attributes: baseAttrs)
             if showFurigana, let reading = span.reading, !reading.isEmpty, Self.containsKanji(span.surface) {
                 let rubyFont = readingFont(fontSize * 0.5)
                 // No explicit ruby color: furigana draws via the context fill (like the
@@ -455,6 +460,22 @@ final class RubyContentView: UIView {
             }
         }
         onTapBackground()
+    }
+
+    /// Map half-width ASCII digits (0-9) to their full-width twins (U+FF10–FF19)
+    /// for upright stacking in vertical text. A 1:1 scalar swap (both single UTF-16
+    /// units), so it never shifts the offsets `tokenRanges` indexes into.
+    private static func uprightDigits(_ s: String) -> String {
+        guard s.unicodeScalars.contains(where: { (0x30...0x39).contains($0.value) }) else { return s }
+        var out = String.UnicodeScalarView()
+        for scalar in s.unicodeScalars {
+            if (0x30...0x39).contains(scalar.value) {
+                out.append(Unicode.Scalar(scalar.value - 0x30 + 0xFF10)!)
+            } else {
+                out.append(scalar)
+            }
+        }
+        return String(out)
     }
 
     private static func containsKanji(_ s: String) -> Bool {
