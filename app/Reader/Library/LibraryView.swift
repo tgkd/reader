@@ -40,8 +40,14 @@ struct LibraryView: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .environment(\.defaultMinListRowHeight, 0)
+                // Claim the remaining height explicitly. Without this the List sizes to
+                // its content inside the VStack and overflows the screen without
+                // scrolling once there are more rows than fit (was latent when the
+                // shelf fit on one screen).
+                .frame(maxHeight: .infinity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
             model.load(app.services)
         }
