@@ -36,10 +36,11 @@ final class ChunkingTTSService: TTSService {
 
         let ordered = try await synthesizeSegments(segments, voice: request.voice, model: request.model)
         let stitched = AlignmentStitcher.stitch(ordered)
-        // The caller caches the whole chapter under its own key, so the per-segment
-        // entries written during synthesis are now dead weight — reclaim them. Only
-        // runs on success: a partially-failed batch throws before here, leaving its
-        // segments cached so a retry resumes cheaply.
+        // Durably cache the whole chapter under its own key BEFORE reclaiming the
+        // per-segment entries. The caller caches it too, but only after we return —
+        // saving here first means a crash in that gap can't leave the chapter with
+        // neither its segments nor its whole-chapter entry (all paid work lost).
+        store?.save(stitched, for: request.cacheKey)
         for segment in segments {
             store?.remove(SynthesisRequest(text: segment, voice: request.voice, model: request.model).cacheKey)
         }

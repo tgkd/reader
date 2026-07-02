@@ -22,22 +22,12 @@ final class LibraryModel {
 
     private(set) var items: [Item] = []
 
-    /// Cache the (expensive, SHA-256) `ContentKey` per document so reappearing
-    /// in the library — which calls `load` each time — doesn't re-hash every
-    /// first-chapter text on the main thread. Keyed by id; a doc's first-chapter
-    /// text is stable for its lifetime.
-    private var keyCache: [Document.ID: ContentKey] = [:]
-
     func load(_ services: AppServices) {
         items = services.library.all().map { doc in
             let text = doc.chapters.first?.text ?? ""
-            let key: ContentKey
-            if let cached = keyCache[doc.id] {
-                key = cached
-            } else {
-                key = SynthesisRequest(text: text).cacheKey
-                keyCache[doc.id] = key
-            }
+            // ContentKey is memoized in AppServices (survives route switches), so a
+            // return to the Library doesn't re-hash every first chapter on the main actor.
+            let key = services.firstChapterKey(for: doc)
             // Offline audio available = already synthesized to disk, OR a bundled
             // fixture exists (DEBUG offline fallback).
             let cached = services.audioStore.has(key) || services.fixtures.hasFixture(for: text)
@@ -50,7 +40,7 @@ final class LibraryModel {
     func delete(_ document: Document, _ services: AppServices) {
         services.library.remove(document.id)
         services.purgeAudio(for: document)
-        keyCache[document.id] = nil
+        services.invalidateKey(for: document.id)
         load(services)
     }
 }

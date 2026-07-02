@@ -1,14 +1,11 @@
 import Foundation
 import ReaderCore
 
-/// Production TTS path (Phase 6): POSTs text to the aiwork Worker's
-/// `/tts/aligned` route, which proxies ElevenLabs `with-timestamps` behind the
-/// Worker's global RevenueCat gate. The ElevenLabs key stays server-side; the
-/// client sends only `X-User-ID` (the RevenueCat appUserID).
-///
-/// NOT exercised by base UI — end-to-end needs a subscribed user, the standing
-/// Phase-6 blocker. It exists as the documented seam: swap `FixtureTTSService`
-/// for this in `AppServices` once the Worker route ships.
+/// The production TTS path (wired in `AppServices`, wrapped by
+/// `ChunkingTTSService`): POSTs text to the aiwork Worker's `/tts/aligned` route,
+/// which proxies ElevenLabs `with-timestamps` behind the Worker's global RevenueCat
+/// gate. The ElevenLabs key stays server-side; the client sends only `X-User-ID`
+/// (the RevenueCat appUserID). End-to-end synthesis requires a subscribed user.
 final class WorkerTTSService: TTSService {
     enum WorkerError: LocalizedError {
         case subscriptionRequired
@@ -28,10 +25,10 @@ final class WorkerTTSService: TTSService {
     private let userId: String?
     private let session: URLSession
 
-    /// The production endpoint is a private deployment. `AppServices` injects the
-    /// real URL from the launch env (`READER_WORKER_URL`, from your gitignored
-    /// `.env`) or the `WorkerBaseURL` Info.plist key — see `.env.example`. This
-    /// committed default is a non-functional placeholder so a fresh clone builds.
+    /// The production endpoint is a private deployment. `AppServices` injects the real
+    /// URL from the `WorkerBaseURL` Info.plist key (set via the gitignored
+    /// `Signing.xcconfig`'s `WORKER_HOST`). This committed default is a non-functional
+    /// placeholder so a fresh clone still builds.
     init(baseURL: URL = URL(string: "https://your-worker.example.workers.dev")!,
          userId: String?,
          session: URLSession? = nil) {

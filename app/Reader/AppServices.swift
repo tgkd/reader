@@ -42,6 +42,24 @@ final class AppServices {
         dictionary = sqlite ?? MockDictionaryService.seeded()
     }
 
+    /// First-chapter `ContentKey` per document, cached here (not in the view-owned
+    /// `LibraryModel`, which a Library↔Reader route switch recreates — so its cache
+    /// was cold on every return, re-hashing every book's first chapter on the main
+    /// actor). Survives route switches; invalidated on delete.
+    private var contentKeyCache: [Document.ID: ContentKey] = [:]
+
+    /// The audio cache key for a document's first chapter (the "is it downloaded?"
+    /// probe), memoized across Library reappearances.
+    func firstChapterKey(for document: Document) -> ContentKey {
+        if let cached = contentKeyCache[document.id] { return cached }
+        let key = SynthesisRequest(text: document.chapters.first?.text ?? "").cacheKey
+        contentKeyCache[document.id] = key
+        return key
+    }
+
+    /// Drop a document's cached key (on delete).
+    func invalidateKey(for id: Document.ID) { contentKeyCache[id] = nil }
+
     /// The `reader Pro` entitlement (RevenueCat identifier) the reader is gated on.
     static let entitlementID = "reader Pro"
 
@@ -118,7 +136,10 @@ final class AppServices {
     /// clone still builds and the public repo ships no live, billable host.
     private static var workerBaseURL: URL {
         let raw = Bundle.main.object(forInfoDictionaryKey: "WorkerBaseURL") as? String
-        if let raw, !raw.isEmpty, let url = URL(string: raw) { return url }
+        // Require a real host: an empty WORKER_HOST expands the plist value to
+        // "https://", which is non-empty and URL-parses but has no host — that would
+        // slip past a bare isEmpty check and defeat the placeholder fallback below.
+        if let raw, let url = URL(string: raw), url.host?.isEmpty == false { return url }
         return URL(string: "https://your-worker.example.workers.dev")!
     }
 }

@@ -87,13 +87,16 @@ final class AudioCacheTests: XCTestCase {
 
         // The stitched whole-chapter text is the lossless concatenation of segments.
         XCTAssertEqual(result.text, Normalize.nfkc(text))
-        // Per-segment entries are pruned post-stitch; the whole chapter is cached by
-        // the caller (ReaderModel), not here — so the store is left empty.
+        // Per-segment entries are pruned post-stitch, and the whole chapter is saved
+        // durably (before the prune) under its own key — so exactly that one entry
+        // remains, never an empty store that lost all the paid segments.
         for segment in segments {
             XCTAssertFalse(store.has(SynthesisRequest(text: segment).cacheKey),
                            "segment entry should be pruned after stitch")
         }
-        XCTAssertEqual(store.count, 0)
+        XCTAssertTrue(store.has(SynthesisRequest(text: text).cacheKey),
+                      "the whole chapter must be cached before the segments are pruned")
+        XCTAssertEqual(store.count, 1)
     }
 
     func testPartialFailureKeepsCachedSegmentsForRetry() async {
