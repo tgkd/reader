@@ -58,6 +58,8 @@
 "reader.notGenerated.title" = "Audio not generated yet";
 "reader.notGenerated.body" = "This chapter has no narration yet. In production, audio is generated once via the Worker and cached.";
 "reader.failed.title" = "Couldn’t load this chapter";
+"reader.failed.tokenizer" = "Text engine unavailable";
+"reader.failed.audio" = "Audio failed to load";
 
 /* Reader — subscription gate (no active `reader Pro` entitlement) */
 "reader.subscribe.title" = "Listen with Membership";

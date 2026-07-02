@@ -59,9 +59,12 @@ struct EPUBImporter: DocumentImporter {
         }
 
         guard !chapters.isEmpty else {
-            // OCR ran but recovered nothing → ocrFailed; otherwise there was no readable
-            // text at all (image-only book without a recognizer, or a genuinely empty one).
+            // OCR ran but recovered nothing → ocrFailed. A non-subscriber (no recognizer)
+            // opening an image-only book → the Membership prompt (mirrors PDFImporter),
+            // NOT the misleading "file is empty". Otherwise a genuinely empty file.
+            let hasImageSlots = slots.contains { if case .images = $0 { return true }; return false }
             if recognizer != nil && !imagePaths.isEmpty { throw ImportError.ocrFailed }
+            if recognizer == nil && hasImageSlots { throw ImportError.ocrUnavailable }
             throw ImportError.empty
         }
         return chapters

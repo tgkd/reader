@@ -69,6 +69,19 @@ final class EPUBImporterTests: XCTestCase {
         XCTAssertEqual(text, "一行目\n二行目")
     }
 
+    func testRubyReadingsAreNotInlined() async throws {
+        // <rt>/<rp> hold the furigana reading; keeping their CONTENT would inline it
+        // into the body (漢字かんじ), doubling TTS/tokenization. Only the base survives;
+        // the reader draws its own furigana from MeCab.
+        let body = "<p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby>は難しい</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let text = try await chapters(url)[0].text
+        XCTAssertEqual(text, "漢字は難しい")
+        XCTAssertFalse(text.contains("かんじ"), text)
+    }
+
     func testEmptyBodyItemsAreSkipped() async throws {
         let manifest = [
             Fixture.EPUBItem(id: "a", href: "a.xhtml", content: Fixture.xhtml(body: "<p>REAL</p>")),
@@ -123,14 +136,15 @@ final class EPUBImporterTests: XCTestCase {
     }
 
     /// Non-subscriber (no recognizer): an image-only book recovers no text and throws
-    /// `.empty`, exactly as before the OCR fallback existed.
-    func testImageOnlyEPUBWithNoRecognizerThrowsEmpty() async throws {
+    /// `.ocrUnavailable` — the Membership prompt (mirrors PDFImporter), not the
+    /// misleading "file is empty". A genuinely empty book still throws `.empty`.
+    func testImageOnlyEPUBWithNoRecognizerThrowsOCRUnavailable() async throws {
         let url = try Fixture.imageEPUB(pages: 2)
         do {
             _ = try await EPUBImporter(url: url).chapters()
-            XCTFail("expected empty")
+            XCTFail("expected ocrUnavailable")
         } catch {
-            XCTAssertEqual(error as? ImportError, .empty)
+            XCTAssertEqual(error as? ImportError, .ocrUnavailable)
         }
     }
 

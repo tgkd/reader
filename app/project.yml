@@ -42,6 +42,17 @@ targets:
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig
+    # Fail a Release build if the tap-to-define DB was never built — otherwise the
+    # archive silently ships the seeded MockDictionary (AppServices falls back when
+    # the resource is absent, and the DB is gitignored so a clean checkout has none).
+    preBuildScripts:
+      - name: Verify tap-to-define DB (Release)
+        basedOnDependencyAnalysis: false
+        script: |
+          if [ "$CONFIGURATION" = "Release" ] && [ ! -f "$SRCROOT/Reader/Resources/jisho-compact.db" ]; then
+            echo "error: Reader/Resources/jisho-compact.db is missing — run scripts/build-compact-dict.sh before a Release build (the app would otherwise ship the mock dictionary)."
+            exit 1
+          fi
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.reader.app

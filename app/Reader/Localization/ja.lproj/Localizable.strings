@@ -56,6 +56,8 @@
 "reader.notGenerated.title" = "音声はまだ生成されていません";
 "reader.notGenerated.body" = "この章にはまだ音声がありません。本番ではWorker経由で一度だけ生成され、キャッシュされます。";
 "reader.failed.title" = "この章を読み込めませんでした";
+"reader.failed.tokenizer" = "テキストエンジンを利用できません";
+"reader.failed.audio" = "音声を読み込めませんでした";
 
 /* リーダー — 購読ゲート（reader Pro 未加入） */
 "reader.subscribe.title" = "メンバーシップで聴く";

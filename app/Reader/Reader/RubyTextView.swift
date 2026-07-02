@@ -172,11 +172,24 @@ final class RubyScrollView: UIScrollView {
     }
 }
 
-/// The CoreText-drawing view, sized to the whole chapter and hosted in a
-/// `RubyScrollView`.
+/// A `CATiledLayer` that never fades tiles in — the reading surface should not
+/// flicker as tiles rasterize during a scroll.
+private final class NoFadeTiledLayer: CATiledLayer {
+    override class func fadeDuration() -> CFTimeInterval { 0 }
+}
+
+/// The CoreText-drawing view. Its content is the WHOLE chapter, but it draws on a
+/// `CATiledLayer` so only the visible tiles are ever rasterized — a full novel as
+/// one chapter would otherwise need a single multi-gigabyte backing store (past
+/// the GPU texture limit) and jetsam/blank out. The moving highlight lives on a
+/// separate `CAShapeLayer` so advancing the active token repaints a small vector
+/// path, never the chapter-sized tiled content.
 final class RubyContentView: UIView {
     var onTapToken: (Int) -> Void = { _ in }
     var onTapBackground: () -> Void = {}
+
+    /// Draw the whole chapter on a tiled layer (bounded backing store).
+    override class var layerClass: AnyClass { NoFadeTiledLayer.self }
 
     private var spans: [TokenSpan] = []
     private var activeIndex: Int?
@@ -184,22 +197,38 @@ final class RubyContentView: UIView {
     private var fontName: String = Mincho.psName        // reading typeface (Settings)
     private var fontScale: CGFloat = 1                   // size multiplier (Settings)
     private var inkColor: UIColor = .label             // applied via context fill
-    private var hiColor: UIColor = .systemYellow       // draw-time
-    private var hiInkColor: UIColor = .label           // draw-time
+    private var hiColor: UIColor = .systemYellow       // active-token highlight fill
 
     private var attributed = NSAttributedString()
     private var tokenRanges: [NSRange] = []
     private var framesetter: CTFramesetter?
     private var ctFrame: CTFrame?
     private var frameSize: CGSize = .zero
+    /// Cached line geometry for the current `ctFrame`, so tap hit-testing and the
+    /// highlight don't re-fetch all line origins on every query.
+    private var lines: [CTLine] = []
+    private var lineOrigins: [CGPoint] = []            // flipped CoreText space
+    private var lineRanges: [NSRange] = []             // each line's character range
     private var structureKey = 0
     private var showFurigana = true
+
+    /// The active-token highlight, drawn as a vector fill above the tiled text so it
+    /// can advance ~60×/sec without invalidating the chapter-sized tiles.
+    private let highlightLayer = CAShapeLayer()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         isOpaque = false
         contentMode = .redraw
+        if let tiled = layer as? CATiledLayer {
+            tiled.levelsOfDetail = 1
+            tiled.levelsOfDetailBias = 0
+            let s = UIScreen.main.scale
+            tiled.tileSize = CGSize(width: 512 * s, height: 512 * s)
+        }
+        highlightLayer.actions = ["path": NSNull()]     // no implicit animation on advance
+        layer.addSublayer(highlightLayer)
         // VoiceOver reads the page as one static-text element (the reading
         // material itself). The per-token tap-to-define is a sighted affordance.
         isAccessibilityElement = true
@@ -230,8 +259,10 @@ final class RubyContentView: UIView {
     func configure(spans: [TokenSpan], structureVersion: Int, activeIndex: Int?, vertical: Bool,
                    fontName: String, fontScale: CGFloat, showFurigana: Bool,
                    ink: UIColor, hi: UIColor, hiInk: UIColor) -> Bool {
-        // Draw-time colors: changing them only needs a redraw, never a relayout.
-        inkColor = ink; hiColor = hi; hiInkColor = hiInk
+        // Ink recolor (theme switch) needs a full tiled repaint; the highlight fill
+        // color is applied to the vector layer without touching the text tiles.
+        let inkChanged = (inkColor != ink)
+        inkColor = ink; hiColor = hi
 
         // Only a new token list (structureVersion), orientation, furigana on/off, or
         // the reading font/size affect layout. The version is a cheap O(1) proxy for
@@ -251,7 +282,10 @@ final class RubyContentView: UIView {
             structureChanged = true
         }
         self.activeIndex = activeIndex
-        setNeedsDisplay()
+        // Repaint the chapter-sized tiles ONLY when the text or its ink color changed —
+        // never on a bare highlight advance (that just moves the vector highlight).
+        if structureChanged || inkChanged { setNeedsDisplay() }
+        updateHighlight()
         return structureChanged
     }
 
@@ -356,61 +390,89 @@ final class RubyContentView: UIView {
         let f = CTFramesetterCreateFrame(framesetter, CFRangeMake(0, 0), path, frameAttrs)
         ctFrame = f
         frameSize = bounds.size
+        // Cache line geometry once per layout so tap hit-testing and the highlight
+        // don't re-fetch all origins on every query (they run on the hot path).
+        lines = (CTFrameGetLines(f) as? [CTLine]) ?? []
+        lineOrigins = [CGPoint](repeating: .zero, count: lines.count)
+        if !lines.isEmpty { CTFrameGetLineOrigins(f, CFRangeMake(0, 0), &lineOrigins) }
+        lineRanges = lines.map { let r = CTLineGetStringRange($0); return NSRange(location: r.location, length: r.length) }
         return f
+    }
+
+    /// The line indices a token's character range spans (usually 1, at most a wrap of
+    /// 2). Binary-searches the sorted, contiguous `lineRanges` so token geometry is
+    /// O(1) instead of scanning every line — the difference between a smooth tap and
+    /// a second-long freeze on a long chapter.
+    private func linesForToken(_ range: NSRange) -> Range<Int> {
+        guard !lineRanges.isEmpty else { return 0..<0 }
+        let tEnd = range.location + range.length
+        // First line whose end is past the token start.
+        var lo = 0, hi = lineRanges.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if lineRanges[mid].location + lineRanges[mid].length <= range.location { lo = mid + 1 } else { hi = mid }
+        }
+        let first = lo
+        var last = first
+        while last < lineRanges.count && lineRanges[last].location < tEnd { last += 1 }
+        return first..<max(first, last)
     }
 
     // MARK: - Draw
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        highlightLayer.frame = bounds
+        // Build the frame on the MAIN thread here so the background tile draws only
+        // read the (immutable) CTFrame — never race to build it.
+        _ = currentFrame()
         setNeedsDisplay()
+        updateHighlight()
     }
 
     override func draw(_ rect: CGRect) {
-        guard let ctx = UIGraphicsGetCurrentContext(), let frame = currentFrame() else { return }
-
-        // CoreText draws in a bottom-left origin; flip into UIKit space.
+        guard let ctx = UIGraphicsGetCurrentContext(), let frame = ctFrame else { return }
+        // CATiledLayer calls this once per tile (`rect` = the tile) with the context
+        // already clipped/translated to that tile, possibly off the main thread. We
+        // draw the whole frame flipped into UIKit space; CoreText clips to the tile, so
+        // only visible tiles rasterize and the backing store stays bounded. Ruby
+        // annotations render exactly as before — CTFrameDraw is unchanged by tiling.
         ctx.textMatrix = .identity
         ctx.translateBy(x: 0, y: bounds.height)
         ctx.scaleBy(x: 1, y: -1)
-
-        var activeRects: [CGRect] = []
-        if let active = activeIndex, active >= 0, active < tokenRanges.count {
-            activeRects = tokenRects(tokenRanges[active], frame: frame)
-            ctx.setFillColor(hiColor.cgColor)
-            for r in activeRects {
-                ctx.addPath(CGPath(roundedRect: r.insetBy(dx: -4, dy: -3),
-                                   cornerWidth: 6, cornerHeight: 6, transform: nil))
-                ctx.fillPath()
-            }
-        }
-
-        // Base text in ink (context fill colors the from-context runs).
         ctx.setFillColor(inkColor.cgColor)
         CTFrameDraw(frame, ctx)
+    }
 
-        // Repaint the active token's text in hiInk, clipped to its rects.
-        if !activeRects.isEmpty {
-            ctx.saveGState()
-            for r in activeRects { ctx.addRect(r.insetBy(dx: -4, dy: -3)) }
-            ctx.clip()
-            ctx.setFillColor(hiInkColor.cgColor)
-            CTFrameDraw(frame, ctx)
-            ctx.restoreGState()
+    /// Reposition the active-token highlight (vector, above the tiled text). Cheap
+    /// enough to run every audio frame — no tile invalidation.
+    private func updateHighlight() {
+        highlightLayer.fillColor = hiColor.cgColor
+        guard ctFrame != nil, let active = activeIndex,
+              active >= 0, active < tokenRanges.count else {
+            highlightLayer.path = nil
+            return
         }
+        let rects = tokenRects(tokenRanges[active])   // flipped CoreText space
+        guard !rects.isEmpty else { highlightLayer.path = nil; return }
+        let path = CGMutablePath()
+        for r in rects {
+            // Flip each rect into the layer's top-left space, then round it.
+            let tl = CGRect(x: r.minX, y: bounds.height - r.maxY, width: r.width, height: r.height)
+            path.addRoundedRect(in: tl.insetBy(dx: -4, dy: -3), cornerWidth: 6, cornerHeight: 6)
+        }
+        highlightLayer.path = path
     }
 
     // MARK: - Token geometry (in flipped CoreText space)
 
-    private func tokenRects(_ range: NSRange, frame: CTFrame) -> [CGRect] {
-        guard let lines = CTFrameGetLines(frame) as? [CTLine], !lines.isEmpty else { return [] }
-        var origins = [CGPoint](repeating: .zero, count: lines.count)
-        CTFrameGetLineOrigins(frame, CFRangeMake(0, 0), &origins)
-
+    private func tokenRects(_ range: NSRange) -> [CGRect] {
+        guard !lines.isEmpty else { return [] }
         var rects: [CGRect] = []
         let tStart = range.location, tEnd = range.location + range.length
-        for (i, line) in lines.enumerated() {
-            let lr = CTLineGetStringRange(line)
+        for i in linesForToken(range) {
+            let line = lines[i]
+            let lr = lineRanges[i]
             let s = max(lr.location, tStart)
             let e = min(lr.location + lr.length, tEnd)
             guard s < e else { continue }
@@ -419,7 +481,7 @@ final class RubyContentView: UIView {
             CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
             let off1 = CTLineGetOffsetForStringIndex(line, s, nil)
             let off2 = CTLineGetOffsetForStringIndex(line, e, nil)
-            let origin = origins[i]
+            let origin = lineOrigins[i]
 
             if vertical {
                 let yTop = origin.y - min(off1, off2)
@@ -438,8 +500,8 @@ final class RubyContentView: UIView {
     /// for the scroll-to-follow. `nil` when there's no active token or no frame yet.
     func activeViewRect() -> CGRect? {
         guard let active = activeIndex, active >= 0, active < tokenRanges.count,
-              let frame = currentFrame() else { return nil }
-        let rects = tokenRects(tokenRanges[active], frame: frame)
+              currentFrame() != nil else { return nil }
+        let rects = tokenRects(tokenRanges[active])
         guard let first = rects.first else { return nil }
         let union = rects.dropFirst().reduce(first) { $0.union($1) }
         // tokenRects are in flipped CoreText space (y from the bottom); flip to view.
@@ -450,16 +512,40 @@ final class RubyContentView: UIView {
     // MARK: - Tap
 
     @objc private func handleTap(_ g: UITapGestureRecognizer) {
-        guard let frame = currentFrame() else { onTapBackground(); return }
+        guard currentFrame() != nil else { onTapBackground(); return }
         let p = g.location(in: self)
         let flipped = CGPoint(x: p.x, y: bounds.height - p.y)   // into CoreText space
+        // Find the line the tap fell on (its char range), then test only the tokens on
+        // that line — each token's geometry is now O(1) via `linesForToken`. Avoids the
+        // old O(tokens × lines) scan that froze on long chapters.
+        guard let li = lineIndex(at: flipped) else { onTapBackground(); return }
+        let lr = lineRanges[li]
         for (idx, range) in tokenRanges.enumerated() {
-            for r in tokenRects(range, frame: frame) where r.insetBy(dx: -4, dy: -4).contains(flipped) {
+            guard range.location < lr.location + lr.length, range.location + range.length > lr.location else {
+                if range.location >= lr.location + lr.length { break }   // past this line; ranges are sorted
+                continue
+            }
+            for r in tokenRects(range) where r.insetBy(dx: -4, dy: -4).contains(flipped) {
                 onTapToken(idx)
                 return
             }
         }
         onTapBackground()
+    }
+
+    /// The index of the line whose typographic band contains `flipped` (CoreText
+    /// space), or nil if the tap missed every line.
+    private func lineIndex(at flipped: CGPoint) -> Int? {
+        for (i, line) in lines.enumerated() {
+            var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+            CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+            let o = lineOrigins[i]
+            let band = vertical
+                ? (flipped.x >= o.x - descent && flipped.x <= o.x + ascent)
+                : (flipped.y >= o.y - descent && flipped.y <= o.y + ascent)
+            if band { return i }
+        }
+        return nil
     }
 
     /// Map half-width ASCII digits (0-9) to their full-width twins (U+FF10–FF19)

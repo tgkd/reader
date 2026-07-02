@@ -58,6 +58,8 @@ enum L10n {
     static var readerNotGeneratedTitle: String { String(localized: "reader.notGenerated.title") }
     static var readerNotGeneratedBody: String { String(localized: "reader.notGenerated.body") }
     static var readerFailedTitle: String { String(localized: "reader.failed.title") }
+    static var readerFailedTokenizer: String { String(localized: "reader.failed.tokenizer") }
+    static var readerFailedAudio: String { String(localized: "reader.failed.audio") }
     static var readerSubscribeTitle: String { String(localized: "reader.subscribe.title") }
     static var readerSubscribeBody: String { String(localized: "reader.subscribe.body") }
     static var readerSubscribeCTA: String { String(localized: "reader.subscribe.cta") }

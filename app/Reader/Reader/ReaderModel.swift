@@ -115,7 +115,7 @@ final class ReaderModel {
         link.onTick = { [weak self] in MainActor.assumeIsolated { self?.tick() } }
 
         guard let tokenizer = services.tokenizer else {
-            loadState = .failed("Tokenizer unavailable"); return
+            loadState = .failed(L10n.readerFailedTokenizer); return
         }
 
         // Render the text for EVERYONE: tokenize the chapter and show it with
@@ -202,7 +202,7 @@ final class ReaderModel {
         }
 
         guard buildPlayback(from: synth, gen: gen) else {
-            if gen == loadGeneration { audioState = .failed("Audio failed to load") }
+            if gen == loadGeneration { audioState = .failed(L10n.readerFailedAudio) }
             return false
         }
         audioState = .ready
