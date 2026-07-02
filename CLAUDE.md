@@ -19,7 +19,9 @@ and surrogate pairs). See `docs/char-token-sync.md`.
 
 **One MeCab pass per chapter is the single source of truth** for (a) highlight sync spans,
 (b) furigana readings, (c) `dictionaryForm` (kanji lemma) for lookup. Never add a second
-segmenter — it will disagree with the furigana segmentation.
+segmenter — it will disagree with the furigana segmentation. `MeCabTokenizer` also emits the
+whitespace it would otherwise drop as untimed gap tokens (walking `annotation.range`), so
+`joined(surfaces) == nfkc(text)` holds and paragraphs / line breaks / indents survive to the page.
 
 ## Architecture
 
@@ -42,28 +44,40 @@ PDFKit / networking live in the `app/` target only.
 ### Pipelines
 
 - **TTS:** `WorkerTTSService` (POSTs `/tts/aligned` on the aiwork Worker → ElevenLabs
-  `with-timestamps`, behind a RevenueCat gate; client sends only `X-User-ID`) → wrapped by
-  `ChunkingTTSService` (splits chapters over `Chunker.defaultMaxChars` ≈ 9k chars, bounded
-  concurrency ~2, exponential 429 backoff, then `AlignmentStitcher` stitches) → cached by
-  `DiskAudioStore`, content-addressed by `ContentKey = sha256(model + voice + nfkc(text))`, so
-  re-reads play offline for free. `FixtureTTSService` provides DEBUG offline fixtures and the
-  library's "is this cached?" probe.
+  `with-timestamps`, behind a RevenueCat gate; client sends only `X-User-ID`; 300 s request
+  timeout — the route buffers the whole response, so a long chunk yields no bytes until done) →
+  wrapped by `ChunkingTTSService` (splits chapters over `Chunker.defaultMaxChars` ≈ 9k chars,
+  bounded concurrency ~2, exponential 429 backoff on **both** the chunked and single-request paths;
+  saves the whole chapter durably **before** pruning per-segment entries; then `AlignmentStitcher`
+  stitches) → cached by `DiskAudioStore`, content-addressed by
+  `ContentKey = sha256(model + voice + nfkc(text))`, so re-reads play offline for free.
+  `FixtureTTSService` provides DEBUG offline fixtures and the library's "is this cached?" probe.
 
 - **Reader:** `ReaderModel` drives one chapter — `AVAudioPlayer` + a `CADisplayLink` proxy advance
-  `activeIndex` each frame via `SpanTimeline.index(at:)`; `RubyTextView` (custom CoreText) renders
-  furigana via `CTRubyAnnotation` and vertical text via frame progression, caching the `CTFrame`.
-  **`LoadState` (the always-available reading surface) is split from `AudioState`** (the gated
-  synth lifecycle: `.locked`/`.idle`/`.synthesizing`/`.ready`/`.notGenerated`/`.failed`).
-  Progress writeback goes through `ReadingProgressResolver` (tested), never per frame.
+  `activeIndex` each frame via `SpanTimeline.index(at:)`; an `AVAudioPlayerDelegate` +
+  `AVAudioSession` interruption observer own completion / pause-resume so they still fire while
+  backgrounded (the display link is a foreground-only clock). `RubyTextView` (custom CoreText)
+  renders furigana via `CTRubyAnnotation` and vertical text via frame progression: the base text is
+  drawn once with an **explicit per-run ink color** (NOT `kCTForegroundColorFromContext` — the first
+  ruby annotation clobbers the context fill, invisibly in paper but black-on-black in night), and
+  the moving highlight is a separate `CAShapeLayer` fill so advancing it never repaints the chapter.
+  **`LoadState` (the always-available reading surface) is split from `AudioState`** (the gated synth
+  lifecycle: `.locked`/`.idle`/`.synthesizing`/`.ready`/`.notGenerated`/`.failed`). Progress
+  writeback goes through `ReadingProgressResolver` (tested), never per frame; free (no-audio)
+  reading persists at least the chapter position.
 
 - **Dictionary:** `SQLiteDictionaryService` over a compact ~bundled jisho DB
   (`scripts/build-compact-dict.sh`, gitignored output), keyed on `dictionaryForm`; falls back to
   `MockDictionaryService.seeded()` if the DB resource is absent. Tap-to-define's *pronounce*
   button uses `AVSpeechSynthesizer` (on-device, free, ungated) — distinct from chapter narration.
 
-- **Import:** `Importer` routes by extension → `EPUBImporter` (ZIPFoundation; reading order from
-  the OPF **`<spine>`**, never the manifest) / `PDFImporter` / `TextImporter` (encoding sniff via
-  `JapaneseTextDecoder`). One `Chapter` per spine item / PDF page.
+- **Import:** orchestrated by **`AppModel`** (not the view — so a slow import survives a Library↔Reader
+  route switch; reachable from the `+` picker AND `RootView.onOpenURL` / `CFBundleDocumentTypes`, i.e.
+  "Open in Yomi" from Files / Mail / the share sheet). `Importer` routes by extension → `EPUBImporter`
+  (ZIPFoundation; reading order from the OPF **`<spine>`**, never the manifest; strips `<rt>/<rp>` ruby
+  so furigana isn't inlined) / `PDFImporter` / `TextImporter` (scored encoding sniff via
+  `JapaneseTextDecoder`). One `Chapter` per spine item / PDF page, then any oversized chapter is split
+  into ≤ `Chapter.maxRenderableChars` (~4k) sub-chapters (see the invariant below).
 
 - **OCR (cloud-only, subscriber-gated):** pages/spine items with no text layer are OCR'd via
   `WorkerOCRService` → Worker `/pdf/ocr` → Cloudflare AI Gateway → Gemini. Both `PDFImporter`
@@ -82,6 +96,14 @@ PDFKit / networking live in the `app/` target only.
   downstream so every ingestion path shares one normalization.
 - **`Chunker.split(text).joined()` must equal the input exactly** (lossless); `AlignmentStitcher`
   keeps token starts monotonic across stitched segments.
+- **One CoreText surface per chapter, so chapters are capped at `Chapter.maxRenderableChars` (~4k).**
+  A larger chapter exceeds the platform's max layer/texture size and renders BLANK (and tokenizing +
+  laying it out janks the main thread). Import splits oversized chapters into sub-chapters at
+  paragraph boundaries (reusing `Chunker`); measured on-simulator — do not raise the cap without
+  re-measuring across font sizes.
+- **Reader text carries an explicit per-run color; the highlight is a separate `CAShapeLayer`.**
+  Don't reintroduce `kCTForegroundColorFromContext` for the base runs — a ruby annotation corrupts
+  the context fill, which reads fine in paper/sepia but renders black-on-black in the night theme.
 - **Subscription gates speech generation AND scanned/image OCR only.** Reading extracted text
   (EPUB / TXT / born-digital PDF) with furigana, tap-to-define, themes, and settings is free.
   `isSubscribed()` (RevenueCat `reader Pro` entitlement) is checked **locally** so the paid Worker
@@ -116,6 +138,10 @@ cd app && xcodebuild -project Reader.xcodeproj -scheme Reader \
 
 First `swift test` compiles MeCab (~1 min) and downloads IPADic (~50 MB); later runs are instant.
 
+Rendering / themes / the word-synced highlight / live TTS can only be checked on a running app, not
+in unit tests. `scripts/uitest/smoke.sh` drives those on a booted simulator via idb and drops
+screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 SimulatorKit setup note).
+
 ## Project mechanics
 
 - **The Xcode project is generated — edit `app/project.yml`, never the `.xcodeproj`** (gitignored).
@@ -147,4 +173,5 @@ reader/
 │   └── ReaderTests/                 # app-target importer + OCR tests (runtime-generated fixtures)
 ├── docs/                            # char-token-sync.md (the algorithm), testflight.md, design-prompt.md
 └── scripts/                         # build-compact-dict.sh, capture-alignment.mjs
+    └── uitest/                      #   idb-driven simulator smoke tests (see its README)
 ```
