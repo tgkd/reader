@@ -172,24 +172,14 @@ final class RubyScrollView: UIScrollView {
     }
 }
 
-/// A `CATiledLayer` that never fades tiles in — the reading surface should not
-/// flicker as tiles rasterize during a scroll.
-private final class NoFadeTiledLayer: CATiledLayer {
-    override class func fadeDuration() -> CFTimeInterval { 0 }
-}
-
-/// The CoreText-drawing view. Its content is the WHOLE chapter, but it draws on a
-/// `CATiledLayer` so only the visible tiles are ever rasterized — a full novel as
-/// one chapter would otherwise need a single multi-gigabyte backing store (past
-/// the GPU texture limit) and jetsam/blank out. The moving highlight lives on a
-/// separate `CAShapeLayer` so advancing the active token repaints a small vector
-/// path, never the chapter-sized tiled content.
+/// The CoreText-drawing view, sized to the whole chapter and hosted in a
+/// `RubyScrollView`. The base text is drawn once (rebuilt only on a structure /
+/// font / theme change), and the moving highlight lives on a separate
+/// `CAShapeLayer` so advancing the active token ~60×/sec repaints a small vector
+/// path instead of the whole chapter — no per-frame full redraw.
 final class RubyContentView: UIView {
     var onTapToken: (Int) -> Void = { _ in }
     var onTapBackground: () -> Void = {}
-
-    /// Draw the whole chapter on a tiled layer (bounded backing store).
-    override class var layerClass: AnyClass { NoFadeTiledLayer.self }
 
     private var spans: [TokenSpan] = []
     private var activeIndex: Int?
@@ -212,8 +202,8 @@ final class RubyContentView: UIView {
     private var structureKey = 0
     private var showFurigana = true
 
-    /// The active-token highlight, drawn as a vector fill above the tiled text so it
-    /// can advance ~60×/sec without invalidating the chapter-sized tiles.
+    /// The active-token highlight, drawn as a vector fill above the text so it can
+    /// advance ~60×/sec without invalidating the chapter-sized base drawing.
     private let highlightLayer = CAShapeLayer()
 
     override init(frame: CGRect) {
@@ -221,12 +211,6 @@ final class RubyContentView: UIView {
         backgroundColor = .clear
         isOpaque = false
         contentMode = .redraw
-        if let tiled = layer as? CATiledLayer {
-            tiled.levelsOfDetail = 1
-            tiled.levelsOfDetailBias = 0
-            let s = UIScreen.main.scale
-            tiled.tileSize = CGSize(width: 512 * s, height: 512 * s)
-        }
         highlightLayer.actions = ["path": NSNull()]     // no implicit animation on advance
         layer.addSublayer(highlightLayer)
         // VoiceOver reads the page as one static-text element (the reading
@@ -259,9 +243,11 @@ final class RubyContentView: UIView {
     func configure(spans: [TokenSpan], structureVersion: Int, activeIndex: Int?, vertical: Bool,
                    fontName: String, fontScale: CGFloat, showFurigana: Bool,
                    ink: UIColor, hi: UIColor, hiInk: UIColor) -> Bool {
-        // Ink recolor (theme switch) needs a full tiled repaint; the highlight fill
-        // color is applied to the vector layer without touching the text tiles.
-        let inkChanged = (inkColor != ink)
+        // Ink recolor (theme switch) needs a full base repaint; the highlight fill
+        // color is applied to the vector layer separately. Compare resolved RGBA —
+        // `UIColor !=` is unreliable for SwiftUI-bridged colors, and a missed compare
+        // leaves the old theme's ink painted (black text on the night background).
+        let inkChanged = !Self.sameColor(inkColor, ink)
         inkColor = ink; hiColor = hi
 
         // Only a new token list (structureVersion), orientation, furigana on/off, or
@@ -278,15 +264,29 @@ final class RubyContentView: UIView {
             self.showFurigana = showFurigana
             self.fontName = fontName
             self.fontScale = fontScale
-            rebuild()
             structureChanged = true
         }
+        // The ink color is baked into the runs, so a theme switch must rebuild the
+        // attributed string (not just repaint). Both cases relayout + repaint the base;
+        // a bare highlight advance does neither (it only moves the vector layer) — that
+        // is what keeps playback off the per-frame full-redraw path.
+        if structureChanged || inkChanged {
+            rebuild()
+            setNeedsDisplay()
+        }
         self.activeIndex = activeIndex
-        // Repaint the chapter-sized tiles ONLY when the text or its ink color changed —
-        // never on a bare highlight advance (that just moves the vector highlight).
-        if structureChanged || inkChanged { setNeedsDisplay() }
         updateHighlight()
         return structureChanged
+    }
+
+    /// Whether two colors resolve to the same RGBA (reliable across SwiftUI-bridged
+    /// UIColors, unlike `==`).
+    private static func sameColor(_ a: UIColor, _ b: UIColor) -> Bool {
+        var ar: CGFloat = 0, ag: CGFloat = 0, ab: CGFloat = 0, aa: CGFloat = 0
+        var br: CGFloat = 0, bg: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
+        a.getRed(&ar, green: &ag, blue: &ab, alpha: &aa)
+        b.getRed(&br, green: &bg, blue: &bb, alpha: &ba)
+        return abs(ar - br) < 0.001 && abs(ag - bg) < 0.001 && abs(ab - bb) < 0.001 && abs(aa - ba) < 0.001
     }
 
     private static func structureHash(version: Int, vertical: Bool, showFurigana: Bool,
@@ -303,12 +303,15 @@ final class RubyContentView: UIView {
     // MARK: - Build the attributed string + framesetter
 
     private func rebuild() {
-        // Base runs (and ruby) take their color from the graphics context's fill
-        // color at draw time (so the active token can be repainted in hiInk without
-        // rebuilding the string). See the ruby annotation note below.
-        let fromContext = NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String)
+        // Bake an explicit ink color into every base run AND ruby annotation. Relying
+        // on the context fill (kCTForegroundColorFromContext) breaks in night theme:
+        // drawing the first ruby annotation clobbers the context fill, so every run
+        // after it loses the light ink and renders near-black on the dark background
+        // ("first word inked, rest grayed"). Explicit per-run color is immune to that.
+        // The active-token emphasis is a separate CAShapeLayer fill, so no run ever
+        // needs recoloring at draw time — hence no need for from-context here.
         let font = readingFont(fontSize)
-        let baseAttrs: [NSAttributedString.Key: Any] = [.font: font, fromContext: true]
+        let baseAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: inkColor]
 
         let out = NSMutableAttributedString()
         var ranges: [NSRange] = []
@@ -322,13 +325,10 @@ final class RubyContentView: UIView {
             let piece = NSMutableAttributedString(string: display, attributes: baseAttrs)
             if showFurigana, let reading = span.reading, !reading.isEmpty, Self.containsKanji(span.surface) {
                 let rubyFont = readingFont(fontSize * 0.5)
-                // No explicit ruby color: furigana draws via the context fill (like the
-                // base runs) so it inherits `ink` / `hiInk` with the text. An explicit
-                // color here persists in the context mid-CTFrameDraw and bleeds onto the
-                // following from-context base runs — the "first word inked, rest grayed" bug.
                 let ann = CTRubyAnnotationCreateWithAttributes(
                     .center, .auto, .before, reading as CFString,
-                    [kCTFontAttributeName: rubyFont] as CFDictionary)
+                    [kCTFontAttributeName: rubyFont,
+                     kCTForegroundColorAttributeName: inkColor.cgColor] as CFDictionary)
                 piece.addAttribute(NSAttributedString.Key(kCTRubyAnnotationAttributeName as String),
                                    value: ann, range: NSRange(location: 0, length: piece.length))
             }
@@ -423,20 +423,15 @@ final class RubyContentView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         highlightLayer.frame = bounds
-        // Build the frame on the MAIN thread here so the background tile draws only
-        // read the (immutable) CTFrame — never race to build it.
-        _ = currentFrame()
-        setNeedsDisplay()
+        setNeedsDisplay()      // bounds changed → relayout the frame and repaint the base
         updateHighlight()
     }
 
     override func draw(_ rect: CGRect) {
-        guard let ctx = UIGraphicsGetCurrentContext(), let frame = ctFrame else { return }
-        // CATiledLayer calls this once per tile (`rect` = the tile) with the context
-        // already clipped/translated to that tile, possibly off the main thread. We
-        // draw the whole frame flipped into UIKit space; CoreText clips to the tile, so
-        // only visible tiles rasterize and the backing store stays bounded. Ruby
-        // annotations render exactly as before — CTFrameDraw is unchanged by tiling.
+        guard let ctx = UIGraphicsGetCurrentContext(), let frame = currentFrame() else { return }
+        // CoreText draws in a bottom-left origin; flip into UIKit space, then draw the
+        // whole chapter in ink. This runs only on a structure/font/theme change (see
+        // configure) — never per highlight frame — so it's off the playback hot path.
         ctx.textMatrix = .identity
         ctx.translateBy(x: 0, y: bounds.height)
         ctx.scaleBy(x: 1, y: -1)
@@ -444,8 +439,8 @@ final class RubyContentView: UIView {
         CTFrameDraw(frame, ctx)
     }
 
-    /// Reposition the active-token highlight (vector, above the tiled text). Cheap
-    /// enough to run every audio frame — no tile invalidation.
+    /// Reposition the active-token highlight (vector, above the text). Cheap enough
+    /// to run every audio frame — no base repaint.
     private func updateHighlight() {
         highlightLayer.fillColor = hiColor.cgColor
         guard ctFrame != nil, let active = activeIndex,
