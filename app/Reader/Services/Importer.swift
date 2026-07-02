@@ -63,8 +63,12 @@ enum Importer {
                          onProgress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil) async throws -> Document {
         guard let importer = importer(for: url, ocr: ocr, onProgress: onProgress) else { throw ImportError.unsupported }
         let chapters = try await importer.chapters()
-        guard !chapters.isEmpty else { throw ImportError.empty }
+        // Split any oversized chapter (a whole-novel .txt, a long EPUB spine item) into
+        // renderable sub-chapters — the reader draws one CoreText surface per chapter
+        // and a huge one renders blank / janks. Small chapters pass through unchanged.
+        let bounded = chapters.flatMap { $0.splitToRenderable() }
+        guard !bounded.isEmpty else { throw ImportError.empty }
         let title = url.deletingPathExtension().lastPathComponent
-        return Document(title: title, author: nil, chapters: chapters)
+        return Document(title: title, author: nil, chapters: bounded)
     }
 }
