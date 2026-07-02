@@ -1,5 +1,6 @@
 import SwiftUI
 import ReaderCore
+import struct ReaderCore.Document   // disambiguate from SwiftUI.Document
 
 /// The Reader screen: a full-bleed reading surface with fading top/bottom chrome
 /// and the tap-to-define sheet. Tapping a word opens the sheet; tapping empty
@@ -55,8 +56,8 @@ struct ReaderView: View {
         .onDisappear { model?.stop() }
         .onChange(of: scenePhase) { _, phase in
             // Background audio keeps narrating with the screen locked; save the
-            // playhead so a kill-while-backgrounded doesn't lose progress.
-            if phase == .background { model?.persistProgress() }
+            // playhead (or chapter) so a kill-while-backgrounded doesn't lose progress.
+            if phase == .background { model?.saveProgressOnLeave() }
         }
         .onChange(of: app.entitlementTick) { _, _ in
             // A purchase/restore just unlocked `reader Pro` — retry the gated load.
@@ -218,10 +219,11 @@ struct ReaderView: View {
             } else if model.audioState == .notGenerated {
                 Text(L10n.readerNotGeneratedTitle).font(.system(size: 12)).foregroundStyle(theme.muted)
             }
-            Button { Task { await model.requestAudioAndPlay() } } label: {
+            Button { model.startAudio() } label: {
                 PlayTriangle().fill(theme.ink).frame(width: 14, height: 18).offset(x: 2)
                     .frame(width: 46, height: 46)
                     .overlay(Circle().stroke(theme.hair, lineWidth: 1))
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(L10n.a11yPlay)
@@ -243,11 +245,14 @@ struct ReaderView: View {
                     .frame(width: 30, alignment: .trailing)
             }
             HStack {
-                Button { model.togglePlay() } label: { playPause(model) }
-                    .buttonStyle(.plain)
-                    .frame(width: 46, height: 46)
-                    .overlay(Circle().stroke(theme.hair, lineWidth: 1))
-                    .accessibilityLabel(model.isPlaying ? L10n.a11yPause : L10n.a11yPlay)
+                Button { model.togglePlay() } label: {
+                    playPause(model)
+                        .frame(width: 46, height: 46)
+                        .overlay(Circle().stroke(theme.hair, lineWidth: 1))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(model.isPlaying ? L10n.a11yPause : L10n.a11yPlay)
                 Spacer()
                 speedPicker(model)
             }

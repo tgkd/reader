@@ -1,5 +1,8 @@
 import SwiftUI
 import ReaderCore
+// Disambiguate from `SwiftUI.Document` (added in the iOS 26+ SDK) — the reader's
+// Document is always ReaderCore's.
+import struct ReaderCore.Document
 
 /// Top-level UI state: the active theme and which screen is showing. Owns the
 /// composed `AppServices`. The reader is a full-screen takeover (its own back

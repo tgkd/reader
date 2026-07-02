@@ -1,5 +1,6 @@
 import SwiftUI
 import ReaderCore
+import struct ReaderCore.Document   // disambiguate from SwiftUI.Document
 
 /// Backs the Library list: documents plus a per-row "cached" flag (whether
 /// offline audio exists) and the status label (未読 / N% / 読了).

@@ -14,10 +14,21 @@ final class DiskLibraryStore: LibraryStore {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         url = dir.appendingPathComponent("library.json")
 
-        if let data = try? Data(contentsOf: url),
-           let saved = try? JSONDecoder().decode([Document].self, from: data) {
-            docs = saved
+        if let data = try? Data(contentsOf: url) {
+            if let saved = try? JSONDecoder().decode([Document].self, from: data) {
+                docs = saved
+            } else {
+                // The file exists but won't decode (truncated by a kill mid-write, or a
+                // schema it predates). Preserve it aside for possible recovery and start
+                // empty WITHOUT writing through — overwriting here would make the loss
+                // permanent. The library is the only copy of imported text.
+                docs = []
+                let backup = url.appendingPathExtension("corrupt")
+                try? FileManager.default.removeItem(at: backup)
+                try? FileManager.default.moveItem(at: url, to: backup)
+            }
         } else {
+            // No file at all → genuine first run: seed and write the starter through.
             docs = starter
             persist()
         }
@@ -37,6 +48,8 @@ final class DiskLibraryStore: LibraryStore {
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(docs) { try? data.write(to: url) }
+        // Atomic so a kill mid-write can't truncate library.json — the only copy of
+        // every imported book's text (import temp files are deleted post-save).
+        if let data = try? JSONEncoder().encode(docs) { try? data.write(to: url, options: .atomic) }
     }
 }

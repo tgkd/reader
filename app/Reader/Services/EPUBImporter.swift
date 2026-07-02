@@ -268,6 +268,13 @@ private enum HTMLText {
         // Drop script/style blocks (case-insensitive).
         s = s.replacingOccurrences(of: "(?is)<(script|style)[^>]*>.*?</\\1>", with: " ",
                                    options: .regularExpression)
+        // Drop ruby readings: <rt>/<rp> CONTENT, not just the tags. Keeping the tag
+        // strip alone would inline the furigana into the body (<ruby>漢字<rt>かんじ</rt>
+        // → 漢字かんじ), so TTS speaks every annotated word twice, MeCab tokenizes the
+        // ghost kana, and tap-to-define breaks. The reader renders its own furigana
+        // from MeCab, so the source readings aren't needed here.
+        s = s.replacingOccurrences(of: "(?is)<(rt|rp)[^>]*>.*?</\\1>", with: "",
+                                   options: .regularExpression)
         // Block-level boundaries → newline.
         s = s.replacingOccurrences(of: "(?i)<\\s*(br|/p|/div|/h[1-6]|/li|/tr)\\s*/?>", with: "\n",
                                    options: .regularExpression)

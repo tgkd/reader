@@ -29,8 +29,10 @@ final class ChunkingTTSService: TTSService {
     func synthesize(_ request: SynthesisRequest) async throws -> SynthesizedAudio {
         let text = Normalize.nfkc(request.text)
         let segments = Chunker.split(text, maxChars: maxChars)
-        // Common case: fits in one request — no chunking, no stitching.
-        if segments.count <= 1 { return try await inner.synthesize(request) }
+        // Common case: fits in one request — no chunking, no stitching. Still wrap in
+        // the 429 backoff so a short chapter (the majority) retries rate limits just
+        // like the chunked path, instead of failing on the first 429.
+        if segments.count <= 1 { return try await withBackoff { try await self.inner.synthesize(request) } }
 
         let ordered = try await synthesizeSegments(segments, voice: request.voice, model: request.model)
         let stitched = AlignmentStitcher.stitch(ordered)

@@ -62,6 +62,19 @@ final class MeCabTokenizerTests: XCTestCase {
                        "concatenated surfaces must equal the NFKC input for clean char→token mapping")
     }
 
+    func testWhitespaceAndParagraphsPreserved() throws {
+        let tok = try makeTokenizer()
+        // Newlines, a blank line, the 　 paragraph indent, and an embedded Latin word
+        // with spaces — all of which MeCab drops but the reader must keep to render
+        // paragraphs. The surfaces must still reconstruct the NFKC input exactly.
+        let input = "吾輩は猫である。\n\n　名前はまだ無い。 Hello world."
+        let tokens = tok.tokenize(input)
+        let rebuilt = tokens.map { $0.surface }.joined()
+        XCTAssertEqual(rebuilt, Normalize.nfkc(input),
+                       "whitespace/newlines must survive tokenization (lossless surfaces)")
+        XCTAssertTrue(rebuilt.contains("\n\n"), "paragraph break must be preserved")
+    }
+
     // MARK: - End-to-end: MeCab tokens → mapper over a 1:1 char alignment
 
     func testMeCabIntoMapperCleanAlignment() throws {

@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import ReaderCore
+import struct ReaderCore.Document   // disambiguate from SwiftUI.Document
 
 /// The Library / home screen: the 読み wordmark, theme + add controls, and a
 /// quiet list of texts with author, cached marker, status, and progress bar.

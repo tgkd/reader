@@ -22,13 +22,17 @@ public struct Alignment: Codable, Equatable {
     }
 
     /// Safe start time for an alignment index (clamped to the array bounds).
+    /// Empty arrays yield 0 rather than indexing `[-1]` — a malformed response
+    /// shouldn't trap here (the request layer rejects it, but this stays total).
     func startTime(at i: Int) -> Double {
-        startTimes[min(max(i, 0), startTimes.count - 1)]
+        guard !startTimes.isEmpty else { return 0 }
+        return startTimes[min(max(i, 0), startTimes.count - 1)]
     }
 
     /// Safe end time for an alignment index (clamped to the array bounds).
     func endTime(at i: Int) -> Double {
-        endTimes[min(max(i, 0), endTimes.count - 1)]
+        guard !endTimes.isEmpty else { return 0 }
+        return endTimes[min(max(i, 0), endTimes.count - 1)]
     }
 }
 

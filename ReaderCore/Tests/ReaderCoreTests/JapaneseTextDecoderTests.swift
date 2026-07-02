@@ -43,4 +43,24 @@ final class JapaneseTextDecoderTests: XCTestCase {
     func testEmptyDataDecodesToEmptyString() {
         XCTAssertEqual(JapaneseTextDecoder.decode(Data()), "")
     }
+
+    func testEUCJPKanaNotMisreadAsShiftJIS() throws {
+        // Hiragana-heavy EUC-JP bytes decode "validly" (no U+FFFD) as Shift-JIS
+        // half-width-katakana garbage, so a first-success-by-order sniff returns
+        // mojibake. The plausibility score must pick the real EUC-JP decode.
+        let kana = "きょうはいいてんきですね。さくらがさきました。"
+        let data = try XCTUnwrap(kana.data(using: .japaneseEUC))
+        let decoded = try XCTUnwrap(JapaneseTextDecoder.decode(data))
+        XCTAssertEqual(decoded, kana)
+        XCTAssertFalse(decoded.unicodeScalars.contains { (0xFF61...0xFF9F).contains($0.value) },
+                       "must not be half-width-katakana mojibake, got \(decoded)")
+    }
+
+    func testCorruptedUTF8DegradesInsteadOfNil() {
+        // A valid UTF-8 passage with a truncated final multi-byte char must still
+        // return SOMETHING (repairing decode), never nil.
+        var data = Data(sample.utf8)
+        data.removeLast()   // lop a byte off the trailing multi-byte char
+        XCTAssertNotNil(JapaneseTextDecoder.decode(data))
+    }
 }

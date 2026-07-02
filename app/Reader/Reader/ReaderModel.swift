@@ -2,6 +2,7 @@ import SwiftUI
 import AVFAudio
 import QuartzCore
 import ReaderCore
+import struct ReaderCore.Document   // disambiguate from SwiftUI.Document
 
 /// Drives one chapter: load-or-synthesize audio + alignment, tokenize the exact
 /// text the alignment indexes, fold char timings into token spans, play the mp3,
@@ -49,6 +50,17 @@ final class ReaderModel {
     /// ungated — distinct from the subscription-gated chapter narration.
     private let speech = AVSpeechSynthesizer()
     private let link = DisplayLinkProxy()
+    /// The in-flight synthesis+play task, if any. Held so leaving the reader can
+    /// cancel it — otherwise an orphaned synthesis finishes into a dismissed model
+    /// and starts playback (and a reopen would run a second, duplicate paid synth).
+    private var playbackTask: Task<Void, Never>?
+    /// Bridges `AVAudioPlayer`'s completion callback (which fires even backgrounded,
+    /// when the display link is dead) back to the model.
+    private var audioDelegate: PlayerDelegate?
+    /// Token for the audio-session interruption observer, removed on deinit.
+    /// `nonisolated(unsafe)`: written once in `init`, read once in the nonisolated
+    /// `deinit` — no concurrent access.
+    nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
     private var isSwitchingChapter = false
     /// Bumped at the top of every `load()`. A load that finds itself superseded
     /// (a newer chapter switch, or the view torn down) after its `await` bails
@@ -61,12 +73,22 @@ final class ReaderModel {
         self.services = services
         let saved = document.progress.chapterIndex
         chapterIndex = document.chapters.indices.contains(saved) ? saved : 0
+        // Pause/resume around audio-session interruptions (calls, Siri). Delivered on
+        // the main queue; the model is main-actor, so hopping via assumeIsolated is valid.
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated { self?.handleInterruption(note) }
+        }
     }
 
     /// Backstop teardown for the display link. ReaderModel sits OUTSIDE the
     /// proxy↔CADisplayLink retain cycle (the proxy holds the model weakly), so
     /// this deinit can run and break the cycle even if `onDisappear` is missed.
-    deinit { link.stop() }
+    deinit {
+        link.stop()
+        if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
+    }
 
     var spans: [TokenSpan] { timeline.spans }
     var progressFraction: Double { duration > 0 ? min(1, currentTime / duration) : 0 }
@@ -122,6 +144,14 @@ final class ReaderModel {
             audioState = .ready
         }
 
+    }
+
+    /// Launch synthesis+play as the model-held `playbackTask` so leaving the reader
+    /// (`stop()`) can cancel it — preventing an orphaned synthesis from starting
+    /// playback after teardown, or a reopen from running a duplicate paid synthesis.
+    func startAudio() {
+        playbackTask?.cancel()
+        playbackTask = Task { [weak self] in await self?.requestAudioAndPlay() }
     }
 
     /// Generate (or load) the chapter's speech, then start playback. Invoked by the
@@ -193,13 +223,19 @@ final class ReaderModel {
         let tokens = tokenizer.tokenize(synth.text)
         setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: synth.alignment)))
 
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        // The audio SESSION is activated in play() (first real playback), not here —
+        // merely opening a chapter with cached audio must not duck other apps' audio.
         do {
             let p = try AVAudioPlayer(data: synth.audio)
             p.enableRate = true
             p.rate = Float(speed)
             p.prepareToPlay()
+            // Delegate owns natural-finish handling; it fires even backgrounded, when
+            // the CADisplayLink (a foreground-only clock) is paused.
+            let d = PlayerDelegate()
+            d.onFinish = { [weak self] in self?.handlePlaybackFinished() }
+            p.delegate = d
+            audioDelegate = d
             player = p
             duration = p.duration
         } catch {
@@ -223,12 +259,25 @@ final class ReaderModel {
 
     func play() {
         guard let player else { return }
+        activateSession()
         if currentTime >= duration { player.currentTime = 0 }
         player.enableRate = true
         player.rate = Float(speed)
         player.play()
         isPlaying = true
         link.start()
+    }
+
+    /// Activate the playback audio session at the first real playback — deferred out
+    /// of `buildPlayback` so opening a cached chapter doesn't interrupt other audio.
+    private func activateSession() {
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+    }
+
+    /// Release the session so other apps' audio can resume after we stop.
+    private func deactivateSession() {
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     func pause() {
@@ -275,13 +324,45 @@ final class ReaderModel {
     }
 
     func stop() {
-        persistProgress()       // capture the playhead before tearing down
+        saveProgressOnLeave()   // capture the playhead (or chapter) before tearing down
+        // Supersede any in-flight synthesis: bump the generation so a task that
+        // returns after teardown fails its `gen == loadGeneration` guard, and cancel
+        // it so a reopen can't run a duplicate paid synthesis alongside it.
+        loadGeneration &+= 1
+        playbackTask?.cancel()
+        playbackTask = nil
         player?.stop()
+        player = nil            // don't let a stale player replay under a new chapter
+        duration = 0
         isPlaying = false
+        deactivateSession()
         link.stop()
     }
 
     // MARK: - Progress persistence
+
+    /// Save reading position on leave / background: the audio playhead when audio is
+    /// loaded, else at least the current chapter so free-tier (no-audio) reading
+    /// resumes on the right chapter. The two paths guard each other, so calling both
+    /// is safe — only the applicable one writes.
+    func saveProgressOnLeave() {
+        persistProgress()
+        persistChapterPosition()
+    }
+
+    /// Free reading surface (no generated audio): persist the current chapter so a
+    /// reopen resumes here. Only fires when the user actually changed chapters and
+    /// audio isn't the source of truth — so it never overwrites a saved playhead
+    /// within the same chapter with a zero.
+    private func persistChapterPosition() {
+        guard audioState != .ready,
+              document.chapters.indices.contains(chapterIndex),
+              chapterIndex != document.progress.chapterIndex else { return }
+        var doc = document
+        doc.progress = ReadingProgress(chapterIndex: chapterIndex, time: 0,
+                                       fraction: Double(chapterIndex) / Double(max(1, chapterCount)))
+        services.library.save(doc)
+    }
 
     /// Write the playhead back to the library so the row reflects real reading and
     /// the next open resumes here. Called on pause / leave / completion /
@@ -306,25 +387,48 @@ final class ReaderModel {
     }
 
     private func tick() {
-        guard let player else { return }
-        if !player.isPlaying {
-            // Playback stopped. `AVAudioPlayer` zeroes `currentTime` on a *natural*
-            // finish, so detect "reached the end" from the last playhead we recorded
-            // (≈duration) rather than the reset value — else a finished chapter
-            // persists as 0 and never shows 読了. A stop short of the end (e.g. an
-            // audio-session interruption) keeps its real position.
-            isPlaying = false
+        guard let player, player.isPlaying else {
+            // Not playing: either paused (link already stopped) or finished. Natural
+            // finish is owned by `handlePlaybackFinished` via the AVAudioPlayerDelegate
+            // (which fires even backgrounded, where this display-link clock is dead),
+            // so don't persist here — just stop the foreground clock.
             link.stop()
-            let reachedEnd = currentTime >= duration - 0.5
-            if reachedEnd {
-                currentTime = duration
-                activeIndex = timeline.index(at: duration)
-            }
-            persistProgress(completed: reachedEnd)
             return
         }
         currentTime = player.currentTime
         activeIndex = timeline.index(at: currentTime)
+    }
+
+    /// Natural end of the chapter — routed through the AVAudioPlayerDelegate so it
+    /// also runs while backgrounded (screen locked). Marks the chapter complete
+    /// (読了) and releases the audio session.
+    private func handlePlaybackFinished() {
+        isPlaying = false
+        link.stop()
+        currentTime = duration
+        activeIndex = timeline.index(at: duration)
+        persistProgress(completed: true)
+        deactivateSession()
+    }
+
+    /// Audio-session interruption (call, Siri, another app): pause on `.began`, and
+    /// resume on `.ended` when the system says we may. Works while backgrounded.
+    private func handleInterruption(_ note: Notification) {
+        guard let info = note.userInfo,
+              let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        switch type {
+        case .began:
+            if isPlaying { pause() }
+        case .ended:
+            if let optRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt,
+               AVAudioSession.InterruptionOptions(rawValue: optRaw).contains(.shouldResume),
+               player != nil {
+                play()
+            }
+        @unknown default:
+            break
+        }
     }
 
     // MARK: - Tap to define
@@ -392,4 +496,15 @@ private final class DisplayLinkProxy: NSObject {
     }
 
     @objc private func tick() { onTick?() }
+}
+
+/// `AVAudioPlayer` needs an NSObject delegate; this keeps `ReaderModel` a clean
+/// `@Observable` and forwards the finish callback. The callback is delivered on the
+/// thread that started playback (the main run loop here), so hopping onto the main
+/// actor via `assumeIsolated` is valid — mirroring `DisplayLinkProxy`.
+private final class PlayerDelegate: NSObject, AVAudioPlayerDelegate {
+    var onFinish: (() -> Void)?
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        MainActor.assumeIsolated { onFinish?() }
+    }
 }

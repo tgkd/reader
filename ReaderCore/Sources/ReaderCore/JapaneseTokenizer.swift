@@ -27,11 +27,27 @@ public final class MeCabTokenizer: JapaneseTokenizer {
 
     public func tokenize(_ text: String) -> [Token] {
         let normalized = Normalize.nfkc(text)
-        return mecab.tokenize(text: normalized, transliteration: .katakana).map { a in
+        var tokens: [Token] = []
+        var cursor = normalized.startIndex
+        for a in mecab.tokenize(text: normalized, transliteration: .katakana) {
+            // MeCab drops inter-token whitespace (spaces, newlines, the 　 paragraph
+            // indent). Re-emit any gap before this token as an untimed token so the
+            // rendered text keeps its paragraphs and line breaks — and so
+            // `joined(surfaces) == nfkc(text)` stays exact for char→token mapping.
+            if cursor < a.range.lowerBound {
+                tokens.append(Token(surface: String(normalized[cursor..<a.range.lowerBound]),
+                                    reading: nil, dictionaryForm: nil))
+            }
             let reading = a.reading.isEmpty ? nil : Self.hiragana(a.reading)
             let lemma = (a.dictionaryForm.isEmpty || a.dictionaryForm == "*") ? nil : a.dictionaryForm
-            return Token(surface: a.base, reading: reading, dictionaryForm: lemma)
+            tokens.append(Token(surface: a.base, reading: reading, dictionaryForm: lemma))
+            cursor = a.range.upperBound
         }
+        // Trailing whitespace after the final token.
+        if cursor < normalized.endIndex {
+            tokens.append(Token(surface: String(normalized[cursor...]), reading: nil, dictionaryForm: nil))
+        }
+        return tokens
     }
 
     /// Katakana → hiragana by the fixed 0x60 block offset (U+30A1…U+30F6).
