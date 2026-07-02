@@ -23,6 +23,8 @@ struct RootView: View {
         }
         .environment(app)
         .environment(\.theme, app.theme)
+        // "Open in Yomi" from Files / Mail / Safari, and the share sheet.
+        .onOpenURL { app.importFile($0) }
         .preferredColorScheme(app.themeName.isDark ? .dark : .light)
         .animation(.easeInOut(duration: 0.25), value: app.route)
         .animation(.easeInOut(duration: 0.25), value: app.themeName)

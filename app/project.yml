@@ -85,6 +85,24 @@ targets:
         WorkerBaseURL: "https://$(WORKER_HOST)"
         RevenueCatKey: "$(REVENUECAT_KEY)"
         ITSAppUsesNonExemptEncryption: false
+        # Let Yomi receive EPUB/PDF/TXT from Files, Mail, Safari and the share sheet
+        # (handled by RootView.onOpenURL → AppModel.importFile). Alternate rank: Yomi
+        # opens these common types but doesn't claim to own them.
+        LSSupportsOpeningDocumentsInPlace: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: EPUB
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - org.idpf.epub-container
+          - CFBundleTypeName: PDF
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - com.adobe.pdf
+          - CFBundleTypeName: Plain Text
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.plain-text
+              - public.text
         UIBackgroundModes:
           - audio
         UILaunchScreen: {}

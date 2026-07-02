@@ -153,10 +153,21 @@ struct EPUBImporter: DocumentImporter {
 
     // MARK: - Archive access
 
+    /// Upper bound on a single decompressed entry. Generous for a fixed-layout page
+    /// image, but small enough that a zip bomb (tiny compressed, gigabytes claimed)
+    /// can't exhaust memory during import.
+    private static let maxEntryBytes = 256 * 1024 * 1024
+
     private func data(at path: String, in archive: Archive) throws -> Data {
         guard let entry = entry(for: path, in: archive) else { throw ImportError.unreadable }
+        // Reject a declared-huge entry before decompressing, and cap the running total
+        // in case the header lies — either way import fails cleanly instead of OOM-ing.
+        guard entry.uncompressedSize <= UInt64(Self.maxEntryBytes) else { throw ImportError.unreadable }
         var out = Data()
-        _ = try archive.extract(entry) { out.append($0) }
+        _ = try archive.extract(entry) { chunk in
+            out.append(chunk)
+            if out.count > Self.maxEntryBytes { throw ImportError.unreadable }
+        }
         return out
     }
 

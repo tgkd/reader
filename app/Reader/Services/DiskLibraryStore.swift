@@ -8,6 +8,9 @@ import ReaderCore
 final class DiskLibraryStore: LibraryStore {
     private let url: URL
     private var docs: [Document]
+    /// Serializes disk writes off the main actor. Saves stay ordered (last write wins)
+    /// and, being atomic, never leave a torn file.
+    private let writeQueue = DispatchQueue(label: "app.reader.library.write")
 
     init(starter: [Document]) {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -48,8 +51,15 @@ final class DiskLibraryStore: LibraryStore {
     }
 
     private func persist() {
-        // Atomic so a kill mid-write can't truncate library.json — the only copy of
-        // every imported book's text (import temp files are deleted post-save).
-        if let data = try? JSONEncoder().encode(docs) { try? data.write(to: url, options: .atomic) }
+        // Snapshot (COW, O(1)) then encode+write off the main actor: a progress save
+        // fires on pause/background and would otherwise re-encode every book's full
+        // text synchronously on the main thread. Atomic so a kill mid-write can't
+        // truncate library.json — the only copy of every imported book's text.
+        let snapshot = docs
+        let url = self.url
+        writeQueue.async {
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
     }
 }
