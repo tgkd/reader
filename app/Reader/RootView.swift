@@ -23,6 +23,9 @@ struct RootView: View {
         }
         .environment(app)
         .environment(\.theme, app.theme)
+        // Native controls (menus, sliders, alerts) tint with the theme's accent
+        // instead of system blue, so glass chrome stays palette-coherent.
+        .tint(app.theme.accent)
         // "Open in Yomi" from Files / Mail / Safari, and the share sheet.
         .onOpenURL { app.importFile($0) }
         .preferredColorScheme(app.themeName.isDark ? .dark : .light)

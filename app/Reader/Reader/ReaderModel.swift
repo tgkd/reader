@@ -33,6 +33,10 @@ final class ReaderModel {
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
     private(set) var isPlaying = false
+    /// Estimated synthesis progress (0…1) while `audioState == .synthesizing`.
+    /// Purely cosmetic: the Worker buffers the whole response, so no real signal
+    /// exists — eased against a char-count time estimate, snapped to 1 on success.
+    private(set) var synthesisProgress: Double = 0
 
     var speed: Double = 1.0
     var chromeVisible = true
@@ -49,11 +53,15 @@ final class ReaderModel {
     /// On-device speech for the tap-to-define pronunciation button. Free and
     /// ungated — distinct from the subscription-gated chapter narration.
     private let speech = AVSpeechSynthesizer()
+    /// Lock-screen / Control Center transport; lifecycle mirrors the audio session.
+    private let nowPlaying = NowPlayingController()
     private let link = DisplayLinkProxy()
     /// The in-flight synthesis+play task, if any. Held so leaving the reader can
     /// cancel it — otherwise an orphaned synthesis finishes into a dismissed model
     /// and starts playback (and a reopen would run a second, duplicate paid synth).
     private var playbackTask: Task<Void, Never>?
+    /// The 10 Hz ticker behind `synthesisProgress`; dies with the synthesis it dresses.
+    private var synthesisProgressTask: Task<Void, Never>?
     /// Bridges `AVAudioPlayer`'s completion callback (which fires even backgrounded,
     /// when the display link is dead) back to the model.
     private var audioDelegate: PlayerDelegate?
@@ -80,6 +88,20 @@ final class ReaderModel {
         ) { [weak self] note in
             MainActor.assumeIsolated { self?.handleInterruption(note) }
         }
+        // Remote (lock-screen) commands route through the same transport methods
+        // as the in-app controls, so Now Playing state stays consistent for free.
+        nowPlaying.onPlay = { [weak self] in self?.play() }
+        nowPlaying.onPause = { [weak self] in self?.pause() }
+        nowPlaying.onTogglePlayPause = { [weak self] in self?.togglePlay() }
+        nowPlaying.onSeek = { [weak self] t in self?.seek(to: t) }
+        nowPlaying.onNextChapter = { [weak self] in
+            guard let self else { return }
+            Task { await self.remoteOpenChapter(1) }
+        }
+        nowPlaying.onPreviousChapter = { [weak self] in
+            guard let self else { return }
+            Task { await self.remoteOpenChapter(-1) }
+        }
     }
 
     /// Backstop teardown for the display link. ReaderModel sits OUTSIDE the
@@ -105,6 +127,11 @@ final class ReaderModel {
     }
     var chapterCount: Int { document.chapters.count }
     var hasChapters: Bool { chapterCount > 1 }
+    /// Display title for the current chapter: the imported TOC title, else the
+    /// localized ordinal fallback (chrome; the real title is reader content).
+    var chapterTitle: String { currentChapter?.title ?? L10n.chapterNumber(chapterIndex + 1) }
+    var canGoToPreviousChapter: Bool { chapterIndex > 0 }
+    var canGoToNextChapter: Bool { chapterIndex < chapterCount - 1 }
 
     // MARK: - Load
 
@@ -139,7 +166,8 @@ final class ReaderModel {
         // Already-paid local audio: load it eagerly (no network) so a re-read gets
         // the word-synced highlight immediately and resumes where it stopped.
         if subscribed,
-           let cached = services.audioStore.load(SynthesisRequest(text: text).cacheKey),
+           let cached = services.audioStore.load(
+               SynthesisRequest(text: text, voice: services.narrationVoice).cacheKey),
            buildPlayback(from: cached, gen: gen) {
             audioState = .ready
         }
@@ -163,8 +191,41 @@ final class ReaderModel {
         case .synthesizing, .locked: return
         case .idle, .notGenerated, .failed: break
         }
+        synthesisProgress = 0   // a cache hit never animates; a miss restarts from empty
         audioState = .synthesizing
         if await ensureAudio() { play() }
+    }
+
+    /// Wall-clock estimate for synthesizing `charCount` chars through the Worker,
+    /// which buffers the whole response (~generation-time latency). Tunable.
+    private static func estimatedSynthesisSeconds(_ charCount: Int) -> Double {
+        8 + Double(charCount) / 90
+    }
+
+    /// Drive the cosmetic progress toward ~0.92 on an exponential ease: fast early,
+    /// ~0.84 around the estimate, and still creeping if synthesis runs long — the
+    /// bar never freezes, and never claims completion it can't know.
+    private func beginSynthesisProgress(charCount: Int) {
+        synthesisProgressTask?.cancel()
+        synthesisProgress = 0
+        let estimate = Self.estimatedSynthesisSeconds(charCount)
+        let start = Date()
+        synthesisProgressTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard let self, !Task.isCancelled else { return }
+                let t = Date().timeIntervalSince(start)
+                self.synthesisProgress = 0.92 * (1 - exp(-t / (estimate / 2.5)))
+            }
+        }
+    }
+
+    /// Stop the cosmetic progress: full bar on success (shown briefly while
+    /// playback is built, just before `.ready`), reset on failure.
+    private func endSynthesisProgress(success: Bool) {
+        synthesisProgressTask?.cancel()
+        synthesisProgressTask = nil
+        synthesisProgress = success ? 1 : 0
     }
 
     /// Cache-or-synthesize the chapter audio and build playback. Sets `audioState`
@@ -173,7 +234,8 @@ final class ReaderModel {
     private func ensureAudio() async -> Bool {
         if player != nil { audioState = .ready; return true }
         let gen = loadGeneration
-        let request = SynthesisRequest(text: currentChapter?.text ?? "")
+        let request = SynthesisRequest(text: currentChapter?.text ?? "",
+                                       voice: services.narrationVoice)
         let key = request.cacheKey
 
         let synth: SynthesizedAudio
@@ -181,27 +243,33 @@ final class ReaderModel {
             synth = cached
         } else {
             do {
+                beginSynthesisProgress(charCount: request.text.count)
                 synth = try await services.tts.synthesize(request)
                 // Cache the (network-paid) result before any bail-out: the disk
                 // write is cheap, local, and the valuable artifact.
                 services.audioStore.save(synth, for: key)
+                endSynthesisProgress(success: true)
             } catch is FixtureTTSService.FixtureError {
                 // No offline audio for this text — the genuine "not generated" case.
+                endSynthesisProgress(success: false)
                 if gen == loadGeneration { audioState = .notGenerated }
                 return false
             } catch WorkerTTSService.WorkerError.subscriptionRequired {
                 // Entitlement lapsed (server-side 403) — re-lock and show the pill.
+                endSynthesisProgress(success: false)
                 if gen == loadGeneration { audioState = .locked }
                 return false
             } catch {
                 // Real failure (Worker auth/network, decode) — surface it, don't
                 // disguise it as "not generated".
+                endSynthesisProgress(success: false)
                 if gen == loadGeneration { audioState = .failed(error.localizedDescription) }
                 return false
             }
         }
 
         guard buildPlayback(from: synth, gen: gen) else {
+            endSynthesisProgress(success: false)
             if gen == loadGeneration { audioState = .failed(L10n.readerFailedAudio) }
             return false
         }
@@ -266,13 +334,22 @@ final class ReaderModel {
         player.play()
         isPlaying = true
         link.start()
+        nowPlaying.setPlayback(elapsed: player.currentTime, rate: speed)
     }
 
     /// Activate the playback audio session at the first real playback — deferred out
     /// of `buildPlayback` so opening a cached chapter doesn't interrupt other audio.
+    /// Now Playing rides along: the lock-screen widget exists exactly while the
+    /// session does.
     private func activateSession() {
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
+        nowPlaying.activate()
+        nowPlaying.setMetadata(bookTitle: document.title, chapterTitle: chapterTitle,
+                               chapterIndex: chapterIndex, chapterCount: chapterCount,
+                               duration: duration)
+        nowPlaying.setChapterBounds(hasPrevious: canGoToPreviousChapter,
+                                    hasNext: canGoToNextChapter)
     }
 
     /// Release the session so other apps' audio can resume after we stop.
@@ -285,12 +362,15 @@ final class ReaderModel {
         isPlaying = false
         link.stop()
         persistProgress()
+        nowPlaying.setPlayback(elapsed: player?.currentTime ?? currentTime, rate: 0)
     }
 
     func setSpeed(_ v: Double) {
         speed = v
         player?.enableRate = true
         player?.rate = Float(v)
+        nowPlaying.setPlayback(elapsed: player?.currentTime ?? currentTime,
+                               rate: isPlaying ? v : 0)
     }
 
     /// Move the playhead (scrubbing / VoiceOver adjust). Works while playing or
@@ -301,6 +381,7 @@ final class ReaderModel {
         player.currentTime = clamped
         currentTime = clamped
         activeIndex = timeline.index(at: clamped)
+        nowPlaying.setPlayback(elapsed: clamped, rate: isPlaying ? speed : 0)
     }
 
     func toggleChrome() { chromeVisible.toggle() }
@@ -323,6 +404,16 @@ final class ReaderModel {
         isSwitchingChapter = false
     }
 
+    /// Remote (lock-screen) chapter skip: switch chapters, then resume playback
+    /// only if the new chapter's audio is already local (cache hit in `load()`).
+    /// Never triggers a paid synthesis from the lock screen — synthesis stays an
+    /// explicit in-app Play action, so an uncached skip simply ends the session
+    /// (openChapter's `stop()` already cleared the widget).
+    private func remoteOpenChapter(_ delta: Int) async {
+        await openChapter(chapterIndex + delta)
+        if audioState == .ready { play() }
+    }
+
     func stop() {
         saveProgressOnLeave()   // capture the playhead (or chapter) before tearing down
         // Supersede any in-flight synthesis: bump the generation so a task that
@@ -331,10 +422,13 @@ final class ReaderModel {
         loadGeneration &+= 1
         playbackTask?.cancel()
         playbackTask = nil
+        synthesisProgressTask?.cancel()
+        synthesisProgressTask = nil
         player?.stop()
         player = nil            // don't let a stale player replay under a new chapter
         duration = 0
         isPlaying = false
+        nowPlaying.deactivate()
         deactivateSession()
         link.stop()
     }
@@ -408,6 +502,7 @@ final class ReaderModel {
         currentTime = duration
         activeIndex = timeline.index(at: duration)
         persistProgress(completed: true)
+        nowPlaying.deactivate()
         deactivateSession()
     }
 

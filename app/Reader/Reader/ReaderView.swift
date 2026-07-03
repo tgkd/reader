@@ -88,6 +88,8 @@ struct ReaderView: View {
                     fontName: app.readingFont.psName,
                     fontScale: app.readingSize.scale,
                     showFurigana: app.showFurigana,
+                    topInset: 64,
+                    bottomInset: 88,
                     onTapToken: { model.tapToken($0) },
                     onTapBackground: { model.toggleChrome() }
                 )
@@ -96,14 +98,10 @@ struct ReaderView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // No horizontal padding: the reading surface is full-bleed so its scroll
-        // indicator rides the screen edge. The text column's side margin is applied
-        // INSIDE the scroll view (`readingInset`), clear of the indicator.
-        .padding(.top, 72)
-        // Clear the bottom chrome — only what the current state needs: the full
-        // transport (scrubber + controls) is taller than the single pill / play
-        // states, so reserving the tallest height everywhere left a dead gap.
-        .padding(.bottom, model.audioState == .ready ? 116 : 80)
+        // Full-bleed on every side: the chrome floats (glass, no bars), so the
+        // clearance for it lives INSIDE the scroll view as content insets
+        // (`topInset`/`bottomInset` above) — text starts clear of the pills but
+        // scrolls under them, giving the glass something to blur.
     }
 
     private func placeholder(_ title: String, _ subtitle: String) -> some View {
@@ -120,43 +118,35 @@ struct ReaderView: View {
 
     // MARK: - Top chrome
 
+    /// Floating Liquid Glass chrome — no bar, no hairline: a glass circle for
+    /// back, a glass title capsule (tap → chapters), and a glass capsule cluster
+    /// for the quick toggles, all riding over the full-bleed text.
     private func topBar(_ model: ReaderModel) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Button { app.backToLibrary() } label: {
-                Text("‹").font(.system(size: 27, weight: .light)).foregroundStyle(theme.ink)
-                    .frame(width: 40, alignment: .leading)
+                Image(systemName: "chevron.backward")
+                    .fontWeight(.semibold)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
             .accessibilityLabel(L10n.a11yBack)
 
-            Text(document.title)
-                .font(app.readingFont.font(15)).foregroundStyle(theme.ink).tracking(1)
-                .lineLimit(1).truncationMode(.tail)
-                .frame(maxWidth: .infinity)
+            Spacer(minLength: 6)
+            titleCluster(model)
+            Spacer(minLength: 6)
 
-            HStack(spacing: 9) {
-                if model.hasChapters {
-                    IconButton(systemImage: "list.bullet",
-                               foreground: theme.muted, outline: .rounded, label: L10n.chapters) {
-                        model.chaptersVisible = true
-                    }
-                }
-                IconButton(systemImage: app.readingOrientation.isVertical ? "arrow.up.and.down" : "arrow.left.and.right",
-                           foreground: theme.ink, outline: .rounded,
+            HStack(spacing: 0) {
+                chromeIcon(app.readingOrientation.isVertical ? "arrow.up.and.down" : "arrow.left.and.right",
                            label: L10n.a11yOrientation) {
                     app.readingOrientation = app.readingOrientation == .tate ? .yoko : .tate
                 }
-                IconButton(systemImage: app.themeName.symbol,
-                           foreground: theme.muted, outline: .rounded,
-                           label: L10n.a11yTheme) {
+                chromeIcon(app.themeName.symbol, label: L10n.a11yTheme) {
                     app.cycleTheme()
                 }
             }
+            .glassEffect(.regular, in: Capsule())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
-        .background(theme.bg)
-        .overlay(alignment: .bottom) { Rectangle().fill(theme.hair).frame(height: 1) }
+        .padding(.horizontal, 12)
         .opacity(model.chromeVisible ? 1 : 0)
         .allowsHitTesting(model.chromeVisible)
         // opacity(0) alone keeps the bar in the accessibility tree; hide it so
@@ -165,168 +155,199 @@ struct ReaderView: View {
         .animation(.easeInOut(duration: 0.3), value: model.chromeVisible)
     }
 
+    /// Book title + chapter subtitle in a floating glass capsule. On multi-chapter
+    /// books the capsule IS the chapter selector — the up/down chevron (the native
+    /// picker affordance) marks it as tappable; it opens the chapters sheet.
+    @ViewBuilder private func titleCluster(_ model: ReaderModel) -> some View {
+        let title = VStack(spacing: 1) {
+            Text(document.title)
+                .font(.footnote.weight(.semibold)).lineLimit(1)
+            if model.hasChapters {
+                Text(chapterSubtitle(model))
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+
+        if model.hasChapters {
+            Button { model.chaptersVisible = true } label: {
+                HStack(spacing: 6) {
+                    title
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 44)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .accessibilityHint(L10n.chapters)
+        } else {
+            title
+                .padding(.horizontal, 16)
+                .frame(height: 44)
+                .glassEffect(.regular, in: Capsule())
+        }
+    }
+
+    /// One icon in the trailing glass cluster (plain button; the shared capsule
+    /// provides the glass).
+    private func chromeIcon(_ systemImage: String, label: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .accessibilityLabel(label)
+    }
+
+    /// Header subtitle: the chapter's real (TOC) title with a language-neutral
+    /// position count, or the localized ordinal when the chapter is untitled.
+    private func chapterSubtitle(_ model: ReaderModel) -> String {
+        guard model.currentChapter?.title != nil else {
+            return L10n.chapterOfCount(model.chapterIndex + 1, model.chapterCount)
+        }
+        return "\(model.chapterTitle) · \(model.chapterIndex + 1)/\(model.chapterCount)"
+    }
+
     // MARK: - Transport
 
     /// The bottom chrome adapts to the audio state. Speech is the only gated
     /// feature, so a free user gets a single "Listen with Membership" pill instead
     /// of a dead scrubber; a subscriber gets a Play control that generates speech on
     /// demand, then the full transport once audio is ready.
+    /// The player is ONE full-width floating glass pill (the Apple Music
+    /// mini-player idiom), same height in every audio state — only its contents
+    /// swap: paywall action, play, generation progress, or the full transport.
     @ViewBuilder private func transport(_ model: ReaderModel) -> some View {
         Group {
             switch model.audioState {
             case .locked:
-                listenPill
+                lockedPill
             case .idle, .notGenerated, .failed:
-                preAudioControl(model)
+                preAudioPill(model)
             case .synthesizing:
-                ProgressView().tint(theme.muted).frame(height: 46).frame(maxWidth: .infinity)
+                synthesizingPill(model)
             case .ready:
-                fullTransport(model)
+                playerPill(model)
             }
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 12)
-        .padding(.bottom, 18)
-        .background(theme.bg)
-        .overlay(alignment: .top) { Rectangle().fill(theme.hair).frame(height: 1) }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity)
+        .frame(height: 64)
+        .glassEffect(.regular, in: Capsule())
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
         .opacity(model.chromeVisible ? 1 : 0)
         .allowsHitTesting(model.chromeVisible)
         .accessibilityHidden(!model.chromeVisible)
         .animation(.easeInOut(duration: 0.3), value: model.chromeVisible)
     }
 
-    /// Free tier: audio is gated. One pill that opens the paywall — no dead
-    /// scrubber / speed controls.
-    private var listenPill: some View {
+    /// Audio ready: play beside a native scrubber, remaining time, and a speed
+    /// menu — a pure audio transport. Chapter switching lives in the header's
+    /// title capsule (and the lock screen), never in the pill.
+    private func playerPill(_ model: ReaderModel) -> some View {
+        HStack(spacing: 2) {
+            playPauseButton(model)
+            Slider(value: seekBinding(model), in: 0...max(1, model.duration)) {
+                Text(L10n.a11yPosition)
+            }
+            .tint(theme.accent)
+            .padding(.horizontal, 6)
+            Text("−" + model.timeLabel(max(0, model.duration - model.currentTime)))
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            speedMenu(model)
+        }
+    }
+
+    /// Free tier: audio is gated. One centered action that opens the paywall.
+    private var lockedPill: some View {
         Button { app.showPaywall = true } label: {
             Text(L10n.readerSubscribeTitle)
-                .font(.system(size: 15, weight: .medium)).foregroundStyle(theme.accent)
-                .padding(.horizontal, 24).padding(.vertical, 12)
-                .overlay(Capsule().stroke(theme.accent, lineWidth: 1.5))
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(theme.accent)
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
         .accessibilityLabel(L10n.a11yMembership)
     }
 
-    /// Subscribed but audio not generated yet (or a prior attempt failed): a single
-    /// Play control that generates speech on tap. Reading already works above.
-    @ViewBuilder private func preAudioControl(_ model: ReaderModel) -> some View {
-        VStack(spacing: 10) {
+    /// Subscribed but audio not generated yet (or a prior attempt failed): Play
+    /// synthesizes on tap; a short status explains the failed / no-audio case.
+    @ViewBuilder private func preAudioPill(_ model: ReaderModel) -> some View {
+        HStack(spacing: 8) {
             if case .failed(let msg) = model.audioState {
-                Text(msg).font(.system(size: 12)).foregroundStyle(theme.muted)
-                    .multilineTextAlignment(.center)
+                Text(msg).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             } else if model.audioState == .notGenerated {
-                Text(L10n.readerNotGeneratedTitle).font(.system(size: 12)).foregroundStyle(theme.muted)
+                Text(L10n.readerNotGeneratedTitle)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Button { model.startAudio() } label: {
-                PlayTriangle().fill(theme.ink).frame(width: 14, height: 18).offset(x: 2)
-                    .frame(width: 46, height: 46)
-                    .overlay(Circle().stroke(theme.hair, lineWidth: 1))
-                    .contentShape(Circle())
+                Image(systemName: "play.fill")
+                    .font(.system(size: 22))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .foregroundStyle(.primary)
             .accessibilityLabel(L10n.a11yPlay)
         }
         .frame(maxWidth: .infinity)
     }
 
-    /// Audio ready: the full scrubber + play/pause + speed transport.
-    private func fullTransport(_ model: ReaderModel) -> some View {
-        VStack(spacing: 16) {
-            HStack(spacing: 11) {
-                Text(model.timeLabel(model.currentTime))
-                    .font(.system(size: 11)).monospacedDigit().foregroundStyle(theme.muted)
-                    .frame(width: 30, alignment: .leading)
-                scrubber(model)
-                    .frame(height: 28)   // taller touch target; capsule stays 3pt, centered
-                Text(model.timeLabel(model.duration))
-                    .font(.system(size: 11)).monospacedDigit().foregroundStyle(theme.muted)
-                    .frame(width: 30, alignment: .trailing)
-            }
-            HStack {
-                Button { model.togglePlay() } label: {
-                    playPause(model)
-                        .frame(width: 46, height: 46)
-                        .overlay(Circle().stroke(theme.hair, lineWidth: 1))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(model.isPlaying ? L10n.a11yPause : L10n.a11yPlay)
-                Spacer()
-                speedPicker(model)
-            }
+    /// Determinate (estimated) progress while speech is generated — a real value
+    /// so VoiceOver reads a percentage, unlike the old indeterminate spinner.
+    /// No chapter arrows here: switching chapters would cancel the paid request.
+    private func synthesizingPill(_ model: ReaderModel) -> some View {
+        VStack(spacing: 4) {
+            ProgressView(value: model.synthesisProgress)
+                .tint(theme.accent)
+                .animation(.linear(duration: 0.12), value: model.synthesisProgress)
+            Text(L10n.readerGenerating)
+                .font(.caption2).foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 24)
     }
 
-    private func scrubber(_ model: ReaderModel) -> some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let x = w * model.progressFraction
-            ZStack(alignment: .leading) {
-                Capsule().fill(theme.soft).frame(height: 3)
-                Capsule().fill(theme.accent).frame(width: max(0, x), height: 3)
-                Circle().fill(theme.accent).frame(width: 11, height: 11)
-                    .overlay(Circle().stroke(theme.bg, lineWidth: 3))
-                    .position(x: x, y: geo.size.height / 2)
-            }
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        guard w > 0, model.duration > 0 else { return }
-                        let fraction = min(max(0, value.location.x / w), 1)
-                        model.seek(to: fraction * model.duration)
-                    }
-            )
+    private func playPauseButton(_ model: ReaderModel) -> some View {
+        Button { model.togglePlay() } label: {
+            Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                .font(.system(size: 22))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
-        // Keep the bespoke visual but hand VoiceOver a real, adjustable slider —
-        // only once there's audio, so we never present a dead adjustable control.
-        .accessibilityRepresentation {
-            Slider(value: seekBinding(model), in: 0...max(1, model.duration)) {
-                Text(L10n.a11yPosition)
-            }
-        }
-        .accessibilityHidden(model.duration <= 0)
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .accessibilityLabel(model.isPlaying ? L10n.a11yPause : L10n.a11yPlay)
     }
 
-    /// Two-way bridge for the scrubber's VoiceOver slider: reads the playhead,
-    /// writes it through `seek`.
+    /// Two-way bridge for the native scrubber: reads the playhead, writes it
+    /// through `seek`.
     private func seekBinding(_ model: ReaderModel) -> Binding<Double> {
         Binding(get: { model.currentTime }, set: { model.seek(to: $0) })
     }
 
-    @ViewBuilder private func playPause(_ model: ReaderModel) -> some View {
-        if model.isPlaying {
-            HStack(spacing: 4) {
-                Capsule().frame(width: 4, height: 16)
-                Capsule().frame(width: 4, height: 16)
-            }
-            .foregroundStyle(theme.ink)
-        } else {
-            PlayTriangle().fill(theme.ink).frame(width: 14, height: 18).offset(x: 2)
-        }
-    }
-
-    private func speedPicker(_ model: ReaderModel) -> some View {
-        HStack(spacing: 0) {
-            ForEach([0.75, 1.0, 1.25], id: \.self) { v in
-                let active = model.speed == v
-                Button { model.setSpeed(v) } label: {
-                    Text(v == 1.0 ? "1.0×" : "\(speedText(v))×")
-                        .font(.system(size: 12)).tracking(0.3)
-                        .foregroundStyle(active ? theme.onAccent : theme.muted)
-                        .padding(.horizontal, 13).padding(.vertical, 6)
-                        .background(active ? theme.accent : Color.clear)
-                        .contentShape(Rectangle())
+    /// Native speed control: a menu with a checkmarked picker (0.75× / 1× / 1.25×).
+    private func speedMenu(_ model: ReaderModel) -> some View {
+        Menu {
+            Picker(L10n.a11ySpeed,
+                   selection: Binding(get: { model.speed }, set: { model.setSpeed($0) })) {
+                ForEach([0.75, 1.0, 1.25], id: \.self) { v in
+                    Text("\(speedText(v))×").tag(v)
                 }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(active ? .isSelected : [])
             }
+        } label: {
+            Text("\(speedText(model.speed))×")
+                .font(.footnote.weight(.medium)).monospacedDigit()
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
-        .clipShape(Capsule())
-        .overlay(Capsule().stroke(theme.hair, lineWidth: 1))
+        .accessibilityLabel(L10n.a11ySpeed)
     }
 
     private func speedText(_ v: Double) -> String {

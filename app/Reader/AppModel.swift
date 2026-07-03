@@ -38,11 +38,21 @@ final class AppModel {
     var showFurigana: Bool = true {
         didSet { UserDefaults.standard.set(showFurigana, forKey: Self.furiganaKey) }
     }
+    /// Narration voice (a subscriber Settings pick). Persisted by id; resolved
+    /// against `Voice.catalog` on load so a removed voice falls back to the
+    /// default. Mirrored into `AppServices` for cache-key probes and synthesis.
+    var narrationVoice: Voice = .george {
+        didSet {
+            UserDefaults.standard.set(narrationVoice.id, forKey: Self.voiceKey)
+            services.narrationVoice = narrationVoice
+        }
+    }
     private static let themeKey = "reader.themeName"
     private static let fontKey = "reader.readingFont"
     private static let sizeKey = "reader.readingSize"
     private static let orientationKey = "reader.readingOrientation"
     private static let furiganaKey = "reader.showFurigana"
+    private static let voiceKey = "reader.narrationVoice"
     /// Bumped when a purchase/restore completes — the reader observes it to reload
     /// the chapter (now that `reader Pro` is active).
     var entitlementTick = 0
@@ -89,6 +99,10 @@ final class AppModel {
         if let raw = defaults.string(forKey: Self.sizeKey), let s = ReadingSize(rawValue: raw) { readingSize = s }
         if let raw = defaults.string(forKey: Self.orientationKey), let o = Orientation(rawValue: raw) { readingOrientation = o }
         if defaults.object(forKey: Self.furiganaKey) != nil { showFurigana = defaults.bool(forKey: Self.furiganaKey) }
+        if let raw = defaults.string(forKey: Self.voiceKey),
+           let v = Voice.catalog.first(where: { $0.id == raw }) { narrationVoice = v }
+        // didSet doesn't fire during init — mirror the loaded voice explicitly.
+        services.narrationVoice = narrationVoice
     }
 
     func cycleTheme() { themeName = themeName.next }

@@ -2,8 +2,9 @@ name: Reader
 options:
   bundleIdPrefix: app.reader
   developmentLanguage: en
+  # iOS 26+: the reader chrome is built on Liquid Glass (.glassEffect, .buttonStyle(.glass)).
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
 packages:
   ReaderCore:
     path: ../ReaderCore

@@ -29,6 +29,11 @@ struct RubyTextView: UIViewRepresentable {
     let fontScale: CGFloat
     /// Furigana on/off, from Settings.
     let showFurigana: Bool
+    /// Clearance for the floating glass chrome. Applied INSIDE the scroll view
+    /// (content inset / column band), so text starts clear of the pills but
+    /// scrolls under them.
+    var topInset: CGFloat = 0
+    var bottomInset: CGFloat = 0
     var onTapToken: (Int) -> Void
     var onTapBackground: () -> Void
 
@@ -45,6 +50,7 @@ struct RubyTextView: UIViewRepresentable {
         sv.configure(spans: spans, structureVersion: structureVersion,
                      activeIndex: activeIndex, vertical: vertical,
                      fontName: fontName, fontScale: fontScale, showFurigana: showFurigana,
+                     topInset: topInset, bottomInset: bottomInset,
                      ink: theme.ink.ui, hi: theme.hi.ui, hiInk: theme.hiInk.ui)
     }
 }
@@ -68,6 +74,13 @@ final class RubyScrollView: UIScrollView {
     /// Tategaki main-axis end margin: keeps the first (right) / last (left) column
     /// off the screen corner, since horizontal is the scroll axis there.
     private let columnEndInset: CGFloat = 24
+    /// Clearance for the floating glass chrome. Yokogaki applies it as a vertical
+    /// `contentInset` (text starts below the header pill but SCROLLS under it —
+    /// the glass gets something to blur); tategaki, whose columns span the full
+    /// height, uses it as the column band instead so text isn't permanently
+    /// hidden under the pills.
+    private var chromeTop: CGFloat = 0
+    private var chromeBottom: CGFloat = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -87,22 +100,27 @@ final class RubyScrollView: UIScrollView {
 
     func configure(spans: [TokenSpan], structureVersion: Int, activeIndex: Int?, vertical: Bool,
                    fontName: String, fontScale: CGFloat, showFurigana: Bool,
+                   topInset: CGFloat, bottomInset: CGFloat,
                    ink: UIColor, hi: UIColor, hiInk: UIColor) {
         let orientationChanged = (self.vertical != vertical)
         self.vertical = vertical
+        let insetsChanged = (chromeTop != topInset || chromeBottom != bottomInset)
+        chromeTop = topInset
+        chromeBottom = bottomInset
         let structureChanged = content.configure(
             spans: spans, structureVersion: structureVersion, activeIndex: activeIndex,
             vertical: vertical, fontName: fontName, fontScale: fontScale, showFurigana: showFurigana,
             ink: ink, hi: hi, hiInk: hiInk)
 
-        if structureChanged || orientationChanged {
+        if structureChanged || orientationChanged || insetsChanged {
+            stopFollowing()   // the old geometry's target is garbage until relayout
             needsResize = true
             didPlaceInitialOffset = false
             setNeedsLayout()
         } else {
             // Only the active token (or colors) changed — keep the reader's place and
-            // just follow the moving highlight.
-            followActive(animated: true)
+            // ease the moving highlight's line back to screen center.
+            ensureFollowing()
         }
     }
 
@@ -110,10 +128,12 @@ final class RubyScrollView: UIScrollView {
         super.layoutSubviews()
         guard bounds.width > 1, bounds.height > 1 else { return }
 
-        // The text lays out within the cross-axis minus the reading margin on both
-        // sides; the scroll view itself spans full-bleed so its indicator sits at
-        // the screen edge, outside the column.
-        let cross = (vertical ? bounds.height : bounds.width) - readingInset * 2
+        // The text lays out within the cross-axis minus the margins: side reading
+        // margin for yokogaki, the chrome band for tategaki (whose columns span
+        // the full height and must stay between the floating pills).
+        let cross = vertical
+            ? bounds.height - chromeTop - chromeBottom
+            : bounds.width - readingInset * 2
         if needsResize || cross != lastCrossAxis {
             lastCrossAxis = cross
             needsResize = false
@@ -122,52 +142,126 @@ final class RubyScrollView: UIScrollView {
                 // Tategaki: scroll horizontally, reading right-to-left. Right-align the
                 // columns (margin `columnEndInset` from the right edge) so a SHORT text
                 // sits at the right — where reading starts — instead of the left; a long
-                // text overflows leftward and scrolls. Column band inset top/bottom.
+                // text overflows leftward and scrolls. Column band = chrome clearance.
                 let columns = text.width
                 let contentW = max(bounds.width, columns + columnEndInset * 2)
-                content.frame = CGRect(x: contentW - columnEndInset - columns, y: readingInset,
+                content.frame = CGRect(x: contentW - columnEndInset - columns, y: chromeTop,
                                        width: columns, height: cross)
                 contentSize = CGSize(width: contentW, height: bounds.height)
+                contentInset = .zero
             } else {
-                // Yokogaki: scroll vertically; inset the column left/right.
+                // Yokogaki: scroll vertically; inset the column left/right. The chrome
+                // clearance is a CONTENT inset so text scrolls under the glass pills.
                 content.frame = CGRect(x: readingInset, y: 0, width: cross, height: text.height)
                 contentSize = CGSize(width: bounds.width, height: text.height)
+                contentInset = UIEdgeInsets(top: chromeTop, left: 0, bottom: chromeBottom, right: 0)
             }
             content.setNeedsDisplay()
         }
 
         if !didPlaceInitialOffset {
             didPlaceInitialOffset = true
-            // Tategaki reads right-to-left: start at the right edge.
+            // Tategaki reads right-to-left: start at the right edge; yokogaki
+            // starts at the top of the inset range (below the header pill).
             contentOffset = vertical
                 ? CGPoint(x: max(0, contentSize.width - bounds.width), y: 0)
-                : .zero
-            followActive(animated: false)   // jump to a resumed position, if any
+                : CGPoint(x: 0, y: -adjustedContentInset.top)
+            jumpToActive()   // snap a resumed position to center, no fly-in
         }
     }
 
-    /// Bring the active token into a comfortable reading band when it drifts out —
-    /// a line-at-a-time follow during playback that doesn't fight a manual drag.
-    private func followActive(animated: Bool) {
-        guard !isTracking, !isDragging, !isDecelerating,
-              bounds.width > 1, bounds.height > 1,
-              let r0 = content.activeViewRect() else { return }
-        // activeViewRect is in the content view's own coords; the content view is
-        // inset within the scroll view, so shift it into scroll-content space.
-        let r = r0.offsetBy(dx: content.frame.origin.x, dy: content.frame.origin.y)
-        let visible = CGRect(origin: contentOffset, size: bounds.size)
+    // MARK: - Smooth centered follow
+
+    /// Keeps the active line at screen center while the highlight advances —
+    /// clamped to the scrollable range, so chapter start/end pin naturally. A
+    /// critically-damped display-link ease writes `contentOffset` directly, never
+    /// `setContentOffset(animated:)` (UIKit's own offset animation retriggered on
+    /// every line change is a lurch, not a glide). Scrolling only moves layers, so
+    /// the CoreText base is never repainted; the link lives only while the view is
+    /// out of position, never at idle.
+    private var followLink: CADisplayLink?
+    private var settledFrames = 0
+
+    /// The centered offset for the active line, clamped to the scrollable range
+    /// (content insets included, so chapter start/end pin just clear of the pills).
+    private func targetOffset() -> CGFloat? {
+        guard let center = content.activeLineCenter() else { return nil }
         if vertical {
-            let margin = bounds.width * 0.22
-            guard r.minX < visible.minX + margin || r.maxX > visible.maxX else { return }
-            let target = r.maxX - bounds.width * 0.75      // ~quarter in from the right
-            let x = min(max(0, target), max(0, contentSize.width - bounds.width))
-            setContentOffset(CGPoint(x: x, y: 0), animated: animated)
-        } else {
-            let margin = bounds.height * 0.22
-            guard r.minY < visible.minY + margin || r.maxY > visible.maxY - margin else { return }
-            let target = r.minY - bounds.height * 0.28     // ~quarter down from the top
-            let y = min(max(0, target), max(0, contentSize.height - bounds.height))
-            setContentOffset(CGPoint(x: 0, y: y), animated: animated)
+            let t = center + content.frame.origin.x - bounds.width / 2
+            let lo = -adjustedContentInset.left
+            let hi = max(lo, contentSize.width - bounds.width + adjustedContentInset.right)
+            return min(max(lo, t), hi)
+        }
+        let t = center + content.frame.origin.y - bounds.height / 2
+        let lo = -adjustedContentInset.top
+        let hi = max(lo, contentSize.height - bounds.height + adjustedContentInset.bottom)
+        return min(max(lo, t), hi)
+    }
+
+    /// Arm the follow link (called on every active-token advance). Already settled
+    /// on target → it stops itself within a few frames.
+    private func ensureFollowing() {
+        guard content.activeLineCenter() != nil else { return }
+        if UIAccessibility.isReduceMotionEnabled { jumpToActive(); return }
+        settledFrames = 0
+        guard followLink == nil else { return }
+        let link = CADisplayLink(target: FollowTarget(self), selector: #selector(FollowTarget.tick(_:)))
+        link.add(to: .main, forMode: .common)
+        followLink = link
+    }
+
+    private func stopFollowing() {
+        followLink?.invalidate()
+        followLink = nil
+    }
+
+    /// One follow frame: ease the offset toward the centered target.
+    fileprivate func stepFollow(_ link: CADisplayLink) {
+        guard window != nil else { stopFollowing(); return }
+        // A manual drag wins instantly; the follow re-engages once it ends.
+        guard !isTracking, !isDragging, !isDecelerating else { return }
+        guard bounds.width > 1, bounds.height > 1, let target = targetOffset() else {
+            stopFollowing()
+            return
+        }
+        let current = vertical ? contentOffset.x : contentOffset.y
+        let delta = target - current
+        if abs(delta) < 0.5 {
+            settledFrames += 1
+            if settledFrames > 30 { stopFollowing() }   // battery: never idle at 60 Hz
+            return
+        }
+        settledFrames = 0
+        // Exponential approach, ~140 ms time constant — critically damped, no overshoot.
+        let dt = link.targetTimestamp - link.timestamp
+        let next = current + delta * (1 - exp(-7 * dt))
+        contentOffset = vertical ? CGPoint(x: next, y: 0) : CGPoint(x: 0, y: next)
+    }
+
+    /// Snap the active line to center with no animation (initial / resumed
+    /// placement, and the Reduce Motion path).
+    private func jumpToActive() {
+        guard let target = targetOffset() else { return }
+        contentOffset = vertical ? CGPoint(x: target, y: 0) : CGPoint(x: 0, y: target)
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { stopFollowing() }   // the link must not outlive the screen
+    }
+}
+
+/// Weak display-link target so the scroll view sits outside the link's retain
+/// cycle (mirrors `DisplayLinkProxy` in ReaderModel). Ticks arrive on the main
+/// run loop, so hopping via `assumeIsolated` is valid.
+private final class FollowTarget: NSObject {
+    private weak var view: RubyScrollView?
+    init(_ view: RubyScrollView) { self.view = view }
+
+    @objc func tick(_ link: CADisplayLink) {
+        MainActor.assumeIsolated {
+            guard let view else { link.invalidate(); return }
+            view.stepFollow(link)
         }
     }
 }
@@ -491,17 +585,26 @@ final class RubyContentView: UIView {
         return rects
     }
 
-    /// The active token's bounding box in this view's (top-left) coordinate space,
-    /// for the scroll-to-follow. `nil` when there's no active token or no frame yet.
-    func activeViewRect() -> CGRect? {
+    /// Main-axis center of the FIRST line containing the active token, in this
+    /// view's top-left coordinate space (y for yokogaki, x for tategaki).
+    /// Line-based so the follow target holds still while the highlight advances
+    /// within a line — no intra-line jitter. Reads the cached line geometry
+    /// (O(log n) binary search); never triggers layout. `nil` when there's no
+    /// active token or no frame yet.
+    func activeLineCenter() -> CGFloat? {
         guard let active = activeIndex, active >= 0, active < tokenRanges.count,
               currentFrame() != nil else { return nil }
-        let rects = tokenRects(tokenRanges[active])
-        guard let first = rects.first else { return nil }
-        let union = rects.dropFirst().reduce(first) { $0.union($1) }
-        // tokenRects are in flipped CoreText space (y from the bottom); flip to view.
-        return CGRect(x: union.minX, y: bounds.height - union.maxY,
-                      width: union.width, height: union.height)
+        guard let i = linesForToken(tokenRanges[active]).first, i < lines.count else { return nil }
+        var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+        CTLineGetTypographicBounds(lines[i], &ascent, &descent, &leading)
+        let origin = lineOrigins[i]   // flipped CoreText space
+        if vertical {
+            // The column band spans x ∈ [origin.x − descent, origin.x + ascent];
+            // x doesn't flip between CoreText and view space.
+            return origin.x + (ascent - descent) / 2
+        }
+        // The line band spans y ∈ [origin.y − descent, origin.y + ascent] (flipped).
+        return bounds.height - origin.y - (ascent - descent) / 2
     }
 
     // MARK: - Tap

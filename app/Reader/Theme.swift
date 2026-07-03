@@ -5,13 +5,14 @@ import SwiftUI
 /// Switching theme swaps the whole token set at the root — the SwiftUI analogue
 /// of the design's CSS custom properties (`--bg`, `--ink`, `--hi`, …).
 enum ThemeName: String, CaseIterable, Codable {
-    case paper, sepia, night
+    case paper, white, sepia, night
 
     /// SF Symbol for the reader's appearance toggle, reflecting the current theme
-    /// (light → warm → dark). Language-neutral, unlike the old 紙/茶/夜 glyphs.
+    /// (light → brightest → warm → dark). Language-neutral, unlike the old 紙/茶/夜 glyphs.
     var symbol: String {
         switch self {
         case .paper: return "sun.max"
+        case .white: return "sun.max.fill"
         case .sepia: return "sunset"
         case .night: return "moon.stars"
         }
@@ -26,6 +27,7 @@ enum ThemeName: String, CaseIterable, Codable {
     var displayName: String {
         switch self {
         case .paper: return L10n.themePaper
+        case .white: return L10n.themeWhite
         case .sepia: return L10n.themeSepia
         case .night: return L10n.themeNight
         }
@@ -60,6 +62,15 @@ struct Theme: Equatable {
             hi = Color(hex: 0xb05c40, opacity: 0.15);   hiInk = Color(hex: 0x3a261c)
             soft = Color(hex: 0x36312a, opacity: 0.05)
             onAccent = Color(hex: 0xfbf8f1)
+        case .white:
+            // Pure white with iOS-native neutrals (label/secondaryLabel grays);
+            // the accent stays paper's terracotta so highlight/scrubber read the same.
+            bg = Color(hex: 0xffffff);  surface = Color(hex: 0xffffff)
+            ink = Color(hex: 0x1c1c1e); muted = Color(hex: 0x8e8e93)
+            hair = Color(hex: 0x000000, opacity: 0.10); accent = Color(hex: 0xb05c40)
+            hi = Color(hex: 0xb05c40, opacity: 0.14);   hiInk = Color(hex: 0x2e1d14)
+            soft = Color(hex: 0x000000, opacity: 0.05)
+            onAccent = Color(hex: 0xffffff)
         case .sepia:
             bg = Color(hex: 0xece0ca);  surface = Color(hex: 0xf4ead7)
             ink = Color(hex: 0x473a27); muted = Color(hex: 0xa18d6e)

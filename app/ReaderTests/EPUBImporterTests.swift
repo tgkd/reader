@@ -123,6 +123,112 @@ final class EPUBImporterTests: XCTestCase {
         }
     }
 
+    // MARK: - TOC chapter titles (EPUB3 nav / EPUB2 NCX)
+
+    func testNavTOCTitlesMapToSpineChapters() async throws {
+        let manifest = [
+            Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: "<p>ONE</p>")),
+            Fixture.EPUBItem(id: "c1", href: "c1.xhtml", content: Fixture.xhtml(body: "<p>TWO</p>")),
+            Fixture.EPUBItem(id: "nav", href: "nav.xhtml",
+                             content: Fixture.navDoc([("c0.xhtml", "第一章"), ("c1.xhtml", "第二章")]),
+                             properties: "nav"),
+        ]
+        let url = try Fixture.epub(manifest: manifest,
+                                   spine: [Fixture.SpineRef("c0"), Fixture.SpineRef("c1")])
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.title), ["第一章", "第二章"])
+        XCTAssertEqual(result.map(\.text), ["ONE", "TWO"])
+    }
+
+    func testNCXTitlesUsedWhenNoNavDoc() async throws {
+        let manifest = [
+            Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: "<p>ONE</p>")),
+            Fixture.EPUBItem(id: "ncx", href: "toc.ncx",
+                             content: Fixture.ncx([("c0.xhtml", "序章")]),
+                             mediaType: "application/x-dtbncx+xml"),
+        ]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")],
+                                   spineTOC: "ncx")
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.title), ["序章"])
+        XCTAssertFalse(result[0].text.contains("DOC_TITLE_DO_NOT_LEAK"))
+    }
+
+    func testNavDocPreferredOverNCX() async throws {
+        let manifest = [
+            Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: "<p>ONE</p>")),
+            Fixture.EPUBItem(id: "nav", href: "nav.xhtml",
+                             content: Fixture.navDoc([("c0.xhtml", "NAVタイトル")]),
+                             properties: "nav"),
+            Fixture.EPUBItem(id: "ncx", href: "toc.ncx",
+                             content: Fixture.ncx([("c0.xhtml", "NCXタイトル")]),
+                             mediaType: "application/x-dtbncx+xml"),
+        ]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")],
+                                   spineTOC: "ncx")
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.title), ["NAVタイトル"])
+    }
+
+    func testTOCFragmentHrefsMapToFileFirstWins() async throws {
+        // Two anchors into one file: the chapter takes the FIRST (chapter-opening) title.
+        let manifest = [
+            Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: "<p>ONE</p>")),
+            Fixture.EPUBItem(id: "nav", href: "nav.xhtml",
+                             content: Fixture.navDoc([("c0.xhtml#intro", "始まり"),
+                                                      ("c0.xhtml#part2", "続き")]),
+                             properties: "nav"),
+        ]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")])
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.title), ["始まり"])
+    }
+
+    func testTOCHrefsResolveRelativeToTOCDirectory() async throws {
+        // Nav doc in a subdirectory: its hrefs are relative to ITS directory, not the OPF's.
+        let manifest = [
+            Fixture.EPUBItem(id: "c0", href: "text/c0.xhtml", content: Fixture.xhtml(body: "<p>ONE</p>")),
+            Fixture.EPUBItem(id: "nav", href: "nav/toc.xhtml",
+                             content: Fixture.navDoc([("../text/c0.xhtml", "奥付")]),
+                             properties: "nav"),
+        ]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")])
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.title), ["奥付"])
+    }
+
+    func testPartialTOCLeavesUnlistedChaptersUntitled() async throws {
+        let manifest = [
+            Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: "<p>ONE</p>")),
+            Fixture.EPUBItem(id: "c1", href: "c1.xhtml", content: Fixture.xhtml(body: "<p>TWO</p>")),
+            Fixture.EPUBItem(id: "nav", href: "nav.xhtml",
+                             content: Fixture.navDoc([("c1.xhtml", "第二章")]),
+                             properties: "nav"),
+        ]
+        let url = try Fixture.epub(manifest: manifest,
+                                   spine: [Fixture.SpineRef("c0"), Fixture.SpineRef("c1")])
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.title), [nil, "第二章"])
+    }
+
+    func testMissingTOCYieldsNilTitles() async throws {
+        // No nav doc, no NCX — every chapter stays untitled (regression guard).
+        let result = try await chapters(try Fixture.simpleEPUB(["ONE", "TWO"]))
+        XCTAssertEqual(result.map(\.title), [nil, nil])
+    }
+
+    func testNavLabelTagsStrippedAndEntitiesDecoded() async throws {
+        let manifest = [
+            Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: "<p>ONE</p>")),
+            Fixture.EPUBItem(id: "nav", href: "nav.xhtml",
+                             content: Fixture.navDoc([("c0.xhtml", "<span>第一章</span>&amp;序")]),
+                             properties: "nav"),
+        ]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")])
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.title), ["第一章&序"])
+    }
+
     // MARK: - OCR fallback (image-only spine items)
 
     /// A spine item whose text is baked into an `<img>` is OCR'd; recovered text becomes

@@ -1,4 +1,5 @@
 import SwiftUI
+import ReaderCore
 
 /// Reading preferences, opened from the Library header gear. Currently the reading
 /// font + text size; both apply live to the reader surface and persist. Hosted in a
@@ -9,6 +10,9 @@ struct SettingsView: View {
     /// Bytes of cached narration on disk; refreshed on appear and after clearing.
     @State private var cacheBytes = 0
     @State private var showClearConfirm = false
+    /// Gates the narration-voice section — a paid knob, hidden on the free tier.
+    @State private var isSubscribed = false
+    @State private var demo = VoiceDemoPlayer()
 
     var body: some View {
         ScrollView {
@@ -53,12 +57,26 @@ struct SettingsView: View {
                               selected: app.themeName == name) { app.themeName = name }
                 }
 
+                // Narration voice — synthesis is the paid feature, so the picker
+                // only exists for subscribers (mirrors the Worker's server gate).
+                if isSubscribed {
+                    sectionHeader(L10n.settingsVoice)
+                    ForEach(Voice.catalog) { voice in
+                        voiceRow(voice)
+                    }
+                    Text(L10n.settingsVoiceNote)
+                        .font(.system(size: 11.5)).foregroundStyle(theme.muted)
+                        .padding(.horizontal, 24).padding(.top, 8)
+                }
+
                 sectionHeader(L10n.settingsStorage)
                 storageRow
             }
             .padding(.bottom, 24)
         }
         .onAppear { cacheBytes = app.services.audioStore.totalBytes() }
+        .task { isSubscribed = await app.services.isSubscribed() }
+        .onDisappear { demo.stop() }
         .alert(L10n.storageClearTitle, isPresented: $showClearConfirm) {
             Button(L10n.storageClear, role: .destructive) {
                 app.services.audioStore.clear()
@@ -87,6 +105,48 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .disabled(empty)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 24)
+        }
+    }
+
+    /// An `optionRow`-style voice pick with a trailing sample button: spinner while
+    /// the sample synthesizes (first listen only — cached after), stop while playing.
+    private func voiceRow(_ voice: Voice) -> some View {
+        let selected = app.narrationVoice == voice
+        return HStack(spacing: 0) {
+            Button { app.narrationVoice = voice } label: {
+                HStack {
+                    Text(voice.name)
+                        .font(.system(size: 16)).foregroundStyle(selected ? theme.accent : theme.ink)
+                    Spacer(minLength: 12)
+                    if selected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(theme.accent)
+                    }
+                }
+                .padding(.leading, 24).padding(.vertical, 15)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(selected ? .isSelected : [])
+
+            Button { demo.toggle(voice, services: app.services) } label: {
+                Group {
+                    if demo.synthesizingID == voice.id {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: demo.playingID == voice.id ? "stop.fill" : "play.circle")
+                            .font(.system(size: 19)).foregroundStyle(theme.accent)
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 12)
+            .accessibilityLabel(L10n.a11yVoiceDemo)
+        }
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 24)
         }

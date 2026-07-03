@@ -102,6 +102,8 @@ enum Fixture {
         let id: String
         let href: String      // relative to the OPF directory
         let content: String   // full XHTML document
+        var properties: String? = nil                       // e.g. "nav" (EPUB3 TOC)
+        var mediaType: String = "application/xhtml+xml"     // e.g. NCX
     }
 
     struct SpineRef {
@@ -126,6 +128,7 @@ enum Fixture {
     /// — e.g. the images an image-only spine item references — into the archive.
     static func epub(manifest: [EPUBItem], spine: [SpineRef],
                      opfDir: String = "OEBPS", containerXML: String? = nil,
+                     spineTOC: String? = nil,
                      extraFiles: [String: Data] = [:]) throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ReaderTests-epub-\(UUID().uuidString)")
@@ -149,7 +152,8 @@ enum Fixture {
 
         // OPF: manifest (id→href) + spine (ordered idrefs, optional linear="no").
         let manifestXML = manifest.map {
-            "<item id=\"\($0.id)\" href=\"\($0.href)\" media-type=\"application/xhtml+xml\"/>"
+            let props = $0.properties.map { " properties=\"\($0)\"" } ?? ""
+            return "<item id=\"\($0.id)\" href=\"\($0.href)\" media-type=\"\($0.mediaType)\"\(props)/>"
         }.joined(separator: "\n")
         let spineXML = spine.map {
             "<itemref idref=\"\($0.idref)\"\($0.linear ? "" : " linear=\"no\"")/>"
@@ -158,7 +162,7 @@ enum Fixture {
         <?xml version="1.0"?>
         <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
           <manifest>\(manifestXML)</manifest>
-          <spine>\(spineXML)</spine>
+          <spine\(spineTOC.map { " toc=\"\($0)\"" } ?? "")>\(spineXML)</spine>
         </package>
         """
         let opfURL = root.appendingPathComponent(opfPath)
@@ -188,6 +192,35 @@ enum Fixture {
         let epubURL = uniqueURL(ext: "epub")
         try FileManager.default.zipItem(at: root, to: epubURL, shouldKeepParent: false)
         return epubURL
+    }
+
+    /// An EPUB3 nav document (`<nav epub:type="toc">`) listing (href, title) entries.
+    /// Titles are inserted raw, so tests can embed markup/entities in a label.
+    static func navDoc(_ entries: [(href: String, title: String)]) -> String {
+        let items = entries.map { "<li><a href=\"\($0.href)\">\($0.title)</a></li>" }.joined()
+        return """
+        <?xml version="1.0" encoding="utf-8"?>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">\
+        <head><title>TOC</title></head>\
+        <body><nav epub:type="toc"><ol>\(items)</ol></nav></body></html>
+        """
+    }
+
+    /// An EPUB2 NCX whose navMap lists (src, title) entries in order.
+    static func ncx(_ entries: [(src: String, title: String)]) -> String {
+        let points = entries.enumerated().map { i, e in
+            """
+            <navPoint id="np\(i)" playOrder="\(i + 1)">\
+            <navLabel><text>\(e.title)</text></navLabel>\
+            <content src="\(e.src)"/></navPoint>
+            """
+        }.joined()
+        return """
+        <?xml version="1.0" encoding="utf-8"?>
+        <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">\
+        <head/><docTitle><text>DOC_TITLE_DO_NOT_LEAK</text></docTitle>\
+        <navMap>\(points)</navMap></ncx>
+        """
     }
 
     /// Convenience: chapters c0…cN in declared order, spine matching, plain `<p>` bodies.

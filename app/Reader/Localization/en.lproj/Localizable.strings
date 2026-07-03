@@ -34,12 +34,17 @@
 "furigana.hide" = "Hide";
 "settings.section.theme" = "Theme";
 
+/* Settings — narration voice (subscriber-only section) */
+"settings.section.voice" = "Narration voice";
+"settings.voice.note" = "Changing the voice regenerates each chapter's audio on its next play.";
+
 /* Settings — storage: clear cached narration */
 "settings.section.storage" = "Storage";
 "settings.storage.clear" = "Clear cached audio";
 "settings.storage.clear.title" = "Clear cached audio?";
 "settings.storage.clear.body" = "Saved narration will be removed from this device. Chapters re-download when you play them again.";
 "theme.paper" = "Paper";
+"theme.white" = "White";
 "theme.sepia" = "Sepia";
 "theme.night" = "Night";
 
@@ -73,6 +78,10 @@
 "reader.chapters" = "Chapters";
 /* Fallback title for an untitled imported chapter; %d is the 1-based index. */
 "reader.chapterNumber.format" = "Chapter %d";
+/* Header subtitle for an untitled chapter; %1$d current, %2$d total. */
+"reader.chapterOfCount.format" = "Chapter %1$d of %2$d";
+/* Shown under the determinate progress bar while speech is generated. */
+"reader.generating" = "Generating audio…";
 
 /* Import (add text) */
 "import.failed.title" = "Import failed";
@@ -101,3 +110,5 @@
 "a11y.position" = "Playback position";
 "a11y.playWord" = "Play pronunciation";
 "a11y.audioCached" = "Audio downloaded";
+"a11y.speed" = "Playback speed";
+"a11y.voiceDemo" = "Play voice sample";

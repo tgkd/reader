@@ -17,18 +17,15 @@ struct LibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 22)
             if model.items.isEmpty {
                 emptyState
             } else {
-                // A plain List (chrome stripped to keep the custom row look) so each
-                // row gets native swipe-to-delete; the destructive action routes
-                // through a confirmation alert rather than deleting on the swipe.
+                // A plain List with its native row chrome (insets, separators,
+                // swipe-to-delete); the destructive action routes through a
+                // confirmation alert rather than deleting on the swipe.
                 List {
                     ForEach(model.items) { item in
                         row(item)
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
                             .listRowBackground(theme.bg)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) { pendingDelete = item } label: {
@@ -39,7 +36,6 @@ struct LibraryView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .environment(\.defaultMinListRowHeight, 0)
                 // Claim the remaining height explicitly. Without this the List sizes to
                 // its content inside the VStack and overflows the screen without
                 // scrolling once there are more rows than fit (was latent when the
@@ -113,83 +109,84 @@ struct LibraryView: View {
     /// Shown when no books have been imported yet (the default on a fresh install,
     /// now that the sample shelf is dev-only). Keeps first run from looking broken.
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Text(L10n.libraryEmptyTitle)
-                .font(Mincho.font(18)).foregroundStyle(theme.ink)
+        ContentUnavailableView {
+            Label(L10n.libraryEmptyTitle, systemImage: "books.vertical")
+        } description: {
             Text(L10n.libraryEmptyBody)
-                .font(.system(size: 13)).foregroundStyle(theme.muted)
-                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 40)
     }
 
+    /// Native large-title header with floating glass controls — a capsule cluster
+    /// (membership + settings) and a circular add button, the Apple Music idiom.
     private var header: some View {
-        HStack {
-            HStack(spacing: 9) {
-                RoundedRectangle(cornerRadius: 2).fill(theme.accent).frame(width: 9, height: 9)
-                Text(L10n.wordmark).font(Mincho.font(22)).foregroundStyle(theme.ink).tracking(3)
-            }
+        HStack(alignment: .center) {
+            Text(L10n.wordmark)
+                .font(.largeTitle.bold())
             Spacer()
             HStack(spacing: 10) {
-                IconButton(systemImage: "star.circle",
-                           foreground: theme.muted, label: L10n.a11yMembership) { app.showPaywall = true }
-                IconButton(systemImage: "gearshape",
-                           foreground: theme.muted, label: L10n.a11ySettings) { showingSettings = true }
-                IconButton(systemImage: "plus", font: .system(size: 18),
-                           foreground: theme.ink, label: L10n.a11yAdd) { importing = true }
+                HStack(spacing: 0) {
+                    chromeIcon("star.circle", label: L10n.a11yMembership) { app.showPaywall = true }
+                    chromeIcon("gearshape", label: L10n.a11ySettings) { showingSettings = true }
+                }
+                .glassEffect(.regular, in: Capsule())
+                Button { importing = true } label: {
+                    Image(systemName: "plus")
+                        .fontWeight(.semibold)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .accessibilityLabel(L10n.a11yAdd)
             }
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 18)
-        .padding(.bottom, 14)
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+    }
+
+    /// One icon in the header's glass cluster (plain button; the shared capsule
+    /// provides the glass).
+    private func chromeIcon(_ systemImage: String, label: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .accessibilityLabel(label)
     }
 
     private func row(_ item: LibraryModel.Item) -> some View {
         Button { app.open(item.document) } label: {
-            VStack(alignment: .leading, spacing: 13) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(item.document.title)
-                            .font(app.readingFont.font(19)).foregroundStyle(theme.ink).tracking(0.5)
-                        Text(item.document.author ?? "")
-                            .font(.system(size: 12.5)).foregroundStyle(theme.muted).tracking(0.5)
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.document.title)
+                        .font(.body).foregroundStyle(.primary).lineLimit(1)
+                    if let author = item.document.author, !author.isEmpty {
+                        Text(author)
+                            .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    Spacer(minLength: 12)
-                    HStack(spacing: 9) {
-                        if item.cached {
-                            Text("↓")
-                                .font(.system(size: 10)).foregroundStyle(theme.muted)
-                                .frame(width: 17, height: 17)
-                                .overlay(Circle().stroke(theme.muted, lineWidth: 1))
-                                .accessibilityLabel(L10n.a11yAudioCached)
-                        }
-                        Text(item.statusLabel)
-                            .font(.system(size: 11.5)).foregroundStyle(theme.muted).monospacedDigit()
+                    if item.document.progress.fraction > 0 {
+                        ProgressView(value: item.document.progress.fraction)
+                            .padding(.top, 2)
                     }
-                    .padding(.top, 3)
                 }
-                progressBar(item.document.progress.fraction)
+                Spacer(minLength: 8)
+                if item.cached {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityLabel(L10n.a11yAudioCached)
+                }
+                Text(item.statusLabel)
+                    .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                Image(systemName: "chevron.forward")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 18)
             .contentShape(Rectangle())
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(theme.hair).frame(height: 1)
-            }
         }
         .buttonStyle(.plain)
-    }
-
-    private func progressBar(_ fraction: Double) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(theme.soft)
-                Capsule().fill(theme.accent)
-                    .frame(width: max(0, geo.size.width * fraction))
-                    .opacity(fraction <= 0 ? 0 : 1)
-            }
-        }
-        .frame(height: 3)
+        .padding(.vertical, 4)
     }
 }

@@ -39,12 +39,15 @@ enum L10n {
     static var furiganaShow: String { String(localized: "furigana.show") }
     static var furiganaHide: String { String(localized: "furigana.hide") }
     static var settingsTheme: String { String(localized: "settings.section.theme") }
+    static var settingsVoice: String { String(localized: "settings.section.voice") }
+    static var settingsVoiceNote: String { String(localized: "settings.voice.note") }
     // Settings — storage: clear the on-disk narration cache.
     static var settingsStorage: String { String(localized: "settings.section.storage") }
     static var storageClear: String { String(localized: "settings.storage.clear") }
     static var storageClearTitle: String { String(localized: "settings.storage.clear.title") }
     static var storageClearBody: String { String(localized: "settings.storage.clear.body") }
     static var themePaper: String { String(localized: "theme.paper") }
+    static var themeWhite: String { String(localized: "theme.white") }
     static var themeSepia: String { String(localized: "theme.sepia") }
     static var themeNight: String { String(localized: "theme.night") }
 
@@ -70,6 +73,11 @@ enum L10n {
     static func chapterNumber(_ n: Int) -> String {
         String(format: String(localized: "reader.chapterNumber.format"), n)
     }
+    /// Header subtitle for an untitled chapter; %1$d current, %2$d total.
+    static func chapterOfCount(_ n: Int, _ count: Int) -> String {
+        String(format: String(localized: "reader.chapterOfCount.format"), n, count)
+    }
+    static var readerGenerating: String { String(localized: "reader.generating") }
 
     static var a11yMembership: String { String(localized: "a11y.membership") }
     static var a11ySettings: String { String(localized: "a11y.settings") }
@@ -106,4 +114,6 @@ enum L10n {
     static var a11yPosition: String { String(localized: "a11y.position") }
     static var a11yPlayWord: String { String(localized: "a11y.playWord") }
     static var a11yAudioCached: String { String(localized: "a11y.audioCached") }
+    static var a11ySpeed: String { String(localized: "a11y.speed") }
+    static var a11yVoiceDemo: String { String(localized: "a11y.voiceDemo") }
 }

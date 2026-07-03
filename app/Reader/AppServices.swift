@@ -42,17 +42,26 @@ final class AppServices {
         dictionary = sqlite ?? MockDictionaryService.seeded()
     }
 
+    /// The narration voice for synthesis and cache probes — the persisted Settings
+    /// pick, mirrored here by `AppModel`. Changing it drops the memoized
+    /// first-chapter keys so the Library's downloaded badges re-probe under the
+    /// new voice's cache keys.
+    var narrationVoice: Voice = .george {
+        didSet { if narrationVoice != oldValue { contentKeyCache.removeAll() } }
+    }
+
     /// First-chapter `ContentKey` per document, cached here (not in the view-owned
     /// `LibraryModel`, which a Library↔Reader route switch recreates — so its cache
     /// was cold on every return, re-hashing every book's first chapter on the main
-    /// actor). Survives route switches; invalidated on delete.
+    /// actor). Survives route switches; invalidated on delete and on voice change.
     private var contentKeyCache: [Document.ID: ContentKey] = [:]
 
     /// The audio cache key for a document's first chapter (the "is it downloaded?"
     /// probe), memoized across Library reappearances.
     func firstChapterKey(for document: Document) -> ContentKey {
         if let cached = contentKeyCache[document.id] { return cached }
-        let key = SynthesisRequest(text: document.chapters.first?.text ?? "").cacheKey
+        let key = SynthesisRequest(text: document.chapters.first?.text ?? "",
+                                   voice: narrationVoice).cacheKey
         contentKeyCache[document.id] = key
         return key
     }
@@ -87,10 +96,16 @@ final class AppServices {
     func purgeAudio(for document: Document) {
         for chapter in document.chapters {
             let normalized = Normalize.nfkc(chapter.text)
-            audioStore.remove(SynthesisRequest(text: normalized).cacheKey)
             let segments = Chunker.split(normalized)
-            if segments.count > 1 {
-                for segment in segments { audioStore.remove(SynthesisRequest(text: segment).cacheKey) }
+            // Sweep every catalog voice: the user may have listened to this book
+            // under a previous voice pick, whose entries live under other keys.
+            for voice in Voice.catalog {
+                audioStore.remove(SynthesisRequest(text: normalized, voice: voice).cacheKey)
+                if segments.count > 1 {
+                    for segment in segments {
+                        audioStore.remove(SynthesisRequest(text: segment, voice: voice).cacheKey)
+                    }
+                }
             }
         }
     }

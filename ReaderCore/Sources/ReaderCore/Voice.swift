@@ -17,6 +17,18 @@ public struct Voice: Identifiable, Codable, Equatable, Hashable {
     /// George — premade, free-tier API-usable; `multilingual_v2` speaks Japanese
     /// with any voice. The capture-spike default.
     public static let george = Voice(id: "JBFqnCBsd6RMkjVDRZzb", name: "George", isPremade: true)
+
+    /// The narration voices offered in Settings — curated ElevenLabs premade
+    /// voices (always API-usable; `multilingual_v2` speaks Japanese with any of
+    /// them). Edit this list to swap voices; the user's selection persists by
+    /// `id` and falls back to `george` if its voice leaves the catalog.
+    public static let catalog: [Voice] = [
+        george,
+        Voice(id: "9BWtsMINqrJLrRacOk9x", name: "Aria", isPremade: true),
+        Voice(id: "EXAVITQu4vr4xnSDxMaL", name: "Sarah", isPremade: true),
+        Voice(id: "nPczCjzI2devNBz1zQrb", name: "Brian", isPremade: true),
+        Voice(id: "pFZP5JQG7iQjIQuC4Bku", name: "Lily", isPremade: true),
+    ]
 }
 
 /// ElevenLabs synthesis model — the quality vs. cost/latency lever.

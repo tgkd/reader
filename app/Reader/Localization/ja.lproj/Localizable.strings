@@ -32,12 +32,17 @@
 "furigana.hide" = "非表示";
 "settings.section.theme" = "テーマ";
 
+/* 設定 — 朗読の声（サブスク限定セクション） */
+"settings.section.voice" = "朗読の声";
+"settings.voice.note" = "声を変更すると、次の再生時に各章の音声が再生成されます。";
+
 /* 設定 — ストレージ：保存した音声を削除 */
 "settings.section.storage" = "ストレージ";
 "settings.storage.clear" = "音声キャッシュを削除";
 "settings.storage.clear.title" = "音声キャッシュを削除しますか？";
 "settings.storage.clear.body" = "保存された音声がこの端末から削除されます。再生時に再ダウンロードされます。";
 "theme.paper" = "紙";
+"theme.white" = "白";
 "theme.sepia" = "セピア";
 "theme.night" = "夜";
 
@@ -71,6 +76,10 @@
 "reader.chapters" = "目次";
 /* タイトルのないインポート章のフォールバック名。%d は1始まりの番号。 */
 "reader.chapterNumber.format" = "第%d章";
+/* タイトルのない章のヘッダーサブタイトル。%1$d は現在、%2$d は総数。 */
+"reader.chapterOfCount.format" = "第%1$d章 / 全%2$d章";
+/* 音声生成中の進捗バーの下に表示。 */
+"reader.generating" = "音声を生成中…";
 
 /* インポート（テキスト追加） */
 "import.failed.title" = "読み込みに失敗しました";
@@ -99,3 +108,5 @@
 "a11y.position" = "再生位置";
 "a11y.playWord" = "発音を再生";
 "a11y.audioCached" = "音声ダウンロード済み";
+"a11y.speed" = "再生速度";
+"a11y.voiceDemo" = "声のサンプルを再生";

@@ -34,7 +34,7 @@ struct EPUBImporter: DocumentImporter {
         // recognizer is present. Non-subscribers skip them, so an image-only book
         // stays chapter-less and falls through to `.empty` below (unchanged behavior).
         let imagePaths: [String] = recognizer == nil ? [] : slots.flatMap { slot -> [String] in
-            if case .images(let p) = slot { return p }
+            if case .images(_, let p) = slot { return p }
             return []
         }
         var recognized: [String] = []
@@ -46,15 +46,15 @@ struct EPUBImporter: DocumentImporter {
         var ocrCursor = 0
         for slot in slots {
             switch slot {
-            case .text(let text):
-                chapters.append(Chapter(title: nil, text: text))
-            case .images(let images):
+            case .text(let title, let text):
+                chapters.append(Chapter(title: title, text: text))
+            case .images(let title, let images):
                 guard recognizer != nil else { continue }   // non-subscriber: no OCR
                 let text = recognized[ocrCursor..<ocrCursor + images.count]
                     .joined(separator: "\n")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 ocrCursor += images.count
-                if !text.isEmpty { chapters.append(Chapter(title: nil, text: text)) }
+                if !text.isEmpty { chapters.append(Chapter(title: title, text: text)) }
             }
         }
 
@@ -77,15 +77,15 @@ struct EPUBImporter: DocumentImporter {
         guard let archive = Archive(url: url, accessMode: .read),
               let slots = try? classify(archive) else { return 0 }
         return slots.reduce(0) { acc, slot in
-            if case .images(let p) = slot { return acc + p.count } else { return acc }
+            if case .images(_, let p) = slot { return acc + p.count } else { return acc }
         }
     }
 
     // MARK: - Classification
 
     /// A spine item's content: its extracted text, or the archive paths of the images
-    /// that stand in for its (image-only) text.
-    private enum Slot { case text(String); case images([String]) }
+    /// that stand in for its (image-only) text — plus its TOC title, when one exists.
+    private enum Slot { case text(title: String?, text: String); case images(title: String?, paths: [String]) }
 
     /// Walk the spine once: each item becomes `.text` (extractable text) or, when it has
     /// none but references images, `.images` (archive paths to OCR). Items with neither
@@ -94,23 +94,60 @@ struct EPUBImporter: DocumentImporter {
         let opfPath = try locateOPF(in: archive)
         let opf = try OPF.parse(data(at: opfPath, in: archive))
         let opfDir = (opfPath as NSString).deletingLastPathComponent
+        let titles = tocTitles(in: archive, opf: opf, opfDir: opfDir)
 
         var slots: [Slot] = []
         for idref in opf.spine {
             guard let href = opf.manifest[idref] else { continue }
             let path = resolve(href, relativeTo: opfDir)
             guard let xhtml = try? data(at: path, in: archive) else { continue }
+            let title = titles[path.lowercased()]
             let text = HTMLText.extract(xhtml)
-            if !text.isEmpty { slots.append(.text(text)); continue }
+            if !text.isEmpty { slots.append(.text(title: title, text: text)); continue }
             // No text — fold in any referenced images that actually exist in the archive,
             // resolved against THIS document's directory (not the OPF's).
             let itemDir = (path as NSString).deletingLastPathComponent
             let images = HTMLText.imageRefs(xhtml)
                 .map { resolve($0, relativeTo: itemDir) }
                 .filter { entry(for: $0, in: archive) != nil }
-            if !images.isEmpty { slots.append(.images(images)) }
+            if !images.isEmpty { slots.append(.images(title: title, paths: images)) }
         }
         return slots
+    }
+
+    // MARK: - Table of contents (chapter titles)
+
+    /// TOC title per resolved archive path, keys lowercased (mirrors the tolerant
+    /// `entry(for:in:)` lookup). EPUB3 nav document preferred, EPUB2 NCX fallback;
+    /// hrefs resolve relative to the TOC document's own directory with fragments
+    /// stripped, and the FIRST entry per file wins (the chapter-opening anchor).
+    /// A missing or unparsable TOC degrades to `[:]` — chapters stay untitled.
+    private func tocTitles(in archive: Archive, opf: OPF, opfDir: String) -> [String: String] {
+        var entries: [(href: String, title: String)] = []
+        var tocDir = ""
+        if let navHref = opf.navHref {
+            let path = resolve(navHref, relativeTo: opfDir)
+            if let bytes = try? data(at: path, in: archive) {
+                entries = NavTOC.entries(bytes)
+                tocDir = (path as NSString).deletingLastPathComponent
+            }
+        }
+        if entries.isEmpty, let ncxHref = opf.ncxHref {
+            let path = resolve(ncxHref, relativeTo: opfDir)
+            if let bytes = try? data(at: path, in: archive) {
+                entries = NCXParser.entries(bytes)
+                tocDir = (path as NSString).deletingLastPathComponent
+            }
+        }
+        var titles: [String: String] = [:]
+        for (href, title) in entries {
+            // Anchors into a file title the file's chapter — strip the fragment.
+            guard let file = href.split(separator: "#", maxSplits: 1).first.map(String.init),
+                  !file.isEmpty else { continue }
+            let key = resolve(file, relativeTo: tocDir).lowercased()
+            if titles[key] == nil { titles[key] = title }
+        }
+        return titles
     }
 
     // MARK: - OCR
@@ -226,6 +263,8 @@ private final class ContainerParser: NSObject, XMLParserDelegate {
 private struct OPF {
     let manifest: [String: String]   // id → href
     let spine: [String]              // idrefs, in reading order
+    let navHref: String?             // EPUB3 nav document (manifest item flagged properties~="nav")
+    let ncxHref: String?             // EPUB2 NCX (spine toc="…" idref → manifest)
 
     static func parse(_ data: Data) throws -> OPF {
         let p = OPFParser()
@@ -233,25 +272,129 @@ private struct OPF {
         parser.delegate = p
         guard parser.parse() else { throw ImportError.unreadable }
         guard !p.spine.isEmpty else { throw ImportError.empty }
-        return OPF(manifest: p.manifest, spine: p.spine)
+        return OPF(manifest: p.manifest, spine: p.spine,
+                   navHref: p.navHref, ncxHref: p.ncxID.flatMap { p.manifest[$0] })
     }
 }
 
 private final class OPFParser: NSObject, XMLParserDelegate {
     var manifest: [String: String] = [:]
     var spine: [String] = []
+    var navHref: String?
+    var ncxID: String?
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
                 qualifiedName qName: String?, attributes: [String: String]) {
         switch elementName.localName {
         case "item":
-            if let id = attributes["id"], let href = attributes["href"] { manifest[id] = href }
+            if let id = attributes["id"], let href = attributes["href"] {
+                manifest[id] = href
+                // The EPUB3 TOC document carries the space-separated property "nav".
+                if navHref == nil,
+                   attributes["properties"]?.lowercased().split(separator: " ").contains("nav") == true {
+                    navHref = href
+                }
+            }
         case "itemref":
             // Skip linear="no" auxiliary content (footnotes, cover, copyright) —
             // not part of the primary flow a sequential reader narrates.
             if let idref = attributes["idref"], attributes["linear"]?.lowercased() != "no" {
                 spine.append(idref)
             }
+        case "spine":
+            ncxID = attributes["toc"]
+        default:
+            break
+        }
+    }
+}
+
+// MARK: - TOC parsers (EPUB3 nav document / EPUB2 NCX)
+
+/// TOC entries from an EPUB3 nav document: (href, title) in document order.
+/// Regex-based like `HTMLText` — nav.xhtml is tag soup often enough in the wild
+/// that strict XML (reserved for container/OPF) would drop whole TOCs.
+private enum NavTOC {
+    static func entries(_ data: Data) -> [(href: String, title: String)] {
+        guard let s = JapaneseTextDecoder.decode(data) else { return [] }
+        // Isolate the toc nav; fall back to the first <nav> (some books drop the
+        // epub:type attribute — the spec requires exactly one toc nav anyway).
+        let block = s.range(of: "(?is)<nav\\b[^>]*epub:type\\s*=\\s*[\"'][^\"']*\\btoc\\b[^\"']*[\"'][^>]*>.*?</nav>",
+                            options: .regularExpression)
+            ?? s.range(of: "(?is)<nav\\b[^>]*>.*?</nav>", options: .regularExpression)
+        guard let block,
+              let re = try? NSRegularExpression(
+                pattern: "(?is)<a\\b[^>]*href\\s*=\\s*[\"']([^\"']*)[\"'][^>]*>(.*?)</a>") else { return [] }
+        let nav = String(s[block])
+        let ns = nav as NSString
+        var out: [(href: String, title: String)] = []
+        re.enumerateMatches(in: nav, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+            guard let m else { return }
+            let href = ns.substring(with: m.range(at: 1))
+            let title = HTMLText.decodeEntities(
+                ns.substring(with: m.range(at: 2))
+                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // A fragment-only href points inside the nav doc itself, not a chapter.
+            guard !title.isEmpty, !href.isEmpty, !href.hasPrefix("#") else { return }
+            out.append((href, title))
+        }
+        return out
+    }
+}
+
+/// navMap/navPoint entries from an EPUB2 NCX: (src, title) in document order
+/// (nested navPoints flatten depth-first). NCX is real XML, so `XMLParser` is
+/// exact here — mirrors `ContainerParser`. Parse failure → `[]`.
+private final class NCXParser: NSObject, XMLParserDelegate {
+    private var found: [(href: String, title: String)] = []
+    private var inNavMap = false
+    private var inNavLabel = false
+    private var labelText = ""
+    private var pendingTitle: String?
+
+    static func entries(_ data: Data) -> [(href: String, title: String)] {
+        let p = NCXParser()
+        let parser = XMLParser(data: data)
+        parser.delegate = p
+        guard parser.parse() else { return [] }
+        return p.found
+    }
+
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
+                qualifiedName qName: String?, attributes: [String: String]) {
+        switch elementName.localName {
+        case "navmap":
+            inNavMap = true
+        case "navlabel":
+            // Gate on navMap so <docTitle><text> never becomes a chapter title.
+            if inNavMap { inNavLabel = true; labelText = "" }
+        case "content":
+            // navLabel precedes content within a navPoint, so pairing sequentially
+            // preserves document order even across nested navPoints.
+            if inNavMap, let src = attributes["src"], !src.isEmpty, let title = pendingTitle {
+                found.append((src, title))
+                pendingTitle = nil
+            }
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if inNavLabel { labelText += string }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?,
+                qualifiedName qName: String?) {
+        switch elementName.localName {
+        case "navmap":
+            inNavMap = false
+        case "navlabel":
+            inNavLabel = false
+            let title = labelText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if inNavMap, !title.isEmpty { pendingTitle = title }
         default:
             break
         }
@@ -328,7 +471,8 @@ private enum HTMLText {
 
     /// Decode numeric (`&#38;` / `&#x26;`) and named entities in a single pass, so
     /// a decoded `&` is never rescanned (no `&amp;amp;` / `&#38;amp;` double-decode).
-    private static func decodeEntities(_ s: String) -> String {
+    /// Non-private: `NavTOC` reuses it for TOC labels.
+    static func decodeEntities(_ s: String) -> String {
         guard s.contains("&"),
               let re = try? NSRegularExpression(pattern: "&(#x[0-9A-Fa-f]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*);") else {
             return s
