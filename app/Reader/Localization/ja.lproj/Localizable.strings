@@ -36,6 +36,24 @@
 "settings.section.voice" = "朗読の声";
 "settings.voice.note" = "声を変更すると、次の再生時に各章の音声が再生成されます。";
 
+/* 設定 — メンバーシップの状態と管理 */
+"settings.section.membership" = "メンバーシップ";
+"membership.active" = "メンバーシップは有効です";
+"membership.manage" = "サブスクリプションを管理";
+
+/* このアプリについて — バージョン・リンク・データソース */
+"settings.about" = "このアプリについて";
+"about.version" = "バージョン";
+"about.description" = "読みは、単語ごとに同期するハイライト・ふりがな・タップ辞書で日本語の本を朗読するアプリです。";
+"about.section.links" = "リンク";
+"about.website" = "ウェブサイト";
+"about.terms" = "利用規約";
+"about.privacy" = "プライバシーポリシー";
+"about.contact" = "お問い合わせ";
+"about.section.sources" = "データソース";
+"about.sources.note" = "辞書データは電子辞書研究開発グループ（EDRDG）のJMdictをライセンスに従って使用しています。テキスト解析にはMeCabとIPADic辞書を使用しています。";
+"about.ai.note" = "朗読音声・スキャン文字認識・読み仮名はAIによる生成のため、誤りを含む場合があります。";
+
 /* 設定 — ストレージ：保存した音声を削除 */
 "settings.section.storage" = "ストレージ";
 "settings.storage.clear" = "音声キャッシュを削除";

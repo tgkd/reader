@@ -41,6 +41,24 @@ enum L10n {
     static var settingsTheme: String { String(localized: "settings.section.theme") }
     static var settingsVoice: String { String(localized: "settings.section.voice") }
     static var settingsVoiceNote: String { String(localized: "settings.voice.note") }
+
+    // Settings — membership status/management.
+    static var settingsMembership: String { String(localized: "settings.section.membership") }
+    static var membershipActive: String { String(localized: "membership.active") }
+    static var membershipManage: String { String(localized: "membership.manage") }
+
+    // About — version, product links, data-source attributions.
+    static var settingsAbout: String { String(localized: "settings.about") }
+    static var aboutVersion: String { String(localized: "about.version") }
+    static var aboutDescription: String { String(localized: "about.description") }
+    static var aboutLinks: String { String(localized: "about.section.links") }
+    static var aboutWebsite: String { String(localized: "about.website") }
+    static var aboutTerms: String { String(localized: "about.terms") }
+    static var aboutPrivacy: String { String(localized: "about.privacy") }
+    static var aboutContact: String { String(localized: "about.contact") }
+    static var aboutSources: String { String(localized: "about.section.sources") }
+    static var aboutSourcesNote: String { String(localized: "about.sources.note") }
+    static var aboutAINote: String { String(localized: "about.ai.note") }
     // Settings — storage: clear the on-disk narration cache.
     static var settingsStorage: String { String(localized: "settings.section.storage") }
     static var storageClear: String { String(localized: "settings.storage.clear") }

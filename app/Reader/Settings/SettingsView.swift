@@ -1,5 +1,8 @@
 import SwiftUI
 import ReaderCore
+import RevenueCat
+import RevenueCatUI
+import StoreKit
 
 /// Reading preferences, opened from the Library header gear. Currently the reading
 /// font + text size; both apply live to the reader surface and persist. Hosted in a
@@ -13,6 +16,9 @@ struct SettingsView: View {
     /// Gates the narration-voice section — a paid knob, hidden on the free tier.
     @State private var isSubscribed = false
     @State private var demo = VoiceDemoPlayer()
+    @State private var showingAbout = false
+    @State private var showingManageSubs = false
+    @State private var showingPaywall = false
 
     var body: some View {
         ScrollView {
@@ -69,14 +75,59 @@ struct SettingsView: View {
                         .padding(.horizontal, 24).padding(.top, 8)
                 }
 
+                sectionHeader(L10n.settingsMembership)
+                membershipBlock
+
                 sectionHeader(L10n.settingsStorage)
                 storageRow
+
+                aboutRow
             }
             .padding(.bottom, 24)
         }
         .onAppear { cacheBytes = app.services.audioStore.totalBytes() }
         .task { isSubscribed = await app.services.isSubscribed() }
         .onDisappear { demo.stop() }
+        .sheet(isPresented: $showingAbout) {
+            AboutView()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(theme.bg)
+        }
+        // Native App Store manage-subscription sheet (works against the local
+        // StoreKit config in dev builds).
+        .manageSubscriptionsSheet(isPresented: $showingManageSubs)
+        // Same guarded paywall as RootView — `PaywallView` fatalErrors if
+        // RevenueCat was never configured, so a misconfigured build must not crash.
+        .sheet(isPresented: $showingPaywall) {
+            if Purchases.isConfigured {
+                PaywallView(displayCloseButton: true)
+                    .onPurchaseCompleted { _ in
+                        app.entitlementTick += 1
+                        showingPaywall = false
+                    }
+                    .onRestoreCompleted { _ in
+                        app.entitlementTick += 1
+                        showingPaywall = false
+                    }
+            } else {
+                VStack(spacing: 16) {
+                    Text(L10n.membershipUnavailable)
+                        .font(.system(size: 15)).foregroundStyle(theme.ink)
+                        .multilineTextAlignment(.center)
+                    Button(L10n.commonOK) { showingPaywall = false }
+                        .foregroundStyle(theme.accent)
+                }
+                .padding(40)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(theme.bg.ignoresSafeArea())
+            }
+        }
+        // A purchase/restore just completed — flip the membership block (and the
+        // voice section's gate) live.
+        .onChange(of: app.entitlementTick) { _, _ in
+            Task { isSubscribed = await app.services.isSubscribed() }
+        }
         .alert(L10n.storageClearTitle, isPresented: $showClearConfirm) {
             Button(L10n.storageClear, role: .destructive) {
                 app.services.audioStore.clear()
@@ -148,6 +199,63 @@ struct SettingsView: View {
             .accessibilityLabel(L10n.a11yVoiceDemo)
         }
         .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 24)
+        }
+    }
+
+    /// Membership block: active status + the native manage sheet for subscribers,
+    /// the paywall entry for everyone else (the Library upsell star hides once
+    /// subscribed, so this is the durable home for membership).
+    @ViewBuilder private var membershipBlock: some View {
+        if isSubscribed {
+            HStack {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 15)).foregroundStyle(theme.accent)
+                Text(L10n.membershipActive).font(.system(size: 16)).foregroundStyle(theme.ink)
+                Spacer(minLength: 12)
+            }
+            .padding(.horizontal, 24).padding(.vertical, 15)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 24)
+            }
+            actionRow(L10n.membershipManage) { showingManageSubs = true }
+        } else {
+            actionRow(L10n.readerSubscribeCTA) { showingPaywall = true }
+        }
+    }
+
+    private func actionRow(_ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(label).font(.system(size: 16)).foregroundStyle(theme.accent)
+                Spacer(minLength: 12)
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.muted)
+            }
+            .padding(.horizontal, 24).padding(.vertical, 15)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 24)
+        }
+    }
+
+    /// Version, product links, and data-source attributions live one level down.
+    private var aboutRow: some View {
+        Button { showingAbout = true } label: {
+            HStack {
+                Text(L10n.settingsAbout).font(.system(size: 16)).foregroundStyle(theme.ink)
+                Spacer(minLength: 12)
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.muted)
+            }
+            .padding(.horizontal, 24).padding(.vertical, 15)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 24)
+        .overlay(alignment: .top) {
             Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 24)
         }
     }

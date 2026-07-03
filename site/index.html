@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yomi — Read Japanese with word-synced narration</title>
+    <meta name="description" content="Yomi (読み) is an iOS reader for Japanese books: word-synced AI narration, furigana, tap-to-define, vertical text, and scanned-book OCR.">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #36312a;
+            background: #f4f1e9;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 1rem;
+        }
+
+        .container { max-width: 640px; margin: 0 auto; text-align: center; }
+
+        .logo {
+            width: 120px; height: 120px;
+            margin: 0 auto 1.5rem;
+            background: #fbf8f1;
+            border: 1px solid rgba(54, 49, 42, 0.12);
+            border-radius: 28px;
+            display: flex; align-items: center; justify-content: center;
+            font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+            font-size: 3.2rem;
+            position: relative;
+        }
+        .logo .dot {
+            position: absolute; top: 22px; right: 22px;
+            width: 12px; height: 12px; border-radius: 3px;
+            background: #b05c40;
+        }
+
+        h1 {
+            font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+            font-size: 3rem; font-weight: 600; letter-spacing: 0.08em;
+        }
+        .latin { color: #a59c8d; font-size: 1.1rem; letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 1.2rem; }
+        .subtitle { color: #5d564b; font-size: 1.15rem; margin-bottom: 2.2rem; }
+
+        .features {
+            text-align: left;
+            background: #fbf8f1;
+            border: 1px solid rgba(54, 49, 42, 0.12);
+            border-radius: 16px;
+            padding: 1.6rem 1.8rem;
+            margin-bottom: 1.5rem;
+        }
+        .features li {
+            list-style: none; margin: 0.55rem 0; padding-left: 1.4rem; position: relative;
+            color: #4a443b;
+        }
+        .features li::before { content: "•"; color: #b05c40; position: absolute; left: 0.2rem; }
+
+        .note {
+            font-size: 0.85rem; color: #857c6d;
+            background: rgba(54, 49, 42, 0.05);
+            border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 1.5rem;
+            text-align: left;
+        }
+        .note strong { color: #5d564b; }
+        .note a { color: #b05c40; text-decoration: none; }
+        .note a:hover { text-decoration: underline; }
+
+        .coming { font-size: 0.95rem; color: #857c6d; margin-bottom: 2rem; }
+
+        .links { color: #a59c8d; font-size: 0.9rem; }
+        .links a { color: #b05c40; text-decoration: none; margin: 0 0.5rem; }
+        .links a:hover { text-decoration: underline; }
+
+        @media (max-width: 768px) {
+            h1 { font-size: 2.2rem; }
+            .logo { width: 96px; height: 96px; font-size: 2.6rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">読<span class="dot"></span></div>
+        <h1>読み</h1>
+        <p class="latin">Yomi</p>
+        <p class="subtitle">Read Japanese books with word-synced narration.</p>
+
+        <ul class="features">
+            <li>AI narration with a moving word-by-word highlight, in sync with the text</li>
+            <li>Furigana above kanji and tap-to-define for every word</li>
+            <li>Vertical (縦書き) and horizontal (横書き) text, four reading themes</li>
+            <li>Import your own EPUB, PDF, and TXT books — scanned books via AI text recognition</li>
+            <li>Listen anywhere: background playback with lock-screen controls</li>
+        </ul>
+
+        <div class="note">
+            <strong>Data sources & AI.</strong> Dictionary entries use
+            <a href="https://www.edrdg.org/jmdict/j_jmdict.html">JMdict</a>, property of the
+            <a href="https://www.edrdg.org/">Electronic Dictionary Research and Development Group</a>,
+            used under its licence. Text analysis uses MeCab with the IPADic dictionary.
+            Narration, scanned-text recognition, and readings are AI-generated and may contain
+            mistakes — see the <a href="/terms">Terms</a>.
+        </div>
+
+        <p class="coming">Coming soon to the App Store.</p>
+
+        <p class="links">
+            <a href="/terms">Terms &amp; Conditions</a> ·
+            <a href="/privacy">Privacy Policy</a> ·
+            <a href="mailto:jisho_ai@proton.me">Contact</a>
+        </p>
+    </div>
+</body>
+</html>

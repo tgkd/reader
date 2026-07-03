@@ -38,6 +38,24 @@
 "settings.section.voice" = "Narration voice";
 "settings.voice.note" = "Changing the voice regenerates each chapter's audio on its next play.";
 
+/* Settings — membership status/management */
+"settings.section.membership" = "Membership";
+"membership.active" = "Membership is active";
+"membership.manage" = "Manage subscription";
+
+/* About — version, product links, data-source attributions */
+"settings.about" = "About";
+"about.version" = "Version";
+"about.description" = "Yomi reads Japanese books aloud with word-synced highlighting, furigana, and tap-to-define.";
+"about.section.links" = "Links";
+"about.website" = "Website";
+"about.terms" = "Terms & Conditions";
+"about.privacy" = "Privacy Policy";
+"about.contact" = "Contact";
+"about.section.sources" = "Data sources";
+"about.sources.note" = "Dictionary data from JMdict, property of the Electronic Dictionary Research and Development Group, used in conformance with the Group's licence. Text analysis uses MeCab with the IPADic dictionary.";
+"about.ai.note" = "Narration, scanned-text recognition, and readings are AI-generated and may contain mistakes.";
+
 /* Settings — storage: clear cached narration */
 "settings.section.storage" = "Storage";
 "settings.storage.clear" = "Clear cached audio";

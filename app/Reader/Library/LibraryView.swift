@@ -13,6 +13,10 @@ struct LibraryView: View {
     @State private var showingSettings = false
     /// Row the user swiped to delete, pending the confirmation alert.
     @State private var pendingDelete: LibraryModel.Item?
+    /// Hides the membership (paywall) button once subscribed — it's purely an
+    /// upsell entry; a lapsed or reinstalled user sees it again (and Restore
+    /// lives on the paywall it opens).
+    @State private var isSubscribed = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,6 +50,11 @@ struct LibraryView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
             model.load(app.services)
+        }
+        .task { isSubscribed = await app.services.isSubscribed() }
+        // A purchase/restore just completed — drop the upsell button live.
+        .onChange(of: app.entitlementTick) { _, _ in
+            Task { isSubscribed = await app.services.isSubscribed() }
         }
         // The shelf changed (an import finished, possibly while the user was in the
         // reader) — reload so the new book appears without waiting for the next appear.
@@ -126,7 +135,9 @@ struct LibraryView: View {
             Spacer()
             HStack(spacing: 10) {
                 HStack(spacing: 0) {
-                    chromeIcon("star.circle", label: L10n.a11yMembership) { app.showPaywall = true }
+                    if !isSubscribed {
+                        chromeIcon("star.circle", label: L10n.a11yMembership) { app.showPaywall = true }
+                    }
                     chromeIcon("gearshape", label: L10n.a11ySettings) { showingSettings = true }
                 }
                 .glassEffect(.regular, in: Capsule())

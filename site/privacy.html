@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy — Yomi</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', Roboto, sans-serif;
+            line-height: 1.6; color: #36312a; background: #f4f1e9; padding: 2rem 1rem;
+        }
+        .container {
+            max-width: 800px; margin: 0 auto; padding: 3rem 2.5rem;
+            background: #fbf8f1; border: 1px solid rgba(54, 49, 42, 0.12); border-radius: 16px;
+        }
+        h1 { font-size: 2.3rem; font-weight: 700; margin-bottom: 0.3rem; }
+        h2 { font-size: 1.5rem; font-weight: 600; color: #4a443b; margin: 2rem 0 0.6rem; }
+        p, li { color: #5d564b; margin-bottom: 0.9rem; }
+        ul { margin-bottom: 1rem; padding-left: 1.6rem; }
+        li { margin-bottom: 0.3rem; }
+        a { color: #b05c40; }
+        .last-updated { color: #a59c8d; font-size: 0.9rem; margin-bottom: 2rem; }
+        .home { display: inline-block; margin-bottom: 1.2rem; text-decoration: none; font-size: 0.9rem; }
+        hr { border: none; border-top: 1px solid rgba(54, 49, 42, 0.12); margin: 2.5rem 0 1.2rem; }
+        .fine { color: #a59c8d; font-size: 0.85rem; }
+        @media (max-width: 768px) {
+            .container { padding: 2rem 1.4rem; }
+            h1 { font-size: 1.8rem; }
+            h2 { font-size: 1.3rem; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="home" href="/">← Yomi</a>
+    <h1>Privacy Policy</h1>
+    <p class="last-updated">Effective as of 2026-07-03</p>
+
+    <p>This policy describes what data the Yomi (読み) iOS application handles and where
+    it goes. The short version: your books live on your device, there are no accounts, no
+    ads, and no analytics — and text leaves your device only when you ask for a paid AI
+    feature.</p>
+
+    <h2>What We Do Not Collect</h2>
+    <ul>
+        <li>No user accounts, names, email addresses, or profiles.</li>
+        <li>No advertising identifiers or third-party ad SDKs.</li>
+        <li>No analytics or behavioral tracking.</li>
+        <li>No location data.</li>
+    </ul>
+
+    <h2>Your Books</h2>
+    <p>Books you import (EPUB, PDF, TXT) are stored locally on your device. Reading them —
+    including furigana and dictionary lookups, which are computed on-device — sends
+    nothing anywhere. Deleting a book removes it and its generated audio from your
+    device.</p>
+
+    <h2>Processing for Paid AI Features</h2>
+    <p>Two features send parts of your content off the device, and only when you
+    explicitly request them:</p>
+    <ul>
+        <li><strong>Speech generation:</strong> when you press Play on a chapter without
+            generated audio, that chapter's text is sent through our proxy server
+            (Cloudflare) to ElevenLabs to synthesize narration.</li>
+        <li><strong>AI text recognition:</strong> when you confirm reading a scanned or
+            image-only book, its page images are sent through our proxy server to Google
+            (Gemini) to recover the text.</li>
+    </ul>
+    <p>This content is processed to produce the result and returned to your device, where
+    it is stored (generated audio is cached locally and can be cleared in Settings). We do
+    not build a library of your content on our servers. The third-party providers process
+    the data under their own terms:
+    <a href="https://elevenlabs.io/privacy">ElevenLabs</a>,
+    <a href="https://policies.google.com/privacy">Google</a>,
+    <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare</a>.</p>
+
+    <h2>Subscription Data</h2>
+    <p>Subscriptions are processed by Apple and managed through
+    <a href="https://www.revenuecat.com/privacy">RevenueCat</a>, which assigns an
+    anonymous identifier to your installation and stores your purchase and entitlement
+    state. That anonymous identifier accompanies paid requests to our proxy server so it
+    can verify an active subscription; the verification result is cached server-side. We
+    never see your payment details — Apple handles billing.</p>
+
+    <h2>Data Retention</h2>
+    <ul>
+        <li>Books, generated audio, and preferences: on your device, until you delete
+            them or the app.</li>
+        <li>Text and images sent for AI processing: processed transiently; not retained
+            as content on our servers (providers' own retention policies apply, per
+            their links above).</li>
+        <li>Subscription state: retained by RevenueCat/Apple per their policies; our
+            server keeps only a short-lived verification cache keyed by the anonymous
+            identifier.</li>
+    </ul>
+
+    <h2>Children</h2>
+    <p>The app is not directed at children under 13, and we do not knowingly collect
+    personal information from children.</p>
+
+    <h2>Security</h2>
+    <p>All network communication uses HTTPS. Paid requests are authorized against your
+    anonymous subscription identifier server-side; API keys for AI providers never leave
+    our servers.</p>
+
+    <h2>Changes to This Policy</h2>
+    <p>We may update this policy from time to time. The current version is always
+    available at this page; the effective date above reflects the latest revision.</p>
+
+    <h2>Your Consent</h2>
+    <p>By using the app, you consent to this policy. Questions or requests:
+    <a href="mailto:jisho_ai@proton.me">jisho_ai@proton.me</a></p>
+
+    <hr>
+    <p class="fine">Yomi (読み) — <a href="/">yomi.thetango.org</a> ·
+    <a href="/terms">Terms &amp; Conditions</a></p>
+</div>
+</body>
+</html>
