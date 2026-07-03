@@ -71,10 +71,11 @@ check "04-define.png — headword, reading, senses, example sentence"
 swipe 201 980 201 1700; sleep 1   # dismiss sheet
 
 # 5. Themes ------------------------------------------------------------------------
-echo "[5] Themes — cycle paper → sepia → night"
+echo "[5] Themes — cycle paper → white → sepia → night"
 tap_label "Theme"; sleep 1; shot 05a-theme.png
 tap_label "Theme"; sleep 1; shot 05b-theme.png
-check "05a/05b — ALL text legible in every theme (night = light text on dark, not black-on-black)"
+tap_label "Theme"; sleep 1; shot 05c-theme.png
+check "05a/05b/05c — ALL text legible in every theme (night = light text on dark, not black-on-black)"
 
 # 6. Orientation -------------------------------------------------------------------
 echo "[6] Orientation — toggle tategaki/yokogaki"

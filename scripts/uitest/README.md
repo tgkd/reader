@@ -72,7 +72,7 @@ steps need a human/vision look at the screenshot:
    🔎 word-synced highlight advances across two frames (03a vs 03b).
 4. **Tap-to-define** — ✅ tapping a word opens the sheet, pronounce doesn't crash ·
    🔎 headword / reading / senses / example.
-5. **Themes** — 🔎 paper · sepia · night all render **all** text legibly
+5. **Themes** — 🔎 paper · white · sepia · night all render **all** text legibly
    (night regression guard: must be light-on-dark, never black-on-black).
 6. **Orientation** — 🔎 tategaki ⇄ yokogaki flip keeps furigana + highlight correct.
 
