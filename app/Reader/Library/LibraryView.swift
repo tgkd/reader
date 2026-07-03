@@ -29,8 +29,11 @@ struct LibraryView: View {
                 // confirmation alert rather than deleting on the swipe.
                 List {
                     ForEach(model.items) { item in
+                        // Clear, not theme.bg: RootView already paints the themed
+                        // background, and an opaque row slices the glass header's
+                        // soft shadow with a hard edge where the list begins.
                         row(item)
-                            .listRowBackground(theme.bg)
+                            .listRowBackground(Color.clear)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) { pendingDelete = item } label: {
                                     Label(L10n.libraryDelete, systemImage: "trash")
@@ -144,9 +147,12 @@ struct LibraryView: View {
                 Button { importing = true } label: {
                     Image(systemName: "plus")
                         .fontWeight(.semibold)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                .glassEffect(.regular.interactive(), in: Circle())
                 .accessibilityLabel(L10n.a11yAdd)
             }
         }

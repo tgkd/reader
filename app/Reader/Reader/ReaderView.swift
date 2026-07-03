@@ -14,14 +14,16 @@ struct ReaderView: View {
     @State private var model: ReaderModel?
 
     var body: some View {
-        ZStack {
-            theme.bg.ignoresSafeArea()
-            if let model {
-                surface(model)
-                VStack(spacing: 0) { topBar(model); Spacer() }
-                VStack(spacing: 0) { Spacer(); transport(model) }
-            } else {
-                ProgressView().tint(theme.muted)
+        GeometryReader { geo in
+            ZStack {
+                theme.bg.ignoresSafeArea()
+                if let model {
+                    surface(model, safeArea: geo.safeAreaInsets)
+                    VStack(spacing: 0) { topBar(model); Spacer() }
+                    VStack(spacing: 0) { Spacer(); transport(model) }
+                } else {
+                    ProgressView().tint(theme.muted)
+                }
             }
         }
         // Native bottom sheets — the system provides the grabber, dim, rounded
@@ -73,7 +75,7 @@ struct ReaderView: View {
 
     // MARK: - Reading surface
 
-    @ViewBuilder private func surface(_ model: ReaderModel) -> some View {
+    @ViewBuilder private func surface(_ model: ReaderModel, safeArea: EdgeInsets) -> some View {
         Group {
             switch model.loadState {
             case .loading:
@@ -88,8 +90,8 @@ struct ReaderView: View {
                     fontName: app.readingFont.psName,
                     fontScale: app.readingSize.scale,
                     showFurigana: app.showFurigana,
-                    topInset: 64,
-                    bottomInset: 88,
+                    topInset: 64 + safeArea.top,
+                    bottomInset: 88 + safeArea.bottom,
                     onTapToken: { model.tapToken($0) },
                     onTapBackground: { model.toggleChrome() }
                 )
@@ -98,10 +100,12 @@ struct ReaderView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Full-bleed on every side: the chrome floats (glass, no bars), so the
-        // clearance for it lives INSIDE the scroll view as content insets
-        // (`topInset`/`bottomInset` above) — text starts clear of the pills but
-        // scrolls under them, giving the glass something to blur.
+        .ignoresSafeArea()
+        // Full-bleed to the PHYSICAL screen edges (mid-scroll text runs under the
+        // status bar and home indicator), so the chrome clearance — content insets
+        // in yokogaki, the column band in tategaki — must include the safe area:
+        // at rest the first/last line still clears the floating pills, but the
+        // text scrolls under them, giving the glass something to blur.
     }
 
     private func placeholder(_ title: String, _ subtitle: String) -> some View {
@@ -126,9 +130,12 @@ struct ReaderView: View {
             Button { app.backToLibrary() } label: {
                 Image(systemName: "chevron.backward")
                     .fontWeight(.semibold)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .glassEffect(.regular.interactive(), in: Circle())
             .accessibilityLabel(L10n.a11yBack)
 
             Spacer(minLength: 6)

@@ -104,6 +104,10 @@ final class RubyScrollView: UIScrollView {
                    ink: UIColor, hi: UIColor, hiInk: UIColor) {
         let orientationChanged = (self.vertical != vertical)
         self.vertical = vertical
+        // Always draggable along the reading axis (cross axis stays locked), so a
+        // short chapter can still be pulled out from under the floating chrome.
+        alwaysBounceVertical = !vertical
+        alwaysBounceHorizontal = vertical
         let insetsChanged = (chromeTop != topInset || chromeBottom != bottomInset)
         chromeTop = topInset
         chromeBottom = bottomInset
