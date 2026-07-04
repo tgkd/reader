@@ -194,6 +194,14 @@ screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 Simulator
 - **Local purchase testing:** `Reader.storekit` is wired into the scheme (run from Xcode, no sandbox
   account needed). The paywall is crash-guarded when RevenueCat is unconfigured. `test_…` RevenueCat
   keys are skipped on physical devices (they crash against real StoreKit). See `docs/testflight.md`.
+- **Xcode Cloud:** `app/ci_scripts/ci_post_clone.sh` (+ root `ci_scripts/` delegate) rebuilds what a
+  clean checkout lacks: downloads `jisho-compact.db` from the public `compact-dict` GitHub release
+  (refresh after regenerating: `gh release upload compact-dict app/Reader/Resources/jisho-compact.db
+  --clobber -R tgkd/reader`), writes `Signing.xcconfig` from workflow env vars (`READER_TEAM_ID`,
+  `READER_WORKER_HOST`, `READER_REVENUECAT_KEY`), runs `xcodegen generate`, and copies the tracked
+  `app/Package.resolved` into the generated project (Xcode Cloud disables automatic SPM resolution —
+  refresh the copy when pins change). Set the workflow's Xcode version to a release 26.x. No
+  `GITHUB_TOKEN` needed — repo and release assets are public.
 
 ## Layout
 
