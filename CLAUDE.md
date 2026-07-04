@@ -201,7 +201,11 @@ screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 Simulator
   `READER_WORKER_HOST`, `READER_REVENUECAT_KEY`), runs `xcodegen generate`, and copies the tracked
   `app/Package.resolved` into the generated project (Xcode Cloud disables automatic SPM resolution —
   refresh the copy when pins change). Set the workflow's Xcode version to a release 26.x. No
-  `GITHUB_TOKEN` needed — repo and release assets are public.
+  `GITHUB_TOKEN` needed — repo and release assets are public. Workflow env vars `READER_TEAM_ID` /
+  `READER_WORKER_HOST` / `READER_REVENUECAT_KEY` supply the real `Signing.xcconfig` values.
+  **Build numbers are Xcode Cloud-managed**: the workflow's "next build number" was set to 25
+  (2026-07-04, above all prior manual TestFlight uploads) and auto-increments per run — don't
+  set `CFBundleVersion` for cloud builds.
 
 ## Layout
 
