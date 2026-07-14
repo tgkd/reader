@@ -18,3 +18,9 @@ app/Reader/Resources/jisho-compact.db
 
 # Local signing (Team ID) — copy from app/Signing.xcconfig.example
 app/Signing.xcconfig
+
+# App Store screenshot generator (raw captures + Vite project)
+appstore-screenshots/
+
+# wrangler local state (from site deploys)
+.wrangler/
