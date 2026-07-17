@@ -126,6 +126,7 @@ enum L10n {
     static var importEmpty: String { String(localized: "import.empty") }
     static var importOCRFailed: String { String(localized: "import.ocrFailed") }
     static var importOCRUnavailable: String { String(localized: "import.ocrUnavailable") }
+    static var importPasswordProtected: String { String(localized: "import.passwordProtected") }
     /// Determinate OCR progress while importing a scanned PDF; %1$d / %2$d.
     static func importRecognizing(_ done: Int, _ total: Int) -> String {
         String(format: String(localized: "import.recognizing.format"), done, total)

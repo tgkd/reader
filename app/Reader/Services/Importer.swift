@@ -2,20 +2,22 @@ import Foundation
 import ReaderCore
 
 /// Why an import failed — surfaced to the user as a short message.
-enum ImportError: LocalizedError {
+enum ImportError: LocalizedError, Equatable {
     case unsupported
     case unreadable
     case empty
     case ocrFailed
     case ocrUnavailable
+    case passwordProtected
 
     var errorDescription: String? {
         switch self {
-        case .unsupported:    return L10n.importUnsupported
-        case .unreadable:     return L10n.importUnreadable
-        case .empty:          return L10n.importEmpty
-        case .ocrFailed:      return L10n.importOCRFailed
-        case .ocrUnavailable: return L10n.importOCRUnavailable
+        case .unsupported:       return L10n.importUnsupported
+        case .unreadable:        return L10n.importUnreadable
+        case .empty:             return L10n.importEmpty
+        case .ocrFailed:         return L10n.importOCRFailed
+        case .ocrUnavailable:    return L10n.importOCRUnavailable
+        case .passwordProtected: return L10n.importPasswordProtected
         }
     }
 }

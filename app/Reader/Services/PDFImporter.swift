@@ -28,6 +28,10 @@ struct PDFImporter: DocumentImporter {
 
     func chapters() async throws -> [Chapter] {
         guard let doc = PDFDocument(url: url) else { throw ImportError.unreadable }
+        // A password-protected PDF exposes no text and renders blank pages — it
+        // would otherwise classify as "scanned", misleading the user toward (or
+        // billing them for) OCR of locked pages. Surface the real reason instead.
+        if doc.isLocked { throw ImportError.passwordProtected }
 
         // Pass 1 (cheap, no rasterization): classify each page as text-layer or OCR.
         var slots: [Slot] = []
@@ -94,7 +98,9 @@ struct PDFImporter: DocumentImporter {
     /// (scanned / image-only). Cheap: classifies without rasterizing. Drives the import
     /// confirm prompt; mirrors `EPUBImporter.ocrCandidateCount`.
     func ocrCandidateCount() -> Int {
-        guard let doc = PDFDocument(url: url) else { return 0 }
+        // Locked pages are not OCR candidates: 0 keeps the import flow on the
+        // passwordProtected error instead of offering a doomed (billed) OCR pass.
+        guard let doc = PDFDocument(url: url), !doc.isLocked else { return 0 }
         var count = 0
         for i in 0..<doc.pageCount {
             guard let page = doc.page(at: i) else { continue }

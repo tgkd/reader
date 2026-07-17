@@ -65,10 +65,14 @@ final class ReaderModel {
     /// Bridges `AVAudioPlayer`'s completion callback (which fires even backgrounded,
     /// when the display link is dead) back to the model.
     private var audioDelegate: PlayerDelegate?
-    /// Token for the audio-session interruption observer, removed on deinit.
-    /// `nonisolated(unsafe)`: written once in `init`, read once in the nonisolated
-    /// `deinit` — no concurrent access.
+    /// Tokens for the audio-session interruption + route-change observers, removed
+    /// on deinit. `nonisolated(unsafe)`: written once in `init`, read once in the
+    /// nonisolated `deinit` — no concurrent access.
     nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var routeChangeObserver: NSObjectProtocol?
+    /// Whether the user was actually playing when an interruption began — so
+    /// `.ended` + `.shouldResume` never un-pauses a manually paused reader.
+    private var wasPlayingBeforeInterruption = false
     private var isSwitchingChapter = false
     /// Bumped at the top of every `load()`. A load that finds itself superseded
     /// (a newer chapter switch, or the view torn down) after its `await` bails
@@ -87,6 +91,13 @@ final class ReaderModel {
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
             MainActor.assumeIsolated { self?.handleInterruption(note) }
+        }
+        // Pause when the output route disappears (headphones out / BT drop) —
+        // the notification arrives on a secondary thread; the main queue hops it.
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated { self?.handleRouteChange(note) }
         }
         // Remote (lock-screen) commands route through the same transport methods
         // as the in-app controls, so Now Playing state stays consistent for free.
@@ -110,6 +121,7 @@ final class ReaderModel {
     deinit {
         link.stop()
         if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
+        if let routeChangeObserver { NotificationCenter.default.removeObserver(routeChangeObserver) }
     }
 
     var spans: [TokenSpan] { timeline.spans }
@@ -141,18 +153,18 @@ final class ReaderModel {
         loadState = .loading
         link.onTick = { [weak self] in MainActor.assumeIsolated { self?.tick() } }
 
-        guard let tokenizer = services.tokenizer else {
-            loadState = .failed(L10n.readerFailedTokenizer); return
-        }
-
         // Render the text for EVERYONE: tokenize the chapter and show it with
         // furigana + tap-to-define, no audio required. Speech generation is the only
         // gated feature, so the reading surface is always available — even offline /
         // unsubscribed. The word-synced highlight simply stays absent until audio is
-        // loaded.
+        // loaded. Tokenization (and the first-use IPADic load) runs on the worker
+        // actor so the route transition never janks the main thread.
         let text = currentChapter?.text ?? ""
-        let tokens = tokenizer.tokenize(text)
+        let tokens = await services.tokenizerWorker.tokenize(text)
         guard gen == loadGeneration, !Task.isCancelled else { return }
+        guard let tokens else {
+            loadState = .failed(L10n.readerFailedTokenizer); return
+        }
         setTimeline(SpanTimeline(untimedTokens: tokens))
         loadState = .ready
 
@@ -165,18 +177,26 @@ final class ReaderModel {
 
         // Already-paid local audio: load it eagerly (no network) so a re-read gets
         // the word-synced highlight immediately and resumes where it stopped.
-        if subscribed,
-           let cached = services.audioStore.load(
-               SynthesisRequest(text: text, voice: services.narrationVoice).cacheKey),
-           buildPlayback(from: cached, gen: gen) {
-            audioState = .ready
+        if subscribed {
+            let key = SynthesisRequest(text: text, voice: services.narrationVoice).cacheKey
+            if let cached = services.audioStore.load(key),
+               await buildPlayback(from: cached, gen: gen) {
+                audioState = .ready
+            } else if services.synthesis.isSynthesizing(key) {
+                // A synthesis this user already started (and is paying for) is
+                // still running — the user left mid-generation and came back.
+                // Re-attach: show progress and play when it lands, exactly as if
+                // they had never left.
+                startAudio()
+            }
         }
-
     }
 
     /// Launch synthesis+play as the model-held `playbackTask` so leaving the reader
-    /// (`stop()`) can cancel it — preventing an orphaned synthesis from starting
-    /// playback after teardown, or a reopen from running a duplicate paid synthesis.
+    /// (`stop()`) can cancel the *awaiting/playing* side — preventing an orphaned
+    /// completion from starting playback after teardown. The network request itself
+    /// belongs to `SynthesisCoordinator` and survives this task's cancellation; a
+    /// reopen re-attaches to it instead of running a duplicate paid synthesis.
     func startAudio() {
         playbackTask?.cancel()
         playbackTask = Task { [weak self] in await self?.requestAudioAndPlay() }
@@ -193,7 +213,21 @@ final class ReaderModel {
         }
         synthesisProgress = 0   // a cache hit never animates; a miss restarts from empty
         audioState = .synthesizing
+        // The progress bar is the only sign a paid request is running — pin the
+        // chrome so a stray background tap can't hide it (toggleChrome also
+        // refuses while synthesizing).
+        chromeVisible = true
         if await ensureAudio() { play() }
+    }
+
+    /// Explicit cancel from the synthesizing pill — the one deliberate way to
+    /// abandon a paid request. The thrown cancellation lands in `ensureAudio`'s
+    /// catch, which returns the pill to `.idle`.
+    func cancelSynthesis() {
+        guard audioState == .synthesizing else { return }
+        services.synthesis.cancel(
+            SynthesisRequest(text: currentChapter?.text ?? "",
+                             voice: services.narrationVoice).cacheKey)
     }
 
     /// Wall-clock estimate for synthesizing `charCount` chars through the Worker,
@@ -244,11 +278,23 @@ final class ReaderModel {
         } else {
             do {
                 beginSynthesisProgress(charCount: request.text.count)
-                synth = try await services.tts.synthesize(request)
-                // Cache the (network-paid) result before any bail-out: the disk
-                // write is cheap, local, and the valuable artifact.
-                services.audioStore.save(synth, for: key)
+                // The coordinator owns the request (and saves the paid result to
+                // the cache the moment it returns): leaving the reader doesn't
+                // cancel it, and a re-entry awaits this same task instead of
+                // re-billing. Only cancelSynthesis() abandons it.
+                synth = try await services.synthesis.task(for: request).value
                 endSynthesisProgress(success: true)
+            } catch is CancellationError {
+                // Explicit user cancel from the synthesizing pill — back to the
+                // Play affordance, no error banner.
+                endSynthesisProgress(success: false)
+                if gen == loadGeneration { audioState = .idle }
+                return false
+            } catch let e as URLError where e.code == .cancelled {
+                // The same explicit cancel, surfaced as URLSession's cancellation.
+                endSynthesisProgress(success: false)
+                if gen == loadGeneration { audioState = .idle }
+                return false
             } catch is FixtureTTSService.FixtureError {
                 // No offline audio for this text — the genuine "not generated" case.
                 endSynthesisProgress(success: false)
@@ -275,7 +321,7 @@ final class ReaderModel {
             }
         }
 
-        guard buildPlayback(from: synth, gen: gen) else {
+        guard await buildPlayback(from: synth, gen: gen) else {
             endSynthesisProgress(success: false)
             if gen == loadGeneration { audioState = .failed(L10n.readerFailedAudio) }
             return false
@@ -289,13 +335,13 @@ final class ReaderModel {
     /// indexes) and folds the char timings into spans so the highlight tracks the
     /// real playhead, then resumes the saved position. Returns false if superseded
     /// by a newer load() / torn down, or the audio can't be decoded.
-    private func buildPlayback(from synth: SynthesizedAudio, gen: Int) -> Bool {
-        guard gen == loadGeneration, !Task.isCancelled,
-              let tokenizer = services.tokenizer else { return false }
+    private func buildPlayback(from synth: SynthesizedAudio, gen: Int) async -> Bool {
+        guard gen == loadGeneration, !Task.isCancelled else { return false }
 
         // Tokenize the EXACT text the alignment indexes (single source of truth) and
         // fold the char timings onto the tokens for the moving highlight.
-        let tokens = tokenizer.tokenize(synth.text)
+        guard let tokens = await services.tokenizerWorker.tokenize(synth.text),
+              gen == loadGeneration, !Task.isCancelled else { return false }
         setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: synth.alignment)))
 
         // The audio SESSION is activated in play() (first real playback), not here —
@@ -391,7 +437,13 @@ final class ReaderModel {
         nowPlaying.setPlayback(elapsed: clamped, rate: isPlaying ? speed : 0)
     }
 
-    func toggleChrome() { chromeVisible.toggle() }
+    /// Tap-empty-space chrome toggle. Refused while synthesizing: the progress
+    /// bar is the only feedback a paid generation is running, and hiding it
+    /// makes the app read as hung.
+    func toggleChrome() {
+        guard audioState != .synthesizing else { return }
+        chromeVisible.toggle()
+    }
 
     /// Switch to another chapter: save the current spot, tear down, reload. The
     /// new chapter starts at the top (only the saved resume chapter restores time).
@@ -411,11 +463,12 @@ final class ReaderModel {
         isSwitchingChapter = false
     }
 
-    /// Remote (lock-screen) chapter skip: switch chapters, then resume playback
-    /// only if the new chapter's audio is already local (cache hit in `load()`).
-    /// Never triggers a paid synthesis from the lock screen — synthesis stays an
-    /// explicit in-app Play action, so an uncached skip simply ends the session
-    /// (openChapter's `stop()` already cleared the widget).
+    /// Unattended chapter switch (lock-screen skip, or the natural-finish
+    /// auto-advance): switch chapters, then resume playback only if the new
+    /// chapter's audio is already local (cache hit in `load()`). Never triggers
+    /// a paid synthesis — synthesis stays an explicit in-app Play action, so an
+    /// uncached skip simply ends the session (openChapter's `stop()` already
+    /// cleared the widget).
     private func remoteOpenChapter(_ delta: Int) async {
         await openChapter(chapterIndex + delta)
         if audioState == .ready { play() }
@@ -423,9 +476,11 @@ final class ReaderModel {
 
     func stop() {
         saveProgressOnLeave()   // capture the playhead (or chapter) before tearing down
-        // Supersede any in-flight synthesis: bump the generation so a task that
-        // returns after teardown fails its `gen == loadGeneration` guard, and cancel
-        // it so a reopen can't run a duplicate paid synthesis alongside it.
+        // Supersede the in-flight playback task: bump the generation so a completion
+        // that arrives after teardown fails its `gen == loadGeneration` guard and
+        // never starts playback. The synthesis REQUEST itself is not cancelled —
+        // it's the coordinator's (the paid result still lands in the cache, and a
+        // reopen re-attaches to the same task instead of re-billing).
         loadGeneration &+= 1
         playbackTask?.cancel()
         playbackTask = nil
@@ -502,28 +557,58 @@ final class ReaderModel {
 
     /// Natural end of the chapter — routed through the AVAudioPlayerDelegate so it
     /// also runs while backgrounded (screen locked). Marks the chapter complete
-    /// (読了) and releases the audio session.
+    /// (読了), then continues into the next chapter IF its narration is already
+    /// local — an unattended finish must never trigger a paid synthesis (the same
+    /// rule as the lock-screen skip). Without a cached continuation the lock-screen
+    /// widget is kept (paused at the end) so a pocketed phone still has transport;
+    /// only the audio session is released.
     private func handlePlaybackFinished() {
         isPlaying = false
         link.stop()
         currentTime = duration
         activeIndex = timeline.index(at: duration)
         persistProgress(completed: true)
-        nowPlaying.deactivate()
+        if canGoToNextChapter, nextChapterAudioCached {
+            // The assertion covers the tokenize+load gap between players so a
+            // locked phone isn't suspended mid-advance (no audio is playing yet).
+            let assertion = BackgroundAssertion(name: "chapter-advance")
+            Task {
+                await self.remoteOpenChapter(1)
+                assertion.end()
+            }
+            return
+        }
+        nowPlaying.setPlayback(elapsed: duration, rate: 0)
         deactivateSession()
     }
 
+    /// Whether the NEXT chapter's narration is already in the local cache under
+    /// the current voice — the auto-advance gate: cached audio is free to play.
+    private var nextChapterAudioCached: Bool {
+        let next = chapterIndex + 1
+        guard document.chapters.indices.contains(next) else { return false }
+        return services.audioStore.has(
+            SynthesisRequest(text: document.chapters[next].text,
+                             voice: services.narrationVoice).cacheKey)
+    }
+
     /// Audio-session interruption (call, Siri, another app): pause on `.began`, and
-    /// resume on `.ended` when the system says we may. Works while backgrounded.
+    /// resume on `.ended` when the system says we may — but only if the USER was
+    /// playing when the interruption hit. Without that memory, a manually paused
+    /// reader would spring back to life after a phone call. Works while backgrounded.
     private func handleInterruption(_ note: Notification) {
         guard let info = note.userInfo,
               let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
         switch type {
         case .began:
+            wasPlayingBeforeInterruption = isPlaying
             if isPlaying { pause() }
         case .ended:
-            if let optRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt,
+            let resume = wasPlayingBeforeInterruption
+            wasPlayingBeforeInterruption = false
+            if resume,
+               let optRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt,
                AVAudioSession.InterruptionOptions(rawValue: optRaw).contains(.shouldResume),
                player != nil {
                 play()
@@ -531,6 +616,16 @@ final class ReaderModel {
         @unknown default:
             break
         }
+    }
+
+    /// The playback route lost its output device (headphones unplugged, BT
+    /// dropped): pause, per platform convention — never blare from the open
+    /// speaker. Other reasons (a new device attached) don't pause.
+    private func handleRouteChange(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable,
+              isPlaying else { return }
+        pause()
     }
 
     // MARK: - Tap to define

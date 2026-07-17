@@ -34,6 +34,32 @@ final class PDFImporterTests: XCTestCase {
         XCTAssertTrue(result[1].text.contains("Bravo"))
     }
 
+    /// A password-protected PDF surfaces its real reason — not "scanned"/"empty".
+    func testPasswordProtectedPDFThrowsPasswordProtected() async {
+        let url = Fixture.lockedPDF()
+        do {
+            _ = try await chapters(url)
+            XCTFail("expected passwordProtected")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .passwordProtected)
+        }
+    }
+
+    /// A locked PDF must never be offered to (billed) OCR: zero candidate pages,
+    /// and an injected recognizer is never invoked.
+    func testPasswordProtectedPDFNeverRoutesToOCR() async {
+        let url = Fixture.lockedPDF()
+        XCTAssertEqual(PDFImporter(url: url).ocrCandidateCount(), 0)
+        let stub = StubRecognizer(perImage: ["SHOULD NOT APPEAR"])
+        do {
+            _ = try await chapters(url, recognizer: stub)
+            XCTFail("expected passwordProtected")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .passwordProtected)
+            XCTAssertEqual(stub.imageCount, 0)
+        }
+    }
+
     func testNonPDFThrowsUnreadable() async {
         let url = Fixture.write(Data("not a pdf".utf8), ext: "pdf")
         do {

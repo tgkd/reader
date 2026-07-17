@@ -19,7 +19,10 @@ and surrogate pairs). See `docs/char-token-sync.md`.
 
 **One MeCab pass per chapter is the single source of truth** for (a) highlight sync spans,
 (b) furigana readings, (c) `dictionaryForm` (kanji lemma) for lookup. Never add a second
-segmenter — it will disagree with the furigana segmentation. `MeCabTokenizer` also emits the
+segmenter — it will disagree with the furigana segmentation. All tokenization goes through
+the `TokenizerWorker` actor (app target): off the main thread — the one-time ~50 MB IPADic
+load and per-chapter tokenize used to freeze the reader-open transition — and serialized,
+because MeCab is not thread-safe. Never tokenize on the main actor. `MeCabTokenizer` also emits the
 whitespace it would otherwise drop as untimed gap tokens (walking `annotation.range`), so
 `joined(surfaces) == nfkc(text)` holds and paragraphs / line breaks / indents survive to the page.
 
@@ -51,15 +54,24 @@ PDFKit / networking live in the `app/` target only.
   saves the whole chapter durably **before** pruning per-segment entries; then `AlignmentStitcher`
   stitches) → cached by `DiskAudioStore`, content-addressed by
   `ContentKey = sha256(model + voice + nfkc(text))`, so re-reads play offline for free.
+  Chapter synthesis requests are owned by **`SynthesisCoordinator`** (session-scoped, keyed by
+  `ContentKey`): leaving the reader does NOT cancel a paid request — the result still lands in
+  the cache — and a reopen re-attaches to the same in-flight task instead of re-billing; each
+  request holds a background-task assertion (~30 s of grace on an app switch). The synthesizing
+  pill's X is the one deliberate cancel.
   `FixtureTTSService` provides DEBUG offline fixtures and the library's "is this cached?" probe.
 
 - **Reader:** `ReaderModel` drives one chapter — `AVAudioPlayer` + a `CADisplayLink` proxy advance
   `activeIndex` each frame via `SpanTimeline.index(at:)`; an `AVAudioPlayerDelegate` +
-  `AVAudioSession` interruption observer own completion / pause-resume so they still fire while
-  backgrounded (the display link is a foreground-only clock). `NowPlayingController` (lifecycle
-  mirrors the audio session exactly) publishes lock-screen/Control Center metadata + remote
-  commands — playback state is written at transitions only (play/pause/seek/speed/chapter),
-  never per tick; the system extrapolates. `.synthesizing` shows `synthesisProgress`, a purely
+  `AVAudioSession` interruption/route-change observers own completion / pause-resume so they
+  still fire while backgrounded (the display link is a foreground-only clock) — resume after an
+  interruption only if the user was playing when it began; pause when the output route
+  disappears (headphones out). Natural chapter finish auto-advances into the next chapter
+  **only if its audio is already cached** (the lock-screen-skip rule), else the Now Playing
+  widget stays (paused at the end) and only the audio session is released — the widget is torn
+  down on explicit stop/leave. `NowPlayingController` publishes lock-screen/Control Center
+  metadata + remote commands — playback state is written at transitions only
+  (play/pause/seek/speed/chapter), never per tick; the system extrapolates. `.synthesizing` shows `synthesisProgress`, a purely
   cosmetic 10 Hz eased estimate (the Worker buffers the whole response, so no real signal
   exists) that creeps toward ~0.92 and snaps to 1 on success. `RubyTextView` (custom CoreText)
   renders furigana via `CTRubyAnnotation` and vertical text via frame progression: the base text is
@@ -129,8 +141,9 @@ PDFKit / networking live in the `app/` target only.
   (EPUB / TXT / born-digital PDF) with furigana, tap-to-define, themes, and settings is free.
   `isSubscribed()` (RevenueCat `reader Pro` entitlement) is checked **locally** so the paid Worker
   is never hit for a non-subscriber; the Worker's 403 is the backstop. Synthesis is lazy (first Play).
-  That extends to the lock screen: a remote prev/next-chapter skip resumes only cached audio —
-  it must NEVER trigger a paid synthesis (see `ReaderModel.remoteOpenChapter`). The narration
+  That extends to every unattended path: a remote prev/next-chapter skip AND the
+  natural-finish auto-advance resume only cached audio — they must NEVER trigger a paid
+  synthesis (see `ReaderModel.remoteOpenChapter`). The narration
   voice picker (Settings) is subscriber-only and hidden otherwise.
 - **Every `SynthesisRequest` must carry the selected narration voice** (`services.narrationVoice`,
   mirrored from `AppModel`) — the voice is part of `ContentKey`, so a defaulted request silently

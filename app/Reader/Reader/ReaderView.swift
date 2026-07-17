@@ -313,15 +313,29 @@ struct ReaderView: View {
     /// Determinate (estimated) progress while speech is generated — a real value
     /// so VoiceOver reads a percentage, unlike the old indeterminate spinner.
     /// No chapter arrows here: switching chapters would cancel the paid request.
+    /// The X is the one deliberate way to abandon a running generation; without
+    /// it a slow chapter reads as a hang.
     private func synthesizingPill(_ model: ReaderModel) -> some View {
-        VStack(spacing: 4) {
-            ProgressView(value: model.synthesisProgress)
-                .tint(theme.accent)
-                .animation(.linear(duration: 0.12), value: model.synthesisProgress)
-            Text(L10n.readerGenerating)
-                .font(.caption2).foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            VStack(spacing: 4) {
+                ProgressView(value: model.synthesisProgress)
+                    .tint(theme.accent)
+                    .animation(.linear(duration: 0.12), value: model.synthesisProgress)
+                Text(L10n.readerGenerating)
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            Button { model.cancelSynthesis() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel(L10n.commonCancel)
         }
-        .padding(.horizontal, 24)
+        .padding(.leading, 24)
+        .padding(.trailing, 8)
     }
 
     private func playPauseButton(_ model: ReaderModel) -> some View {

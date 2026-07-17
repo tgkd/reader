@@ -125,6 +125,7 @@
 "import.empty" = "読めるテキストが見つかりません";
 "import.ocrFailed" = "スキャンPDFから文字を読み取れませんでした";
 "import.ocrUnavailable" = "スキャンPDFの読み取りにはメンバーシップが必要です";
+"import.passwordProtected" = "このPDFはパスワードで保護されています。パスワードを解除してから再度読み込んでください。";
 /* スキャンPDFのインポート中のOCR進捗。%1$d は完了ページ、%2$d は総ページ。 */
 "import.recognizing.format" = "テキストを認識中… %1$d / %2$d";
 /* 画像のみのEPUB/PDFをOCRする確認（サブスク向け）。%d はページ数。 */

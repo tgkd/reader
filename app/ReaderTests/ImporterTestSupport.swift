@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import PDFKit
 import ZIPFoundation
 @testable import Reader
 
@@ -82,6 +83,16 @@ enum Fixture {
                 textImage(text, size: bounds.size).draw(in: bounds)
             }
         }
+        return url
+    }
+
+    /// An encrypted (password-protected) PDF: a text PDF re-written with user +
+    /// owner passwords, so `PDFDocument(url:).isLocked` is true on open.
+    static func lockedPDF() -> URL {
+        let plain = PDFDocument(url: pdf(pages: ["Locked content"]))!
+        let url = uniqueURL(ext: "pdf")
+        plain.write(to: url, withOptions: [.userPasswordOption: "secret",
+                                           .ownerPasswordOption: "secret"])
         return url
     }
 

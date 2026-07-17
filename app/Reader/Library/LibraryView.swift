@@ -68,6 +68,11 @@ struct LibraryView: View {
             if case .success(let urls) = result, let url = urls.first { app.importFile(url) }
         }
         .alert(L10n.importFailedTitle, isPresented: showImportError) {
+            // A Membership-gated failure (scanned import, no subscription) offers
+            // the way in — the message names Membership, so OK alone is a dead end.
+            if app.importErrorNeedsMembership {
+                Button(L10n.readerSubscribeCTA) { app.showPaywall = true }
+            }
             Button(L10n.commonOK, role: .cancel) {}
         } message: {
             Text(app.importError ?? "")

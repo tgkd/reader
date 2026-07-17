@@ -127,6 +127,7 @@
 "import.empty" = "No readable text found";
 "import.ocrFailed" = "Couldn’t read text from this scanned PDF";
 "import.ocrUnavailable" = "Reading scanned PDFs needs Membership";
+"import.passwordProtected" = "This PDF is password-protected. Remove the password and import it again.";
 /* OCR progress while importing a scanned PDF; %1$d done of %2$d pages. */
 "import.recognizing.format" = "Recognizing text… %1$d / %2$d";
 /* Confirm OCR of an image-only EPUB/PDF (subscriber); %d = page count. */

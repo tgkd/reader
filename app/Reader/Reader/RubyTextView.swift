@@ -95,22 +95,27 @@ final class RubyScrollView: UIScrollView {
     /// off the screen corner, since horizontal is the scroll axis there.
     private let columnEndInset: CGFloat = 24
     /// Yokogaki main-axis room reserved after the last line for the next-chapter
-    /// capsule. Tategaki reserves the capsule's MEASURED width instead — there the
-    /// reading axis takes the button's width, and the localized title ("Next
-    /// Chapter" / 「次の章へ」) is wider than any fixed band.
+    /// button; tategaki reserves the button's diameter instead (there the reading
+    /// axis takes the button's width).
     private let nextBand: CGFloat = 96
+    /// The circular next-chapter button's fixed size — square bounds + capsule
+    /// corners = a circle, independent of locale or symbol metrics.
+    private let nextButtonDiameter: CGFloat = 52
 
+    /// Icon-only circle (glass): `arrow.forward` carries the "next chapter"
+    /// meaning; the localized title lives on as the VoiceOver label.
     private lazy var nextButton: UIButton = {
         var config = UIButton.Configuration.glass()
-        config.title = L10n.readerNextChapter
+        config.image = UIImage(systemName: "arrow.forward",
+                               withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold))
         config.cornerStyle = .capsule
-        config.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20)
         let b = UIButton(configuration: config)
+        b.accessibilityLabel = L10n.readerNextChapter
         b.addTarget(self, action: #selector(nextChapterTapped), for: .touchUpInside)
         b.isHidden = true
         return b
     }()
-    /// Last ink applied to the capsule label, so the per-frame `configure` only
+    /// Last ink applied to the button's symbol, so the per-frame `configure` only
     /// touches `UIButton.Configuration` on an actual theme change.
     private var nextButtonInk: UIColor?
 
@@ -188,13 +193,14 @@ final class RubyScrollView: UIScrollView {
             lastCrossAxis = cross
             needsResize = false
             let text = content.fittingSize(crossAxis: cross)
-            // Measure the capsule BEFORE reserving its band: in tategaki its width
-            // is the reading-axis reservation (title/font never change after init,
-            // so the measure is stable; theme changes only recolor).
-            if !nextButton.isHidden { nextButton.sizeToFit() }
-            // The next-chapter capsule extends the content along the reading axis.
-            // Tategaki band = measured width + one end inset, so the capsule always
-            // clears the last column by at least `columnEndInset`.
+            // Fixed circular bounds (set BEFORE the band reservation below reads
+            // its width); theme changes only recolor the symbol.
+            if !nextButton.isHidden {
+                nextButton.bounds.size = CGSize(width: nextButtonDiameter, height: nextButtonDiameter)
+            }
+            // The next-chapter button extends the content along the reading axis.
+            // Tategaki band = the circle's diameter + one end inset, so the button
+            // always clears the last column by at least `columnEndInset`.
             let band: CGFloat = nextButton.isHidden
                 ? 0
                 : (vertical ? nextButton.bounds.width + columnEndInset : nextBand)

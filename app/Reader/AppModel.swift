@@ -67,6 +67,9 @@ final class AppModel {
     var importProgress: (completed: Int, total: Int)?
     /// Last import failure, surfaced as an alert.
     var importError: String?
+    /// The failure was the Membership gate (a non-subscriber's scanned import) —
+    /// the alert then offers a way INTO Membership instead of dead-ending on OK.
+    var importErrorNeedsMembership = false
     /// An import awaiting the "read N pages with AI?" confirm.
     var pendingImportOCR: PendingImportOCR?
     /// Bumped whenever the shelf changes (import), so the Library list reloads even if
@@ -117,6 +120,7 @@ final class AppModel {
     func importFile(_ url: URL) {
         route = .library                 // so the banner/confirm alert (Library chrome) is visible
         importError = nil
+        importErrorNeedsMembership = false
         let displayName = url.deletingPathExtension().lastPathComponent
         let scoped = url.startAccessingSecurityScopedResource()
         let temp = FileManager.default.temporaryDirectory
@@ -155,6 +159,7 @@ final class AppModel {
                 let ocr = await services.ocrRecognizer()
                 let pages = ocr == nil ? 0 : await Task.detached { Importer.ocrPageCount(for: temp) }.value
                 guard let ocr, pages > 0 else {
+                    importErrorNeedsMembership = (error as? ImportError) == .ocrUnavailable
                     importError = error.localizedDescription
                     try? FileManager.default.removeItem(at: temp)
                     return

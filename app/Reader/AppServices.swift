@@ -9,11 +9,16 @@ import RevenueCat
 /// `ChunkingTTSService` for >9k-char chapters and content-addressed disk caching.
 @MainActor
 final class AppServices {
-    /// Lazy so the ~50 MB IPADic load happens on first reader open, NOT on the
-    /// launch path / first frame.
-    lazy var tokenizer: MeCabTokenizer? = try? MeCabTokenizer()
+    /// All tokenization goes through this actor: off the main thread (the
+    /// ~50 MB IPADic load + per-chapter tokenize used to stall the reader-open
+    /// transition) and serialized (MeCab is not thread-safe). Still lazy — the
+    /// dictionary loads on the first tokenize, not on the launch path.
+    let tokenizerWorker = TokenizerWorker()
 
     let tts: TTSService
+    /// Paid synthesis, owned at session scope so it survives the reader that
+    /// started it (leave ≠ cancel, reopen ≠ re-bill). See `SynthesisCoordinator`.
+    let synthesis: SynthesisCoordinator
     let fixtures: FixtureTTSService   // concrete, for the library "cached?" probe
     let audioStore: GeneratedAudioStore
     let library: LibraryStore
@@ -31,6 +36,7 @@ final class AppServices {
         // alignments stitched back together — transparently to the reader/cache.
         let worker = WorkerTTSService(baseURL: AppServices.workerBaseURL, userId: { AppServices.userId })
         tts = ChunkingTTSService(inner: worker, store: store)
+        synthesis = SynthesisCoordinator(tts: tts, store: store)
 
         // Installs start with an EMPTY shelf — the user imports their own books.
         library = DiskLibraryStore(starter: [])
