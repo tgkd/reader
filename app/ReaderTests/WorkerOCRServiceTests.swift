@@ -67,6 +67,16 @@ final class WorkerOCRServiceTests: XCTestCase {
         } catch { XCTFail("unexpected \(error)") }
     }
 
+    func testUnauthorizedMapsToSubscriptionRequired() async {
+        MockURLProtocol.handler = { _ in self.status(401) }
+        do {
+            _ = try await makeService().recognize([makeImage()], progress: nil)
+            XCTFail("expected subscriptionRequired")
+        } catch let error as WorkerOCRService.WorkerError {
+            guard case .subscriptionRequired = error else { return XCTFail("got \(error)") }
+        } catch { XCTFail("unexpected \(error)") }
+    }
+
     func testRetriesOn429ThenSucceeds() async throws {
         let calls = Counter()
         MockURLProtocol.handler = { _ in

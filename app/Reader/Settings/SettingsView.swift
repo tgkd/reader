@@ -2,7 +2,6 @@ import SwiftUI
 import ReaderCore
 import RevenueCat
 import RevenueCatUI
-import StoreKit
 
 /// Reading preferences, opened from the Library header gear. Currently the reading
 /// font + text size; both apply live to the reader surface and persist. Hosted in a
@@ -17,7 +16,6 @@ struct SettingsView: View {
     @State private var isSubscribed = false
     @State private var demo = VoiceDemoPlayer()
     @State private var showingAbout = false
-    @State private var showingManageSubs = false
     @State private var showingPaywall = false
 
     var body: some View {
@@ -94,9 +92,6 @@ struct SettingsView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(theme.bg)
         }
-        // Native App Store manage-subscription sheet (works against the local
-        // StoreKit config in dev builds).
-        .manageSubscriptionsSheet(isPresented: $showingManageSubs)
         // Same guarded paywall as RootView — `PaywallView` fatalErrors if
         // RevenueCat was never configured, so a misconfigured build must not crash.
         .sheet(isPresented: $showingPaywall) {
@@ -203,7 +198,7 @@ struct SettingsView: View {
         }
     }
 
-    /// Membership block: active status + the native manage sheet for subscribers,
+    /// Membership block: active status + subscription management for subscribers,
     /// the paywall entry for everyone else (the Library upsell star hides once
     /// subscribed, so this is the durable home for membership).
     @ViewBuilder private var membershipBlock: some View {
@@ -218,7 +213,16 @@ struct SettingsView: View {
             .overlay(alignment: .bottom) {
                 Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 24)
             }
-            actionRow(L10n.membershipManage) { showingManageSubs = true }
+            // RevenueCat resolves the subscription's real management surface — the
+            // native App Store sheet when possible, the web subscriptions page
+            // otherwise. StoreKit's `.manageSubscriptionsSheet` silently presented
+            // NOTHING when the signed-in Apple ID had no resolvable subscription
+            // (the TestFlight case). This row only renders when subscribed, which
+            // requires a configured RevenueCat, so `Purchases.shared` is safe here.
+            // Failures are logged by the SDK; Settings has no error surface.
+            actionRow(L10n.membershipManage) {
+                Task { try? await Purchases.shared.showManageSubscriptions() }
+            }
         } else {
             actionRow(L10n.readerSubscribeCTA) { showingPaywall = true }
         }

@@ -2,9 +2,9 @@ import Foundation
 import ReaderCore
 
 /// Serves the captured ElevenLabs fixtures bundled in the app (offline, no key).
-/// In production this is unused; in DEBUG it's the offline fallback so the
-/// simulator can still play the captured starter texts without a subscribed
-/// Worker user.
+/// Not in the playback chain — `AppServices` keeps one instance solely for the
+/// Library's "is this cached?" probe (`hasFixture`), identical in every build
+/// flavor.
 ///
 /// Matches a request to a fixture by NFKC text AND voice + model, so it stays
 /// consistent with `SynthesisRequest.cacheKey` (`ContentKey`) and the Worker

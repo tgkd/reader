@@ -4,7 +4,8 @@ How to ship a TestFlight build where **subscriptions + TTS actually work** (real
 StoreKit purchase → RevenueCat entitlement → Worker 200 → narration plays).
 
 **Why this is needed:** the simulator uses RevenueCat's **Test Store** (`test_` key),
-which is skipped on real devices (it crashes against real StoreKit — see
+which does not work against real StoreKit on devices (the SDK fails loudly — the key
+is configured verbatim everywhere, no device branches; see
 `AppServices.configureRevenueCat`). A device/TestFlight build needs a real **App
 Store `appl_` key** + a real **auto-renewable subscription** in App Store Connect.
 
@@ -24,8 +25,9 @@ Store `appl_` key** + a real **auto-renewable subscription** in App Store Connec
   gitignored `Signing.xcconfig`: `WORKER_HOST` is set; you'll add `REVENUECAT_KEY`).
 - The gate (`isSubscribed` / `reader Pro`), paywall (`PaywallView`), and unlock-reload
   are wired and verified in the sim. The paywall is **crash-guarded** when RevenueCat is
-  unconfigured (a `test_`/empty key on a real device) — it shows a dismissable fallback instead
-  of `fatalError`-ing on `Purchases.shared`.
+  unconfigured (an empty key) — it shows a dismissable fallback instead of
+  `fatalError`-ing on `Purchases.shared`, and an unconfigured build reads
+  not-subscribed everywhere (no fake "active" badge).
 
 Identifiers used below: bundle id **`app.reader.app`**, Team **`<your Team ID — from Signing.xcconfig>`**,
 RevenueCat project **reader (`<reader project id>`)**, entitlement **`reader Pro`**.
@@ -89,8 +91,8 @@ and the offering (5).
    ```
    REVENUECAT_KEY = appl_xxxxxxxxxxxxxxxxxxxxxxxx
    ```
-   (Replaces the `test_…` Test Store key. The device gate passes `appl_` keys; the sim
-   still works with whatever key is here.)
+   (Replaces the `test_…` Test Store key. The key is configured verbatim on every
+   platform — a leftover `test_` key on a device fails loudly instead of being skipped.)
 2. Bump the build number for each upload — `app/project.yml` →
    `CURRENT_PROJECT_VERSION` (and `MARKETING_VERSION` when the version changes), then
    `cd app && xcodegen generate`.

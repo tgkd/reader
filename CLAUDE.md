@@ -194,8 +194,11 @@ screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 Simulator
   `AppModel`. Voice samples in Settings synthesize one fixed sentence per voice through the normal
   gated TTS path and cache content-addressed — first listen bills, replays are free.
 - **Local purchase testing:** `Reader.storekit` is wired into the scheme (run from Xcode, no sandbox
-  account needed). The paywall is crash-guarded when RevenueCat is unconfigured. `test_…` RevenueCat
-  keys are skipped on physical devices (they crash against real StoreKit). See `docs/testflight.md`.
+  account needed). The paywall is crash-guarded when RevenueCat is unconfigured. The RevenueCat key
+  is configured verbatim on every platform — NO build-flavor or device branches (a silently skipped
+  key once shipped a fake-"active" build that 401'd at the Worker); an unconfigured build reads
+  not-subscribed everywhere, and a `test_…` key on a physical device fails loudly in RevenueCat
+  instead of being quietly ignored. See `docs/testflight.md`.
 - **Xcode Cloud:** `app/ci_scripts/ci_post_clone.sh` (+ root `ci_scripts/` delegate) rebuilds what a
   clean checkout lacks: downloads `jisho-compact.db` from the public `compact-dict` GitHub release
   (refresh after regenerating: `gh release upload compact-dict app/Reader/Resources/jisho-compact.db

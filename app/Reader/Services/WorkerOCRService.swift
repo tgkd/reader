@@ -84,7 +84,10 @@ final class WorkerOCRService: PDFTextRecognizer {
 
         let (data, response) = try await session.data(for: req)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw http.statusCode == 403 ? WorkerError.subscriptionRequired : WorkerError.http(http.statusCode)
+            // 401 (no X-User-ID / no RevenueCat identity) and 403 (entitlement
+            // rejected) both mean "this user can't bill OCR" — same as the TTS path.
+            throw [401, 403].contains(http.statusCode)
+                ? WorkerError.subscriptionRequired : WorkerError.http(http.statusCode)
         }
 
         struct OCRResponse: Decodable { let text: String }

@@ -22,14 +22,16 @@ final class WorkerTTSService: TTSService {
     }
 
     private let baseURL: URL
-    private let userId: String?
+    private let userId: @Sendable () -> String?
     private let session: URLSession
 
     /// `AppServices` injects the URL from the `WorkerBaseURL` Info.plist key
     /// (overridable via the gitignored `Signing.xcconfig`'s `WORKER_HOST`); this
-    /// default mirrors its production fallback.
+    /// default mirrors its production fallback. `userId` is read per request, not
+    /// captured — a purchase/restore that rotates the RevenueCat appUserID after
+    /// launch must reach this long-lived service (built once in `AppServices.init`).
     init(baseURL: URL = URL(string: "https://api.thetango.org")!,
-         userId: String?,
+         userId: @escaping @Sendable () -> String?,
          session: URLSession? = nil) {
         self.baseURL = baseURL
         self.userId = userId
@@ -56,7 +58,7 @@ final class WorkerTTSService: TTSService {
         var req = URLRequest(url: baseURL.appendingPathComponent("tts/aligned"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let userId, !userId.isEmpty { req.setValue(userId, forHTTPHeaderField: "X-User-ID") }
+        if let userId = userId(), !userId.isEmpty { req.setValue(userId, forHTTPHeaderField: "X-User-ID") }
         req.httpBody = try JSONSerialization.data(withJSONObject: [
             "text": text,
             "model_id": request.model.rawValue,
@@ -65,7 +67,11 @@ final class WorkerTTSService: TTSService {
 
         let (data, response) = try await session.data(for: req)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw http.statusCode == 403 ? WorkerError.subscriptionRequired : WorkerError.http(http.statusCode)
+            // 403 = entitlement rejected; 401 = no X-User-ID reached the Worker (no
+            // RevenueCat identity on this install). Both mean "this user can't bill
+            // synthesis" — re-lock instead of surfacing a raw status code.
+            throw [401, 403].contains(http.statusCode)
+                ? WorkerError.subscriptionRequired : WorkerError.http(http.statusCode)
         }
 
         let decoded = try JSONDecoder().decode(TimestampedAudio.self, from: data)

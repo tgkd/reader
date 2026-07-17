@@ -29,7 +29,7 @@ final class AppServices {
 
         // Chapters over the ElevenLabs per-request char cap are chunked and the
         // alignments stitched back together — transparently to the reader/cache.
-        let worker = WorkerTTSService(baseURL: AppServices.workerBaseURL, userId: AppServices.userId)
+        let worker = WorkerTTSService(baseURL: AppServices.workerBaseURL, userId: { AppServices.userId })
         tts = ChunkingTTSService(inner: worker, store: store)
 
         // Installs start with an EMPTY shelf — the user imports their own books.
@@ -76,15 +76,13 @@ final class AppServices {
     /// (set via the gitignored xcconfig) is present. No key → no-op. Called from
     /// `YomiApp.init()` so `Purchases.shared.appUserID` is ready before any
     /// `AppServices` reads it (the anonymous id becomes the Worker's X-User-ID).
+    /// The key is configured verbatim on every platform — no build-flavor or
+    /// device branches (a silently skipped key once shipped a build that looked
+    /// subscribed but 401'd at the Worker). A `test_…` key on a physical device
+    /// fails loudly in RevenueCat instead of being quietly ignored; on-device
+    /// builds need the real App Store (`appl_…`) public key.
     static func configureRevenueCat() {
         guard !Purchases.isConfigured, let key = revenueCatKey, !key.isEmpty else { return }
-        #if !targetEnvironment(simulator)
-        // RevenueCat "Test Store" keys (test_…) are a simulator/sandbox-testing
-        // construct and crash when configured against real StoreKit on a physical
-        // device. Skip them on device — on-device subscriptions need a real App
-        // Store (appl_…) public key.
-        guard !key.hasPrefix("test_") else { return }
-        #endif
         Purchases.configure(withAPIKey: key)
     }
 
@@ -110,13 +108,16 @@ final class AppServices {
         }
     }
 
-    /// Local subscription check backing the reader's paywall gate. When RevenueCat
-    /// isn't configured (dev/offline, or a device without an `appl_` key) it's
-    /// ungated (`true`), so fixture/Worker behavior is unchanged; otherwise `true`
-    /// iff `reader Pro` is active. Checked locally so the (paid) Worker is never hit
-    /// for a non-subscriber — which would also poison its negative-result cache.
+    /// Local subscription check backing the reader's paywall gate: `true` iff
+    /// RevenueCat is configured AND `reader Pro` is active. An unconfigured build
+    /// (no key) reads NOT subscribed in EVERY flavor — its requests carry no
+    /// X-User-ID, so the Worker 401s them anyway, and the old ungated-`true`
+    /// shipped a build that showed "active" while every synthesis failed. No
+    /// DEBUG/Release branches: debug and device must behave identically. Checked
+    /// locally so the (paid) Worker is never hit for a non-subscriber — which
+    /// would also poison its negative-result cache.
     func isSubscribed() async -> Bool {
-        guard Purchases.isConfigured else { return true }
+        guard Purchases.isConfigured else { return false }
         let info = try? await Purchases.shared.customerInfo()
         return info?.entitlements[AppServices.entitlementID]?.isActive == true
     }
@@ -133,8 +134,9 @@ final class AppServices {
 
     /// The RevenueCat appUserID for the Worker's X-User-ID header — the real
     /// appUserID once RevenueCat is configured. `nil` (no key) leaves the header
-    /// unset → the Worker's 401 path.
-    private static var userId: String? {
+    /// unset → the Worker's 401 path. Nonisolated: read per-request from the TTS
+    /// path's concurrent chunk tasks; RevenueCat's accessors are thread-safe.
+    nonisolated private static var userId: String? {
         Purchases.isConfigured ? Purchases.shared.appUserID : nil
     }
 

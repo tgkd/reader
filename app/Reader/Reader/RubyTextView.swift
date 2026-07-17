@@ -67,9 +67,10 @@ final class RubyScrollView: UIScrollView {
 
     /// Opens the next chapter from the end-of-content capsule. Setting/clearing
     /// toggles the button and reclaims its band on the next layout pass. The
-    /// button lives INSIDE the scroll content — past the last line in yokogaki,
-    /// past the last (leftmost) column in tategaki — so it appears exactly where
-    /// reading ends in either mode, not floating over the text.
+    /// button lives INSIDE the scroll content, pinned at the far END of the
+    /// scrollable area — bottom of the content in yokogaki, the bottom-left
+    /// corner of the reading band in tategaki — so it sits where reading ends
+    /// even when a short chapter doesn't fill the screen.
     var onNextChapter: (() -> Void)? {
         didSet {
             let shows = onNextChapter != nil
@@ -93,7 +94,10 @@ final class RubyScrollView: UIScrollView {
     /// Tategaki main-axis end margin: keeps the first (right) / last (left) column
     /// off the screen corner, since horizontal is the scroll axis there.
     private let columnEndInset: CGFloat = 24
-    /// Main-axis room reserved after the content for the next-chapter capsule.
+    /// Yokogaki main-axis room reserved after the last line for the next-chapter
+    /// capsule. Tategaki reserves the capsule's MEASURED width instead — there the
+    /// reading axis takes the button's width, and the localized title ("Next
+    /// Chapter" / 「次の章へ」) is wider than any fixed band.
     private let nextBand: CGFloat = 96
 
     private lazy var nextButton: UIButton = {
@@ -184,8 +188,16 @@ final class RubyScrollView: UIScrollView {
             lastCrossAxis = cross
             needsResize = false
             let text = content.fittingSize(crossAxis: cross)
+            // Measure the capsule BEFORE reserving its band: in tategaki its width
+            // is the reading-axis reservation (title/font never change after init,
+            // so the measure is stable; theme changes only recolor).
+            if !nextButton.isHidden { nextButton.sizeToFit() }
             // The next-chapter capsule extends the content along the reading axis.
-            let band = nextButton.isHidden ? 0 : nextBand
+            // Tategaki band = measured width + one end inset, so the capsule always
+            // clears the last column by at least `columnEndInset`.
+            let band: CGFloat = nextButton.isHidden
+                ? 0
+                : (vertical ? nextButton.bounds.width + columnEndInset : nextBand)
             if vertical {
                 // Tategaki: scroll horizontally, reading right-to-left. Right-align the
                 // columns (margin `columnEndInset` from the right edge) so a SHORT text
@@ -197,18 +209,28 @@ final class RubyScrollView: UIScrollView {
                                        width: columns, height: cross)
                 contentSize = CGSize(width: contentW, height: bounds.height)
                 contentInset = .zero
+                if !nextButton.isHidden {
+                    // Pinned at the scroll's far end: the bottom-left corner of the
+                    // reading band, where the last column bottoms out — not floating
+                    // after the text, so a short chapter still shows it at the edge.
+                    nextButton.center = CGPoint(
+                        x: columnEndInset + nextButton.bounds.width / 2,
+                        y: chromeTop + cross - nextButton.bounds.height / 2)
+                }
             } else {
                 // Yokogaki: scroll vertically; inset the column left/right. The chrome
                 // clearance is a CONTENT inset so text scrolls under the glass pills.
+                // Content spans at least the viewport reading height so the capsule
+                // pins to the screen bottom even when a short chapter doesn't fill it
+                // (the insets cancel exactly — a buttonless short chapter still
+                // can't scroll).
                 content.frame = CGRect(x: readingInset, y: 0, width: cross, height: text.height)
-                contentSize = CGSize(width: bounds.width, height: text.height + band)
+                let contentH = max(text.height + band, bounds.height - chromeTop - chromeBottom)
+                contentSize = CGSize(width: bounds.width, height: contentH)
                 contentInset = UIEdgeInsets(top: chromeTop, left: 0, bottom: chromeBottom, right: 0)
-            }
-            if !nextButton.isHidden {
-                nextButton.sizeToFit()
-                nextButton.center = vertical
-                    ? CGPoint(x: content.frame.minX - band / 2, y: chromeTop + cross / 2)
-                    : CGPoint(x: bounds.width / 2, y: content.frame.maxY + band / 2)
+                if !nextButton.isHidden {
+                    nextButton.center = CGPoint(x: bounds.width / 2, y: contentH - band / 2)
+                }
             }
             content.setNeedsDisplay()
         }
