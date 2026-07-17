@@ -81,6 +81,8 @@
 "reader.failed.title" = "この章を読み込めませんでした";
 "reader.failed.tokenizer" = "テキストエンジンを利用できません";
 "reader.failed.audio" = "音声を読み込めませんでした";
+"reader.failed.network" = "サーバーに接続できません。通信環境をご確認ください";
+"reader.nextChapter" = "次の章へ";
 
 /* リーダー — 購読ゲート（reader Pro 未加入） */
 "reader.subscribe.title" = "メンバーシップで聴く";

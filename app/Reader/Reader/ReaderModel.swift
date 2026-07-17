@@ -259,8 +259,15 @@ final class ReaderModel {
                 endSynthesisProgress(success: false)
                 if gen == loadGeneration { audioState = .locked }
                 return false
+            } catch is URLError {
+                // Transport failure (DNS, offline, timeout) — a human message,
+                // not Apple's raw NSURLError text. HTTP statuses never land
+                // here; WorkerTTSService maps them to WorkerError first.
+                endSynthesisProgress(success: false)
+                if gen == loadGeneration { audioState = .failed(L10n.readerFailedNetwork) }
+                return false
             } catch {
-                // Real failure (Worker auth/network, decode) — surface it, don't
+                // Real failure (Worker auth, decode) — surface it, don't
                 // disguise it as "not generated".
                 endSynthesisProgress(success: false)
                 if gen == loadGeneration { audioState = .failed(error.localizedDescription) }

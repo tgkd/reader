@@ -83,6 +83,8 @@
 "reader.failed.title" = "Couldn’t load this chapter";
 "reader.failed.tokenizer" = "Text engine unavailable";
 "reader.failed.audio" = "Audio failed to load";
+"reader.failed.network" = "Can’t reach the narration server — check your connection";
+"reader.nextChapter" = "Next Chapter";
 
 /* Reader — subscription gate (no active `reader Pro` entitlement) */
 "reader.subscribe.title" = "Listen with Membership";

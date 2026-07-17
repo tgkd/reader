@@ -93,7 +93,10 @@ struct ReaderView: View {
                     topInset: 64 + safeArea.top,
                     bottomInset: 88 + safeArea.bottom,
                     onTapToken: { model.tapToken($0) },
-                    onTapBackground: { model.toggleChrome() }
+                    onTapBackground: { model.toggleChrome() },
+                    onNextChapter: model.canGoToNextChapter
+                        ? { Task { await model.openChapter(model.chapterIndex + 1) } }
+                        : nil
                 )
             case .failed(let msg):
                 placeholder(L10n.readerFailedTitle, msg)

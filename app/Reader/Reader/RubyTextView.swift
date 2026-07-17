@@ -36,6 +36,9 @@ struct RubyTextView: UIViewRepresentable {
     var bottomInset: CGFloat = 0
     var onTapToken: (Int) -> Void
     var onTapBackground: () -> Void
+    /// End-of-chapter affordance: non-nil shows a "next chapter" capsule past the
+    /// last line; nil (last chapter / single-chapter book) hides it.
+    var onNextChapter: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> RubyScrollView {
         let sv = RubyScrollView()
@@ -47,6 +50,7 @@ struct RubyTextView: UIViewRepresentable {
     func updateUIView(_ sv: RubyScrollView, context: Context) {
         sv.content.onTapToken = onTapToken
         sv.content.onTapBackground = onTapBackground
+        sv.onNextChapter = onNextChapter
         sv.configure(spans: spans, structureVersion: structureVersion,
                      activeIndex: activeIndex, vertical: vertical,
                      fontName: fontName, fontScale: fontScale, showFurigana: showFurigana,
@@ -61,6 +65,21 @@ struct RubyTextView: UIViewRepresentable {
 final class RubyScrollView: UIScrollView {
     let content = RubyContentView()
 
+    /// Opens the next chapter from the end-of-content capsule. Setting/clearing
+    /// toggles the button and reclaims its band on the next layout pass. The
+    /// button lives INSIDE the scroll content — past the last line in yokogaki,
+    /// past the last (leftmost) column in tategaki — so it appears exactly where
+    /// reading ends in either mode, not floating over the text.
+    var onNextChapter: (() -> Void)? {
+        didSet {
+            let shows = onNextChapter != nil
+            guard nextButton.isHidden == shows else { return }
+            nextButton.isHidden = !shows
+            needsResize = true
+            setNeedsLayout()
+        }
+    }
+
     private var vertical = true
     /// Recompute content size + reset the start offset on the next layout pass.
     private var needsResize = true
@@ -74,6 +93,24 @@ final class RubyScrollView: UIScrollView {
     /// Tategaki main-axis end margin: keeps the first (right) / last (left) column
     /// off the screen corner, since horizontal is the scroll axis there.
     private let columnEndInset: CGFloat = 24
+    /// Main-axis room reserved after the content for the next-chapter capsule.
+    private let nextBand: CGFloat = 96
+
+    private lazy var nextButton: UIButton = {
+        var config = UIButton.Configuration.glass()
+        config.title = L10n.readerNextChapter
+        config.cornerStyle = .capsule
+        config.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20)
+        let b = UIButton(configuration: config)
+        b.addTarget(self, action: #selector(nextChapterTapped), for: .touchUpInside)
+        b.isHidden = true
+        return b
+    }()
+    /// Last ink applied to the capsule label, so the per-frame `configure` only
+    /// touches `UIButton.Configuration` on an actual theme change.
+    private var nextButtonInk: UIColor?
+
+    @objc private func nextChapterTapped() { onNextChapter?() }
     /// Clearance for the floating glass chrome. Yokogaki applies it as a vertical
     /// `contentInset` (text starts below the header pill but SCROLLS under it —
     /// the glass gets something to blur); tategaki, whose columns span the full
@@ -94,6 +131,7 @@ final class RubyScrollView: UIScrollView {
         alwaysBounceVertical = false
         alwaysBounceHorizontal = false
         addSubview(content)
+        addSubview(nextButton)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -115,6 +153,10 @@ final class RubyScrollView: UIScrollView {
             spans: spans, structureVersion: structureVersion, activeIndex: activeIndex,
             vertical: vertical, fontName: fontName, fontScale: fontScale, showFurigana: showFurigana,
             ink: ink, hi: hi, hiInk: hiInk)
+        if nextButtonInk == nil || !RubyContentView.sameColor(nextButtonInk!, ink) {
+            nextButtonInk = ink
+            nextButton.configuration?.baseForegroundColor = ink
+        }
 
         if structureChanged || orientationChanged || insetsChanged {
             stopFollowing()   // the old geometry's target is garbage until relayout
@@ -142,13 +184,15 @@ final class RubyScrollView: UIScrollView {
             lastCrossAxis = cross
             needsResize = false
             let text = content.fittingSize(crossAxis: cross)
+            // The next-chapter capsule extends the content along the reading axis.
+            let band = nextButton.isHidden ? 0 : nextBand
             if vertical {
                 // Tategaki: scroll horizontally, reading right-to-left. Right-align the
                 // columns (margin `columnEndInset` from the right edge) so a SHORT text
                 // sits at the right — where reading starts — instead of the left; a long
                 // text overflows leftward and scrolls. Column band = chrome clearance.
                 let columns = text.width
-                let contentW = max(bounds.width, columns + columnEndInset * 2)
+                let contentW = max(bounds.width, columns + columnEndInset * 2 + band)
                 content.frame = CGRect(x: contentW - columnEndInset - columns, y: chromeTop,
                                        width: columns, height: cross)
                 contentSize = CGSize(width: contentW, height: bounds.height)
@@ -157,8 +201,14 @@ final class RubyScrollView: UIScrollView {
                 // Yokogaki: scroll vertically; inset the column left/right. The chrome
                 // clearance is a CONTENT inset so text scrolls under the glass pills.
                 content.frame = CGRect(x: readingInset, y: 0, width: cross, height: text.height)
-                contentSize = CGSize(width: bounds.width, height: text.height)
+                contentSize = CGSize(width: bounds.width, height: text.height + band)
                 contentInset = UIEdgeInsets(top: chromeTop, left: 0, bottom: chromeBottom, right: 0)
+            }
+            if !nextButton.isHidden {
+                nextButton.sizeToFit()
+                nextButton.center = vertical
+                    ? CGPoint(x: content.frame.minX - band / 2, y: chromeTop + cross / 2)
+                    : CGPoint(x: bounds.width / 2, y: content.frame.maxY + band / 2)
             }
             content.setNeedsDisplay()
         }
@@ -378,8 +428,9 @@ final class RubyContentView: UIView {
     }
 
     /// Whether two colors resolve to the same RGBA (reliable across SwiftUI-bridged
-    /// UIColors, unlike `==`).
-    private static func sameColor(_ a: UIColor, _ b: UIColor) -> Bool {
+    /// UIColors, unlike `==`). Fileprivate: the host scroll view uses it to gate
+    /// its own theme-dependent updates on the same per-frame configure path.
+    fileprivate static func sameColor(_ a: UIColor, _ b: UIColor) -> Bool {
         var ar: CGFloat = 0, ag: CGFloat = 0, ab: CGFloat = 0, aa: CGFloat = 0
         var br: CGFloat = 0, bg: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
         a.getRed(&ar, green: &ag, blue: &ab, alpha: &aa)
