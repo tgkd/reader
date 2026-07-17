@@ -15,7 +15,9 @@ struct SettingsView: View {
     @State private var isSubscribed = false
     @State private var demo = VoiceDemoPlayer()
     @State private var showingAbout = false
-    @State private var showingPaywall = false
+    /// One membership sheet for both tiers: subscribe/restore before, status +
+    /// App Store management after.
+    @State private var showingMembership = false
 
     var body: some View {
         ScrollView {
@@ -91,10 +93,11 @@ struct SettingsView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(theme.bg)
         }
-        // Membership screen (features + subscribe/restore) — same sheet RootView
-        // presents; it opens the RevenueCat paywall itself and degrades safely
-        // when RevenueCat is unconfigured.
-        .sheet(isPresented: $showingPaywall) {
+        // The one membership screen — same sheet RootView presents. It adapts to
+        // the tier (subscribe/restore vs status + App Store management), opens
+        // the RevenueCat paywall itself, and degrades safely when RevenueCat is
+        // unconfigured.
+        .sheet(isPresented: $showingMembership) {
             MembershipView()
         }
         // A purchase/restore just completed — flip the membership block (and the
@@ -192,18 +195,13 @@ struct SettingsView: View {
             .overlay(alignment: .bottom) {
                 Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 24)
             }
-            // RevenueCat resolves the subscription's real management surface — the
-            // native App Store sheet when possible, the web subscriptions page
-            // otherwise. StoreKit's `.manageSubscriptionsSheet` silently presented
-            // NOTHING when the signed-in Apple ID had no resolvable subscription
-            // (the TestFlight case). This row only renders when subscribed, which
-            // requires a configured RevenueCat, so `Purchases.shared` is safe here.
-            // Failures are logged by the SDK; Settings has no error surface.
-            actionRow(L10n.membershipManage) {
-                Task { try? await Purchases.shared.showManageSubscriptions() }
-            }
+            // The membership sheet, not the native App Store management sheet
+            // directly — that sheet silently shows NOTHING for sandbox/TestFlight
+            // purchases, so the tap must always produce visible UI. App Store
+            // management is one tap deeper, inside the sheet.
+            actionRow(L10n.membershipManage) { showingMembership = true }
         } else {
-            actionRow(L10n.readerSubscribeCTA) { showingPaywall = true }
+            actionRow(L10n.readerSubscribeCTA) { showingMembership = true }
         }
     }
 

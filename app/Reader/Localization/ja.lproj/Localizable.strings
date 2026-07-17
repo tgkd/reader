@@ -103,6 +103,12 @@
 "membership.restore" = "購入を復元";
 "membership.restore.none" = "復元できる購入が見つかりませんでした。";
 
+/* Subscription-details sheet (Settings → Manage subscription) */
+"membership.details.renews.format" = "%@ に更新されます。";
+"membership.details.expires.format" = "%@ に終了します。";
+"membership.details.testPurchase" = "テスト用の購入（TestFlight）のため、App Storeのサブスクリプション一覧に表示されない場合があります。";
+"membership.details.manage" = "App Storeで管理";
+
 /* リーダー — 目次（複数章のインポート） */
 "reader.chapters" = "目次";
 /* タイトルのないインポート章のフォールバック名。%d は1始まりの番号。 */

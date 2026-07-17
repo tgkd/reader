@@ -96,6 +96,15 @@ enum L10n {
     static var membershipSubscribe: String { String(localized: "membership.subscribe") }
     static var membershipRestore: String { String(localized: "membership.restore") }
     static var membershipRestoreNone: String { String(localized: "membership.restore.none") }
+    /// Subscription-details sheet; the renews/expires lines take a formatted date.
+    static func membershipRenews(_ date: String) -> String {
+        String(format: String(localized: "membership.details.renews.format"), date)
+    }
+    static func membershipExpires(_ date: String) -> String {
+        String(format: String(localized: "membership.details.expires.format"), date)
+    }
+    static var membershipTestPurchase: String { String(localized: "membership.details.testPurchase") }
+    static var membershipManageAppStore: String { String(localized: "membership.details.manage") }
     static var chapters: String { String(localized: "reader.chapters") }
     /// Fallback navigation label for an imported chapter with no title of its own
     /// (chrome — localizes, unlike the real title, which is reader content).

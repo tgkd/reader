@@ -105,6 +105,12 @@
 "membership.restore" = "Restore Purchases";
 "membership.restore.none" = "No previous purchases found.";
 
+/* Subscription-details sheet (Settings → Manage subscription) */
+"membership.details.renews.format" = "Renews %@.";
+"membership.details.expires.format" = "Expires %@.";
+"membership.details.testPurchase" = "Test purchase (TestFlight) — it may not appear in the App Store's subscription list.";
+"membership.details.manage" = "Manage in App Store";
+
 /* Reader — chapter navigation (multi-chapter imports) */
 "reader.chapters" = "Chapters";
 /* Fallback title for an untitled imported chapter; %d is the 1-based index. */
