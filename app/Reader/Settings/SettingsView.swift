@@ -1,7 +1,6 @@
 import SwiftUI
 import ReaderCore
 import RevenueCat
-import RevenueCatUI
 
 /// Reading preferences, opened from the Library header gear. Currently the reading
 /// font + text size; both apply live to the reader surface and persist. Hosted in a
@@ -92,31 +91,11 @@ struct SettingsView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(theme.bg)
         }
-        // Same guarded paywall as RootView — `PaywallView` fatalErrors if
-        // RevenueCat was never configured, so a misconfigured build must not crash.
+        // Membership screen (features + subscribe/restore) — same sheet RootView
+        // presents; it opens the RevenueCat paywall itself and degrades safely
+        // when RevenueCat is unconfigured.
         .sheet(isPresented: $showingPaywall) {
-            if Purchases.isConfigured {
-                PaywallView(displayCloseButton: true)
-                    .onPurchaseCompleted { _ in
-                        app.entitlementTick += 1
-                        showingPaywall = false
-                    }
-                    .onRestoreCompleted { _ in
-                        app.entitlementTick += 1
-                        showingPaywall = false
-                    }
-            } else {
-                VStack(spacing: 16) {
-                    Text(L10n.membershipUnavailable)
-                        .font(.system(size: 15)).foregroundStyle(theme.ink)
-                        .multilineTextAlignment(.center)
-                    Button(L10n.commonOK) { showingPaywall = false }
-                        .foregroundStyle(theme.accent)
-                }
-                .padding(40)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(theme.bg.ignoresSafeArea())
-            }
+            MembershipView()
         }
         // A purchase/restore just completed — flip the membership block (and the
         // voice section's gate) live.

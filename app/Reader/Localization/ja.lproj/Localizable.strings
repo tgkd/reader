@@ -92,6 +92,17 @@
 /* RevenueCat未設定のビルドでペイウォールを開いた場合の表示 */
 "membership.unavailable" = "現在メンバーシップはご利用いただけません。";
 
+/* Membership screen — premium features list + subscribe/restore */
+"membership.feature.narration.title" = "単語同期の朗読";
+"membership.feature.narration.body" = "AIが本を朗読し、読み上げ中の単語をハイライトします。生成した章はオフラインで何度でも無料で再生できます。";
+"membership.feature.voices.title" = "朗読の声";
+"membership.feature.voices.body" = "朗読する声を選べます。";
+"membership.feature.ocr.title" = "スキャンした本";
+"membership.feature.ocr.body" = "画像のみの本やスキャンした本をAIの文字認識で読めます。";
+"membership.subscribe" = "登録する";
+"membership.restore" = "購入を復元";
+"membership.restore.none" = "復元できる購入が見つかりませんでした。";
+
 /* リーダー — 目次（複数章のインポート） */
 "reader.chapters" = "目次";
 /* タイトルのないインポート章のフォールバック名。%d は1始まりの番号。 */

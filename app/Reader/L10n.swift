@@ -87,6 +87,15 @@ enum L10n {
     static var readerSubscribeBody: String { String(localized: "reader.subscribe.body") }
     static var readerSubscribeCTA: String { String(localized: "reader.subscribe.cta") }
     static var membershipUnavailable: String { String(localized: "membership.unavailable") }
+    static var membershipFeatureNarrationTitle: String { String(localized: "membership.feature.narration.title") }
+    static var membershipFeatureNarrationBody: String { String(localized: "membership.feature.narration.body") }
+    static var membershipFeatureVoicesTitle: String { String(localized: "membership.feature.voices.title") }
+    static var membershipFeatureVoicesBody: String { String(localized: "membership.feature.voices.body") }
+    static var membershipFeatureOCRTitle: String { String(localized: "membership.feature.ocr.title") }
+    static var membershipFeatureOCRBody: String { String(localized: "membership.feature.ocr.body") }
+    static var membershipSubscribe: String { String(localized: "membership.subscribe") }
+    static var membershipRestore: String { String(localized: "membership.restore") }
+    static var membershipRestoreNone: String { String(localized: "membership.restore.none") }
     static var chapters: String { String(localized: "reader.chapters") }
     /// Fallback navigation label for an imported chapter with no title of its own
     /// (chrome — localizes, unlike the real title, which is reader content).

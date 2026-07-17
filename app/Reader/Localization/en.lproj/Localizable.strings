@@ -94,6 +94,17 @@
 /* Shown if the paywall is opened on a build where RevenueCat isn't configured */
 "membership.unavailable" = "Membership isn’t available right now.";
 
+/* Membership screen — premium features list + subscribe/restore */
+"membership.feature.narration.title" = "Word-synced narration";
+"membership.feature.narration.body" = "AI reads your books aloud, highlighting each word as it’s spoken. Narrated chapters replay offline, free.";
+"membership.feature.voices.title" = "Narration voices";
+"membership.feature.voices.body" = "Choose the voice that reads to you.";
+"membership.feature.ocr.title" = "Scanned books";
+"membership.feature.ocr.body" = "Read scanned and image-only books with AI text recognition.";
+"membership.subscribe" = "Subscribe";
+"membership.restore" = "Restore Purchases";
+"membership.restore.none" = "No previous purchases found.";
+
 /* Reader — chapter navigation (multi-chapter imports) */
 "reader.chapters" = "Chapters";
 /* Fallback title for an untitled imported chapter; %d is the 1-based index. */
