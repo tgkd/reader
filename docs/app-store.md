@@ -184,7 +184,8 @@ sheet → Yomi, or tap Open in "Yomi"):
   https://yomi.thetango.org/samples/ginga-tetsudo-no-yoru-scanned.pdf
 
 To test the paid features, please use a StoreKit sandbox account to purchase
-Membership, then:
+Membership. The Membership screen is at Settings → Membership; pressing Play on a
+chapter without Membership opens the same screen. After subscribing:
 1. Import the EPUB above and press Play on a chapter — this generates and plays
    word-synced narration with a moving highlight.
 2. Import the scanned PDF above and confirm the "read with AI" prompt to see
@@ -205,6 +206,9 @@ Support: jisho_ai@proton.me
       localized name/description added, and attached to this version.
 - [ ] Subscription group + "Privacy Policy" and "Terms of Use (EULA)" URLs set on
       the app and the subscription (Apple requires both for auto-renewing IAP).
+- [ ] RevenueCat paywall template shows functional Privacy Policy and Terms links
+      (guideline 3.1.2 requires them on the purchase screen itself, not just in
+      App Store Connect — the Membership sheet has none of its own).
 - [ ] Privacy nutrition label filled in per §5.
 - [ ] Support URL (yomi.thetango.org) and marketing URL reachable; Terms/Privacy
       pages live.
