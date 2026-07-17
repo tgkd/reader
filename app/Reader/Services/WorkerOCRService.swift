@@ -31,7 +31,7 @@ final class WorkerOCRService: PDFTextRecognizer {
     private let maxConcurrent: Int
     private let jpegQuality: CGFloat
 
-    init(baseURL: URL = URL(string: "https://your-worker.example.workers.dev")!,
+    init(baseURL: URL = URL(string: "https://api.thetango.org")!,
          userId: String?,
          session: URLSession = .shared,
          maxConcurrent: Int = 2,

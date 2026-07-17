@@ -146,15 +146,18 @@ final class AppServices {
         return (plist?.isEmpty == false) ? plist : nil
     }
 
-    /// Worker base URL for the TTS/OCR path: the `WorkerBaseURL` Info.plist key (set
-    /// via the gitignored xcconfig), else a non-functional placeholder so a fresh
-    /// clone still builds and the public repo ships no live, billable host.
+    /// Worker base URL for the TTS/OCR path: the `WorkerBaseURL` Info.plist key
+    /// (WORKER_HOST override in the gitignored xcconfig), else the production
+    /// Worker. The host is not a secret (it ships in every IPA and appears in CT
+    /// logs) and every billable route is auth-gated server-side, so defaulting to
+    /// prod is safe — and it removes the silently-broken build class where a
+    /// missing WORKER_HOST baked in a host that doesn't resolve.
     private static var workerBaseURL: URL {
         let raw = Bundle.main.object(forInfoDictionaryKey: "WorkerBaseURL") as? String
         // Require a real host: an empty WORKER_HOST expands the plist value to
         // "https://", which is non-empty and URL-parses but has no host — that would
-        // slip past a bare isEmpty check and defeat the placeholder fallback below.
+        // slip past a bare isEmpty check and defeat the production fallback below.
         if let raw, let url = URL(string: raw), url.host?.isEmpty == false { return url }
-        return URL(string: "https://your-worker.example.workers.dev")!
+        return URL(string: "https://api.thetango.org")!
     }
 }

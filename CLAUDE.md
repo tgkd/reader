@@ -183,8 +183,10 @@ screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 Simulator
   every glass surface.
 - **No DEBUG launch-env (`READER_*`) overrides exist anymore.** App config comes from the gitignored
   `app/Signing.xcconfig` (`WORKER_HOST`, `REVENUECAT_KEY`, `DEVELOPMENT_TEAM`) → `Info.plist`
-  (`WorkerBaseURL`, `RevenueCatKey`). Empty values fall back to a non-functional placeholder host,
-  so a fresh clone still builds. `.env` is read ONLY by `scripts/capture-alignment.mjs` (`ELEVEN_KEY`).
+  (`WorkerBaseURL`, `RevenueCatKey`). An empty `WORKER_HOST` falls back to the production Worker
+  (`api.thetango.org` — not a secret: it ships in every IPA, and all billable routes are
+  auth-gated); an empty `REVENUECAT_KEY` leaves the paywall unconfigured (crash-guarded).
+  `.env` is read ONLY by `scripts/capture-alignment.mjs` (`ELEVEN_KEY`).
 - **Library starts empty** — users import their own books. Swipe-to-delete a row also purges its
   cached narration (`AppServices.purgeAudio`). Settings has a "clear audio cache" control
   (`audioStore.clear()` / `totalBytes()`). Reading font/size/orientation/furigana + theme + the
@@ -198,11 +200,11 @@ screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 Simulator
   clean checkout lacks: downloads `jisho-compact.db` from the public `compact-dict` GitHub release
   (refresh after regenerating: `gh release upload compact-dict app/Reader/Resources/jisho-compact.db
   --clobber -R tgkd/reader`), writes `Signing.xcconfig` from workflow env vars (`READER_TEAM_ID`,
-  `READER_WORKER_HOST`, `READER_REVENUECAT_KEY`), runs `xcodegen generate`, and copies the tracked
+  `READER_REVENUECAT_KEY`; `READER_WORKER_HOST` is optional — blank uses the production-Worker
+  default), runs `xcodegen generate`, and copies the tracked
   `app/Package.resolved` into the generated project (Xcode Cloud disables automatic SPM resolution —
   refresh the copy when pins change). Set the workflow's Xcode version to a release 26.x. No
-  `GITHUB_TOKEN` needed — repo and release assets are public. Workflow env vars `READER_TEAM_ID` /
-  `READER_WORKER_HOST` / `READER_REVENUECAT_KEY` supply the real `Signing.xcconfig` values.
+  `GITHUB_TOKEN` needed — repo and release assets are public.
   **Build numbers are Xcode Cloud-managed**: the workflow's "next build number" was set to 25
   (2026-07-04, above all prior manual TestFlight uploads) and auto-increments per run — don't
   set `CFBundleVersion` for cloud builds.

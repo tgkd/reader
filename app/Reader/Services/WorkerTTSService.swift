@@ -25,11 +25,10 @@ final class WorkerTTSService: TTSService {
     private let userId: String?
     private let session: URLSession
 
-    /// The production endpoint is a private deployment. `AppServices` injects the real
-    /// URL from the `WorkerBaseURL` Info.plist key (set via the gitignored
-    /// `Signing.xcconfig`'s `WORKER_HOST`). This committed default is a non-functional
-    /// placeholder so a fresh clone still builds.
-    init(baseURL: URL = URL(string: "https://your-worker.example.workers.dev")!,
+    /// `AppServices` injects the URL from the `WorkerBaseURL` Info.plist key
+    /// (overridable via the gitignored `Signing.xcconfig`'s `WORKER_HOST`); this
+    /// default mirrors its production fallback.
+    init(baseURL: URL = URL(string: "https://api.thetango.org")!,
          userId: String?,
          session: URLSession? = nil) {
         self.baseURL = baseURL

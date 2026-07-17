@@ -6,8 +6,8 @@
 #     scripts/build-compact-dict.sh, then `gh release upload compact-dict
 #     app/Reader/Resources/jisho-compact.db --clobber -R tgkd/reader`).
 #  3. Signing.xcconfig — generated from Xcode Cloud env vars (READER_TEAM_ID,
-#     READER_WORKER_HOST, READER_REVENUECAT_KEY) so the team id / deployment
-#     config stay out of this public repo.
+#     READER_REVENUECAT_KEY; optional READER_WORKER_HOST — blank falls back to
+#     the production Worker baked into the app).
 #  4. Package.resolved — Xcode Cloud disables automatic SPM resolution; a
 #     tracked copy (app/Package.resolved) is placed into the generated project.
 set -e
@@ -27,7 +27,7 @@ fi
 if [ ! -f "$APP_DIR/Signing.xcconfig" ]; then
     cat > "$APP_DIR/Signing.xcconfig" <<EOF
 DEVELOPMENT_TEAM = ${READER_TEAM_ID:-}
-WORKER_HOST = ${READER_WORKER_HOST:-your-worker.example.workers.dev}
+WORKER_HOST = ${READER_WORKER_HOST:-}
 REVENUECAT_KEY = ${READER_REVENUECAT_KEY:-}
 EOF
 fi
