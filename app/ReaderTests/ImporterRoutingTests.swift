@@ -17,6 +17,10 @@ final class ImporterRoutingTests: XCTestCase {
         XCTAssertTrue(importer("README") is TextImporter)        // no extension → text
         XCTAssertTrue(importer("BOOK.EPUB") is EPUBImporter)     // case-insensitive
         XCTAssertNil(importer("book.docx"))                       // unsupported
+        // Markdown routes to the text importer WITH the syntax strip enabled.
+        XCTAssertEqual((importer("notes.md") as? TextImporter)?.stripMarkdown, true)
+        XCTAssertEqual((importer("notes.markdown") as? TextImporter)?.stripMarkdown, true)
+        XCTAssertEqual((importer("book.txt") as? TextImporter)?.stripMarkdown, false)
     }
 
     func testUnsupportedExtensionThrows() async {
@@ -46,6 +50,7 @@ final class ImporterRoutingTests: XCTestCase {
     }
 
     func testSupportedExtensionsList() {
-        XCTAssertEqual(Set(Importer.supportedExtensions), ["epub", "pdf", "txt", "text"])
+        XCTAssertEqual(Set(Importer.supportedExtensions),
+                       ["epub", "pdf", "txt", "text", "md", "markdown"])
     }
 }

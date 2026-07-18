@@ -108,9 +108,13 @@ PDFKit / networking live in the `app/` target only.
   so furigana isn't inlined; chapter titles from the TOC — EPUB3 nav document preferred, regex-parsed
   like body XHTML, EPUB2 NCX fallback via strict `XMLParser` — hrefs resolved relative to the TOC
   document's own directory, fragments stripped, first entry per file wins, any failure degrades to
-  untitled) / `PDFImporter` / `TextImporter` (scored encoding sniff via `JapaneseTextDecoder`).
-  One `Chapter` per spine item / PDF page, then any oversized chapter is split into
-  ≤ `Chapter.maxRenderableChars` (~4k) sub-chapters (see the invariant below).
+  untitled) / `PDFImporter` / `TextImporter` (scored encoding sniff via `JapaneseTextDecoder`;
+  `.md`/`.markdown` route here too with `MarkdownStrip` — markers dropped, wrapped text kept, so
+  syntax isn't furigana'd/narrated). The Library `+` is a menu: file picker OR **paste text**
+  (`PasteTextView` → `AppModel.importPastedText` — no file; title defaults to the first line;
+  never reads `UIPasteboard` programmatically, avoiding the iOS paste banner).
+  One `Chapter` per spine item / PDF page (pasted text = one chapter), then any oversized chapter
+  is split into ≤ `Chapter.maxRenderableChars` (~4k) sub-chapters (see the invariant below).
 
 - **OCR (cloud-only, subscriber-gated):** pages/spine items with no text layer are OCR'd via
   `WorkerOCRService` → Worker `/pdf/ocr` → Cloudflare AI Gateway → Gemini. Both `PDFImporter`

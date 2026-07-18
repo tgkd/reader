@@ -72,7 +72,14 @@
 
 /* Library — empty state (no books imported yet) */
 "library.empty.title" = "Your library is empty";
-"library.empty.body" = "Tap + to add an EPUB, PDF, or text file.";
+"library.empty.body" = "Tap + to add an EPUB, PDF, or text file — or paste any Japanese text.";
+
+/* Library — the + menu and the paste-text import sheet */
+"library.add.importFile" = "Import File";
+"library.add.pasteText" = "Paste Text";
+"paste.titleField" = "Title";
+"paste.placeholder" = "Paste or type Japanese text…";
+"paste.add" = "Add to Library";
 
 /* Dictionary sheet */
 "dict.notFound" = "Not in dictionary";

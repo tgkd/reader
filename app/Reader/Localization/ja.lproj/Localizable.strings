@@ -70,7 +70,14 @@
 
 /* ライブラリ — 空の状態（まだ本がない） */
 "library.empty.title" = "ライブラリは空です";
-"library.empty.body" = "＋ から EPUB・PDF・テキストを追加できます。";
+"library.empty.body" = "＋ から EPUB・PDF・テキストを追加、または本文を貼り付けできます。";
+
+/* Library — the + menu and the paste-text import sheet */
+"library.add.importFile" = "ファイルを読み込む";
+"library.add.pasteText" = "テキストを貼り付け";
+"paste.titleField" = "タイトル";
+"paste.placeholder" = "日本語のテキストを貼り付け…";
+"paste.add" = "ライブラリに追加";
 
 /* 辞書シート */
 "dict.notFound" = "辞書に未収録";

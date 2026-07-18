@@ -69,6 +69,13 @@ enum L10n {
     static var themeSepia: String { String(localized: "theme.sepia") }
     static var themeNight: String { String(localized: "theme.night") }
 
+    // Library — the + menu and the paste-text import sheet.
+    static var libraryAddImportFile: String { String(localized: "library.add.importFile") }
+    static var libraryAddPasteText: String { String(localized: "library.add.pasteText") }
+    static var pasteTitleField: String { String(localized: "paste.titleField") }
+    static var pastePlaceholder: String { String(localized: "paste.placeholder") }
+    static var pasteAdd: String { String(localized: "paste.add") }
+
     static var statusUnread: String { String(localized: "library.status.unread") }
     static var statusDone: String { String(localized: "library.status.done") }
     static var libraryEmptyTitle: String { String(localized: "library.empty.title") }

@@ -28,7 +28,7 @@ enum ImportError: LocalizedError, Equatable {
 /// applied here — it happens once downstream at the tokenize/TTS boundary, so
 /// every ingestion path shares one normalization (see `DocumentImporter`).
 enum Importer {
-    static let supportedExtensions = ["epub", "pdf", "txt", "text"]
+    static let supportedExtensions = ["epub", "pdf", "txt", "text", "md", "markdown"]
 
     /// Pick the importer for `url` by extension. `ocr`/`onProgress` drive the OCR
     /// fallback on the two formats that can be image-only: PDF (pages with no text
@@ -41,6 +41,7 @@ enum Importer {
         case "epub":            return EPUBImporter(url: url, recognizer: ocr, onProgress: onProgress)
         case "pdf":             return PDFImporter(url: url, recognizer: ocr, onProgress: onProgress)
         case "txt", "text", "": return TextImporter(url: url)
+        case "md", "markdown":  return TextImporter(url: url, stripMarkdown: true)
         default:                return nil
         }
     }

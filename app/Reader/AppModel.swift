@@ -194,6 +194,26 @@ final class AppModel {
         }
     }
 
+    /// Import pasted text as a book: the same downstream pipeline as a .txt file
+    /// (one chapter, split to renderable sub-chapters) with no file involved.
+    /// Whitespace-only paste is a no-op — the sheet's Add button is disabled for
+    /// it, so there's no error to surface.
+    func importPastedText(title: String, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let chapters = Chapter(title: nil, text: text).splitToRenderable()
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        saveImported(Document(title: "", chapters: chapters),
+                     title: name.isEmpty ? Self.defaultPasteTitle(from: trimmed) : name)
+    }
+
+    /// Default title for pasted text: its first non-empty line, capped so a
+    /// wall of prose doesn't become the row title verbatim.
+    static func defaultPasteTitle(from text: String) -> String {
+        let firstLine = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        return String(firstLine.trimmingCharacters(in: .whitespaces).prefix(24))
+    }
+
     /// The user declined AI parsing. Save the already-extracted text (a mixed book
     /// keeps its text pages) and drop the temp.
     func cancelImportOCR(_ p: PendingImportOCR) {

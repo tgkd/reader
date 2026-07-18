@@ -10,6 +10,7 @@ struct LibraryView: View {
     @Environment(\.theme) private var theme
     @State private var model = LibraryModel()
     @State private var importing = false
+    @State private var showingPaste = false
     @State private var showingSettings = false
     /// Row the user swiped to delete, pending the confirmation alert.
     @State private var pendingDelete: LibraryModel.Item?
@@ -89,6 +90,10 @@ struct LibraryView: View {
         } message: { p in
             Text(L10n.importOCRConfirmBody(p.pageCount))
         }
+        .sheet(isPresented: $showingPaste) {
+            PasteTextView()
+                .presentationDetents([.large])
+        }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
                 .presentationDetents([.medium, .large])
@@ -149,7 +154,14 @@ struct LibraryView: View {
                     chromeIcon("gearshape", label: L10n.a11ySettings) { showingSettings = true }
                 }
                 .glassEffect(.regular, in: Capsule())
-                Button { importing = true } label: {
+                Menu {
+                    Button { importing = true } label: {
+                        Label(L10n.libraryAddImportFile, systemImage: "folder")
+                    }
+                    Button { showingPaste = true } label: {
+                        Label(L10n.libraryAddPasteText, systemImage: "document.on.clipboard")
+                    }
+                } label: {
                     Image(systemName: "plus")
                         .fontWeight(.semibold)
                         .frame(width: 44, height: 44)
