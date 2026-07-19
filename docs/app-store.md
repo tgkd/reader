@@ -210,8 +210,8 @@ Support: jisho_ai@proton.me
       (guideline 3.1.2 requires them on the purchase screen itself, not just in
       App Store Connect — the Membership sheet has none of its own).
 - [ ] Privacy nutrition label filled in per §5.
-- [ ] Support URL (yomi.thetango.org) and marketing URL reachable; Terms/Privacy
-      pages live.
+- [x] Support URL (yomi.thetango.org) and marketing URL reachable; Terms/Privacy
+      pages live (yomi.thetango.org/terms · /privacy — verified 2026-07-18).
 - [ ] Build uploaded via Xcode Cloud (build number is cloud-managed — see CLAUDE.md).
 - [ ] Age rating questionnaire completed → 4+.
 - [ ] Export compliance: uses only standard HTTPS/TLS (exempt).

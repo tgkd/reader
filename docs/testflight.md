@@ -54,7 +54,7 @@ localization in 4). Steps 2–3 are kept for reference.
    - Add **auto-renewable subscription**:
      - Reference Name: `Monthly`
      - **Product ID**: `app.reader.app.monthly` (unique, immutable — write it down)
-     - Duration: 1 Month · Price: $9.99
+     - Duration: 1 Month · Price: $0.99 (matches `Reader.storekit`)
      - Add a localized **display name + description** (required to leave Draft).
    - Get it to at least **"Ready to Submit"** (it's purchasable in sandbox/TestFlight
      without full review).
