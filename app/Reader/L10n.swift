@@ -139,6 +139,13 @@ enum L10n {
         String(format: String(localized: "import.recognizing.format"), done, total)
     }
 
+    static var importPartialTitle: String { String(localized: "import.partial.title") }
+    /// Body for the "imported, but %d scanned page(s) were left out" notice — a
+    /// non-subscriber's mixed text+scanned book; the alert offers Membership.
+    static func importPartialBody(_ pages: Int) -> String {
+        String(format: String(localized: "import.partial.body.format"), pages)
+    }
+
     static var importOCRConfirmTitle: String { String(localized: "import.ocr.confirm.title") }
     static var importOCRConfirmAction: String { String(localized: "import.ocr.confirm.action") }
     /// Body for the "this book is image-only — read it with AI?" confirm; %d = page

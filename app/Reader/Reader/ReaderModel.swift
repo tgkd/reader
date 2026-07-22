@@ -12,11 +12,13 @@ import struct ReaderCore.Document   // disambiguate from SwiftUI.Document
 @Observable
 final class ReaderModel {
     enum LoadState: Equatable { case loading, ready, failed(String) }
-    /// Audio is the only gated feature, with a lifecycle independent of the
-    /// always-available reading surface: `.locked` = not subscribed (show the
-    /// membership pill), `.idle` = subscribed but not yet generated (Play to
-    /// synthesize), `.synthesizing` = generating, `.ready` = player + timed spans
-    /// loaded, `.notGenerated`/`.failed` = synth had no offline audio / errored.
+    /// Audio GENERATION is the only gated feature, with a lifecycle independent
+    /// of the always-available reading surface: `.locked` = not subscribed AND
+    /// no cached audio for this chapter (show the membership pill — cached
+    /// narration plays regardless of entitlement), `.idle` = subscribed but not
+    /// yet generated (Play to synthesize), `.synthesizing` = generating,
+    /// `.ready` = player + timed spans loaded, `.notGenerated`/`.failed` =
+    /// synth had no offline audio / errored.
     enum AudioState: Equatable { case locked, idle, synthesizing, ready, notGenerated, failed(String) }
 
     let document: Document
@@ -168,27 +170,39 @@ final class ReaderModel {
         setTimeline(SpanTimeline(untimedTokens: tokens))
         loadState = .ready
 
-        // Audio gate: require `reader Pro` (checked locally) before generating
-        // speech, so a non-subscriber never hits the paid Worker. No-op ungate when
-        // RevenueCat isn't configured (dev/offline). Synthesis is deferred to Play.
+        // Already-paid local audio plays for EVERYONE — the subscription gates
+        // GENERATION only (decision 2026-07-22): cached playback has no marginal
+        // service cost, and a lapsed subscriber keeps what they paid for. Probe
+        // the cache first; the entitlement check runs only on a miss, so a cached
+        // re-read never depends on a RevenueCat lookup (offline-proof).
+        let key = SynthesisRequest(text: text, voice: services.narrationVoice).cacheKey
+        if let cached = services.audioStore.load(key) {
+            switch await buildPlayback(from: cached, gen: gen) {
+            case .ready:
+                audioState = .ready
+                return
+            case .undecodable:
+                // Corrupt entry (valid sidecar, undecodable mp3): evict it so
+                // the next Play regenerates instead of re-failing forever.
+                services.audioStore.remove(key)
+            case .aborted:
+                return
+            }
+        }
+
+        // Cache miss: NEW synthesis is the gated feature — require `reader Pro`
+        // (checked locally) so a non-subscriber never hits the paid Worker. No-op
+        // ungate when RevenueCat isn't configured (dev/offline). Synthesis is
+        // deferred to Play.
         let subscribed = await services.isSubscribed()
         guard gen == loadGeneration, !Task.isCancelled else { return }
         audioState = subscribed ? .idle : .locked
-
-        // Already-paid local audio: load it eagerly (no network) so a re-read gets
-        // the word-synced highlight immediately and resumes where it stopped.
-        if subscribed {
-            let key = SynthesisRequest(text: text, voice: services.narrationVoice).cacheKey
-            if let cached = services.audioStore.load(key),
-               await buildPlayback(from: cached, gen: gen) {
-                audioState = .ready
-            } else if services.synthesis.isSynthesizing(key) {
-                // A synthesis this user already started (and is paying for) is
-                // still running — the user left mid-generation and came back.
-                // Re-attach: show progress and play when it lands, exactly as if
-                // they had never left.
-                startAudio()
-            }
+        if subscribed, services.synthesis.isSynthesizing(key) {
+            // A synthesis this user already started (and is paying for) is
+            // still running — the user left mid-generation and came back.
+            // Re-attach: show progress and play when it lands, exactly as if
+            // they had never left.
+            startAudio()
         }
     }
 
@@ -321,27 +335,41 @@ final class ReaderModel {
             }
         }
 
-        guard await buildPlayback(from: synth, gen: gen) else {
+        switch await buildPlayback(from: synth, gen: gen) {
+        case .ready:
+            audioState = .ready
+            return true
+        case .undecodable:
+            // Undecodable bytes are worthless whether cached or fresh — the
+            // coordinator already saved a fresh result, so without eviction the
+            // next Play would replay the same broken entry as a cache hit and
+            // fail once more before regenerating. Evict; Play regenerates.
+            services.audioStore.remove(key)
+            fallthrough
+        case .aborted:
             endSynthesisProgress(success: false)
             if gen == loadGeneration { audioState = .failed(L10n.readerFailedAudio) }
             return false
         }
-        audioState = .ready
-        return true
     }
+
+    /// Outcome of `buildPlayback` — `.undecodable` means the audio DATA is bad
+    /// (evict it if it came from the cache, or every retry replays the same broken
+    /// bytes), while `.aborted` means a newer load superseded us / the tokenizer
+    /// was unavailable (touch nothing).
+    private enum PlaybackBuild { case ready, undecodable, aborted }
 
     /// Build the player + timed spans from synthesized audio (cached or freshly
     /// generated). Re-tokenizes the synthesized text (the exact text the alignment
     /// indexes) and folds the char timings into spans so the highlight tracks the
-    /// real playhead, then resumes the saved position. Returns false if superseded
-    /// by a newer load() / torn down, or the audio can't be decoded.
-    private func buildPlayback(from synth: SynthesizedAudio, gen: Int) async -> Bool {
-        guard gen == loadGeneration, !Task.isCancelled else { return false }
+    /// real playhead, then resumes the saved position.
+    private func buildPlayback(from synth: SynthesizedAudio, gen: Int) async -> PlaybackBuild {
+        guard gen == loadGeneration, !Task.isCancelled else { return .aborted }
 
         // Tokenize the EXACT text the alignment indexes (single source of truth) and
         // fold the char timings onto the tokens for the moving highlight.
         guard let tokens = await services.tokenizerWorker.tokenize(synth.text),
-              gen == loadGeneration, !Task.isCancelled else { return false }
+              gen == loadGeneration, !Task.isCancelled else { return .aborted }
         setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: synth.alignment)))
 
         // The audio SESSION is activated in play() (first real playback), not here —
@@ -354,13 +382,13 @@ final class ReaderModel {
             // Delegate owns natural-finish handling; it fires even backgrounded, when
             // the CADisplayLink (a foreground-only clock) is paused.
             let d = PlayerDelegate()
-            d.onFinish = { [weak self] in self?.handlePlaybackFinished() }
+            d.onFinish = { [weak self] ok in self?.handlePlaybackFinished(successfully: ok) }
             p.delegate = d
             audioDelegate = d
             player = p
             duration = p.duration
         } catch {
-            return false
+            return .undecodable
         }
 
         // Resume where the last session left off (only for the saved chapter, and
@@ -371,7 +399,7 @@ final class ReaderModel {
             currentTime = resume
             activeIndex = timeline.index(at: resume)
         }
-        return true
+        return .ready
     }
 
     // MARK: - Transport
@@ -562,9 +590,28 @@ final class ReaderModel {
     /// rule as the lock-screen skip). Without a cached continuation the lock-screen
     /// widget is kept (paused at the end) so a pocketed phone still has transport;
     /// only the audio session is released.
-    private func handlePlaybackFinished() {
+    private func handlePlaybackFinished(successfully: Bool) {
         isPlaying = false
         link.stop()
+        guard successfully else {
+            // Decoder failure mid-chapter (the delegate's `successfully == false`):
+            // NOT a finished read — don't mark it 読了 or auto-advance on it, and
+            // don't touch saved progress. The data produced a decode error, so
+            // evict the cache entry (a retry would replay the same broken bytes)
+            // and surface the failure; Play regenerates.
+            player = nil
+            audioDelegate = nil
+            services.audioStore.remove(
+                SynthesisRequest(text: currentChapter?.text ?? "",
+                                 voice: services.narrationVoice).cacheKey)
+            audioState = .failed(L10n.readerFailedAudio)
+            // Tear the widget down with the player: unlike the kept-at-chapter-end
+            // widget (whose player still exists), remote Play here would hit a nil
+            // player and dead-end — a lock screen with nonfunctional controls.
+            nowPlaying.deactivate()
+            deactivateSession()
+            return
+        }
         currentTime = duration
         activeIndex = timeline.index(at: duration)
         persistProgress(completed: true)
@@ -700,8 +747,8 @@ private final class DisplayLinkProxy: NSObject {
 /// thread that started playback (the main run loop here), so hopping onto the main
 /// actor via `assumeIsolated` is valid — mirroring `DisplayLinkProxy`.
 private final class PlayerDelegate: NSObject, AVAudioPlayerDelegate {
-    var onFinish: (() -> Void)?
+    var onFinish: ((_ successfully: Bool) -> Void)?
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        MainActor.assumeIsolated { onFinish?() }
+        MainActor.assumeIsolated { onFinish?(flag) }
     }
 }

@@ -67,6 +67,10 @@ final class AppModel {
     var importProgress: (completed: Int, total: Int)?
     /// Last import failure, surfaced as an alert.
     var importError: String?
+    /// Import succeeded but scanned/image-only pages were omitted (a
+    /// non-subscriber's mixed book) — surfaced as a notice offering Membership,
+    /// never a silent partial import.
+    var importNotice: String?
     /// The failure was the Membership gate (a non-subscriber's scanned import) —
     /// the alert then offers a way INTO Membership instead of dead-ending on OK.
     var importErrorNeedsMembership = false
@@ -121,6 +125,7 @@ final class AppModel {
         route = .library                 // so the banner/confirm alert (Library chrome) is visible
         importError = nil
         importErrorNeedsMembership = false
+        importNotice = nil
         let displayName = url.deletingPathExtension().lastPathComponent
         let scoped = url.startAccessingSecurityScopedResource()
         let temp = FileManager.default.temporaryDirectory
@@ -142,15 +147,18 @@ final class AppModel {
                     try await Importer.document(from: temp, ocr: nil)
                 }.value
                 // Extraction succeeded, but some pages/spine items may have been
-                // image-only and skipped. If the user can OCR them, offer to fill them
-                // in rather than shipping a book that's silently missing pages.
+                // image-only and skipped. Count OCR candidates regardless of
+                // entitlement: a subscriber is offered the fill-in; a non-subscriber
+                // keeps the extracted text but gets an explicit "N pages left out"
+                // notice — a mixed book must never lose pages silently.
                 let ocr = await services.ocrRecognizer()
-                let pages = ocr == nil ? 0 : await Task.detached { Importer.ocrPageCount(for: temp) }.value
+                let pages = await Task.detached { Importer.ocrPageCount(for: temp) }.value
                 if let ocr, pages > 0 {
                     pendingImportOCR = PendingImportOCR(url: temp, title: displayName,
                                                         pageCount: pages, recognizer: ocr, fallback: document)
                 } else {
                     saveImported(document, title: displayName)
+                    if pages > 0 { importNotice = L10n.importPartialBody(pages) }
                     try? FileManager.default.removeItem(at: temp)
                 }
             } catch {

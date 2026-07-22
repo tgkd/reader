@@ -66,7 +66,15 @@ struct LibraryView: View {
         .fileImporter(isPresented: $importing,
                       allowedContentTypes: [.epub, .pdf, .plainText, .text],
                       allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first { app.importFile(url) }
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { app.importFile(url) }
+            case .failure(let error):
+                // Picker-level failure (file provider, undownloaded iCloud item):
+                // route through the import-failed alert instead of silence.
+                app.importErrorNeedsMembership = false
+                app.importError = error.localizedDescription
+            }
         }
         .alert(L10n.importFailedTitle, isPresented: showImportError) {
             // A Membership-gated failure (scanned import, no subscription) offers
@@ -77,6 +85,14 @@ struct LibraryView: View {
             Button(L10n.commonOK, role: .cancel) {}
         } message: {
             Text(app.importError ?? "")
+        }
+        // Mixed book imported without its scanned pages (non-subscriber) — an
+        // explicit notice with the way into Membership, never a silent omission.
+        .alert(L10n.importPartialTitle, isPresented: showImportNotice) {
+            Button(L10n.readerSubscribeCTA) { app.showPaywall = true }
+            Button(L10n.commonOK, role: .cancel) {}
+        } message: {
+            Text(app.importNotice ?? "")
         }
         .alert(L10n.libraryDeleteTitle, isPresented: showDeleteConfirm, presenting: pendingDelete) { item in
             Button(L10n.libraryDelete, role: .destructive) { model.delete(item.document, app.services) }
@@ -118,6 +134,10 @@ struct LibraryView: View {
 
     private var showImportError: Binding<Bool> {
         Binding(get: { app.importError != nil }, set: { if !$0 { app.importError = nil } })
+    }
+
+    private var showImportNotice: Binding<Bool> {
+        Binding(get: { app.importNotice != nil }, set: { if !$0 { app.importNotice = nil } })
     }
 
     private var showDeleteConfirm: Binding<Bool> {

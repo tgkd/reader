@@ -143,6 +143,11 @@ PDFKit / networking live in the `app/` target only.
   the context fill, which reads fine in paper/sepia but renders black-on-black in the night theme.
 - **Subscription gates speech generation AND scanned/image OCR only.** Reading extracted text
   (EPUB / TXT / born-digital PDF) with furigana, tap-to-define, themes, and settings is free.
+  **Cached narration plays regardless of entitlement** (decision 2026-07-22): `ReaderModel.load()`
+  probes the audio cache BEFORE the subscription check, so a lapsed subscriber keeps playing
+  chapters they already generated (offline-proof — no RevenueCat lookup on the cached path);
+  only a cache miss reaches `isSubscribed()`, and only new synthesis / voice changes /
+  regenerating evicted audio require the entitlement.
   `isSubscribed()` (RevenueCat `reader Pro` entitlement) is checked **locally** so the paid Worker
   is never hit for a non-subscriber; the Worker's 403 is the backstop. Synthesis is lazy (first Play).
   That extends to every unattended path: a remote prev/next-chapter skip AND the

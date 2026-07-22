@@ -95,7 +95,7 @@
 
 /* Reader — subscription gate (no active `reader Pro` entitlement) */
 "reader.subscribe.title" = "Listen with Membership";
-"reader.subscribe.body" = "Subscribe to generate and play the word-synced narration.";
+"reader.subscribe.body" = "Subscribe to generate the word-synced narration. Chapters you’ve already generated play free, offline.";
 "reader.subscribe.cta" = "View Membership";
 
 /* Shown if the paywall is opened on a build where RevenueCat isn't configured */
@@ -142,6 +142,9 @@
 "import.ocr.confirm.body.format" = "This file has no selectable text — its pages look like images. Read %d page(s) with AI? This uses your Membership.";
 "import.ocr.confirm.large" = "This may take a while and use a lot of credits.";
 "import.ocr.confirm.action" = "Read with AI";
+/* Notice after a non-subscriber imports a mixed book: text kept, scanned pages left out; %d = omitted page count. */
+"import.partial.title" = "Some pages were left out";
+"import.partial.body.format" = "%d page(s) have no selectable text and were left out. Reading them with AI needs Membership — after joining, import the file again to include them.";
 
 /* Accessibility — VoiceOver labels for icon-only / custom-drawn controls */
 "a11y.back" = "Back";
