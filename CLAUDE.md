@@ -88,11 +88,17 @@ PDFKit / networking live in the `app/` target only.
 
 - **Chrome (iOS 26 Liquid Glass):** no bars — the reader header is floating glass (circle back
   button, title capsule with chapter subtitle that IS the chapter selector, toggle cluster) and
-  the player is one full-width glass pill in every audio state (native `Slider` scrubber, speed
-  `Menu`, determinate synthesis bar). Chrome clearance lives INSIDE `RubyScrollView` — a vertical
+  the player (`PlayerView`) is a collapsible 58 pt glass circle bottom-right — thin ring =
+  playback position (or generation %, with the percent as its center label; a timer-only center
+  while playing), tap only ever expands — that morphs into a full-width glass capsule via the
+  system `glassEffectID` morph in a `GlassEffectContainer` (native `Slider` scrubber,
+  tap-to-cycle speed pill, determinate synthesis bar + cancel; membership CTA when locked).
+  The capsule's state rows swap STRUCTURALLY (`switch`, default opacity transition) — opacity-
+  gating mounted siblings leaks phantom accessibility elements through glass-hosted subtrees.
+  Chrome clearance lives INSIDE `RubyScrollView` — a vertical
   `contentInset` in yokogaki (text scrolls under the glass, giving it something to blur) but the
   column band in tategaki (whose full-height columns would otherwise sit permanently under the
-  pills). The pill deliberately has NO chapter arrows (they read as time-skips in an audiobook
+  pills). The player deliberately has NO chapter arrows (they read as time-skips in an audiobook
   context); chapter moves = title capsule → chapters sheet, or lock-screen prev/next. Native
   controls tint from the theme accent via a root-level `.tint` in `RootView`.
 

@@ -122,8 +122,8 @@
 "reader.chapterNumber.format" = "第%d章";
 /* タイトルのない章のヘッダーサブタイトル。%1$d は現在、%2$d は総数。 */
 "reader.chapterOfCount.format" = "第%1$d章 / 全%2$d章";
-/* 音声生成中の進捗バーの下に表示。 */
-"reader.generating" = "音声を生成中…";
+/* 音声生成中、進捗パーセントの横に表示。 */
+"reader.generating" = "音声を生成中";
 
 /* インポート（テキスト追加） */
 "import.failed.title" = "読み込みに失敗しました";
@@ -158,3 +158,5 @@
 "a11y.audioCached" = "音声ダウンロード済み";
 "a11y.speed" = "再生速度";
 "a11y.voiceDemo" = "声のサンプルを再生";
+"a11y.playerExpand" = "プレーヤーを開く";
+"a11y.playerCollapse" = "プレーヤーを閉じる";

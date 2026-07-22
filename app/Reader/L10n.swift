@@ -169,4 +169,6 @@ enum L10n {
     static var a11yAudioCached: String { String(localized: "a11y.audioCached") }
     static var a11ySpeed: String { String(localized: "a11y.speed") }
     static var a11yVoiceDemo: String { String(localized: "a11y.voiceDemo") }
+    static var a11yPlayerExpand: String { String(localized: "a11y.playerExpand") }
+    static var a11yPlayerCollapse: String { String(localized: "a11y.playerCollapse") }
 }

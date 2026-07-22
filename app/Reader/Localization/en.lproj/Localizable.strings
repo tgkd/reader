@@ -124,8 +124,8 @@
 "reader.chapterNumber.format" = "Chapter %d";
 /* Header subtitle for an untitled chapter; %1$d current, %2$d total. */
 "reader.chapterOfCount.format" = "Chapter %1$d of %2$d";
-/* Shown under the determinate progress bar while speech is generated. */
-"reader.generating" = "Generating audio…";
+/* Generation label beside the live percent while speech is generated. */
+"reader.generating" = "Generating audio";
 
 /* Import (add text) */
 "import.failed.title" = "Import failed";
@@ -160,3 +160,5 @@
 "a11y.audioCached" = "Audio downloaded";
 "a11y.speed" = "Playback speed";
 "a11y.voiceDemo" = "Play voice sample";
+"a11y.playerExpand" = "Expand player";
+"a11y.playerCollapse" = "Collapse player";

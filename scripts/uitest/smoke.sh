@@ -43,7 +43,8 @@ check "02-reader.png — vertical text, furigana above kanji, paragraphs/indents
 
 # 3. Remote TTS synthesis + transport ---------------------------------------------
 echo "[3] TTS — synthesize + play"
-tap_label "Play"; sleep 1
+tap_label "Expand player"; sleep 1   # collapsed circle → capsule
+tap_label "Play"; sleep 1            # pre-audio row Play (or ready-row Play on a cache hit)
 if wait_for_label "Playback position" 90; then
   pass "synthesis completed, transport appeared"
 else
