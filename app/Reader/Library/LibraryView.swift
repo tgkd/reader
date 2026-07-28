@@ -14,6 +14,8 @@ struct LibraryView: View {
     @State private var showingSettings = false
     /// Row the user swiped to delete, pending the confirmation alert.
     @State private var pendingDelete: LibraryModel.Item?
+    /// A confirmed deletion that couldn't be committed to `library.json`.
+    @State private var deleteFailed = false
     /// Hides the membership (paywall) button once subscribed — it's purely an
     /// upsell entry; a lapsed or reinstalled user sees it again (and Restore
     /// lives on the paywall it opens).
@@ -55,7 +57,13 @@ struct LibraryView: View {
         .onAppear {
             model.load(app.services)
         }
-        .task { isSubscribed = await app.services.isSubscribed() }
+        .task {
+            isSubscribed = await app.services.isSubscribed()
+            // Then FOLLOW RevenueCat: an expiry, refund or cross-device purchase
+            // never reaches `entitlementTick`, and this screen would keep the
+            // membership entry point hidden from a user who has just lapsed.
+            for await active in app.services.entitlementUpdates() { isSubscribed = active }
+        }
         // A purchase/restore just completed — drop the upsell button live.
         .onChange(of: app.entitlementTick) { _, _ in
             Task { isSubscribed = await app.services.isSubscribed() }
@@ -86,19 +94,31 @@ struct LibraryView: View {
         } message: {
             Text(app.importError ?? "")
         }
-        // Mixed book imported without its scanned pages (non-subscriber) — an
-        // explicit notice with the way into Membership, never a silent omission.
+        // Mixed book imported without its scanned pages — an explicit notice, never
+        // a silent omission. Membership is offered only when the gate is what left
+        // them out; a subscriber whose OCR pass failed has nothing to buy.
         .alert(L10n.importPartialTitle, isPresented: showImportNotice) {
-            Button(L10n.readerSubscribeCTA) { app.showPaywall = true }
+            if app.importNoticeNeedsMembership {
+                Button(L10n.readerSubscribeCTA) { app.showPaywall = true }
+            }
             Button(L10n.commonOK, role: .cancel) {}
         } message: {
             Text(app.importNotice ?? "")
         }
         .alert(L10n.libraryDeleteTitle, isPresented: showDeleteConfirm, presenting: pendingDelete) { item in
-            Button(L10n.libraryDelete, role: .destructive) { model.delete(item.document, app.services) }
+            Button(L10n.libraryDelete, role: .destructive) {
+                Task { deleteFailed = !(await model.delete(item.document, app.services)) }
+            }
             Button(L10n.commonCancel, role: .cancel) {}
         } message: { item in
             Text(L10n.libraryDeleteBody(item.document.title))
+        }
+        // The shelf file couldn't be rewritten — the row is gone from this session
+        // but the book will be back on the next launch, so say so.
+        .alert(L10n.libraryDeleteFailedTitle, isPresented: $deleteFailed) {
+            Button(L10n.commonOK, role: .cancel) {}
+        } message: {
+            Text(L10n.libraryDeleteFailedBody)
         }
         .alert(L10n.importOCRConfirmTitle, isPresented: showOCRConfirm, presenting: app.pendingImportOCR) { p in
             Button(L10n.importOCRConfirmAction) { app.confirmImportOCR(p) }

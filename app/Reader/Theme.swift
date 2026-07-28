@@ -49,7 +49,6 @@ struct Theme: Equatable {
     let hair: Color
     let accent: Color
     let hi: Color       // active-token highlight background
-    let hiInk: Color    // active-token text
     let soft: Color     // faint fills (progress track, example box)
     let onAccent: Color // text/icon drawn on top of an accent fill (e.g. the speed pill)
 
@@ -61,7 +60,7 @@ struct Theme: Equatable {
             bg = Color(hex: 0xf4f1e9);  surface = Color(hex: 0xfbf8f1)
             ink = Color(hex: 0x36312a); muted = Color(hex: 0xa59c8d)
             hair = Color(hex: 0x36312a, opacity: 0.12); accent = Color(hex: 0x44617b)
-            hi = Color(hex: 0x44617b, opacity: 0.14);   hiInk = Color(hex: 0x22333e)
+            hi = Color(hex: 0x44617b, opacity: 0.14)
             soft = Color(hex: 0x36312a, opacity: 0.05)
             onAccent = Color(hex: 0xfbf8f1)
         case .white:
@@ -70,14 +69,14 @@ struct Theme: Equatable {
             bg = Color(hex: 0xffffff);  surface = Color(hex: 0xffffff)
             ink = Color(hex: 0x1c1c1e); muted = Color(hex: 0x8e8e93)
             hair = Color(hex: 0x000000, opacity: 0.10); accent = Color(hex: 0x1c1c1e)
-            hi = Color(hex: 0x000000, opacity: 0.12);   hiInk = Color(hex: 0x000000)
+            hi = Color(hex: 0x000000, opacity: 0.12)
             soft = Color(hex: 0x000000, opacity: 0.05)
             onAccent = Color(hex: 0xffffff)
         case .sepia:
             bg = Color(hex: 0xece0ca);  surface = Color(hex: 0xf4ead7)
             ink = Color(hex: 0x473a27); muted = Color(hex: 0xa18d6e)
             hair = Color(hex: 0x473a27, opacity: 0.14); accent = Color(hex: 0xa4663a)
-            hi = Color(hex: 0xa4663a, opacity: 0.18);   hiInk = Color(hex: 0x3c2916)
+            hi = Color(hex: 0xa4663a, opacity: 0.18)
             soft = Color(hex: 0x473a27, opacity: 0.06)
             onAccent = Color(hex: 0xf4ead7)
         case .night:
@@ -85,7 +84,7 @@ struct Theme: Equatable {
             bg = Color(hex: 0x161613);  surface = Color(hex: 0x1f1e1a)
             ink = Color(hex: 0xdcd6c8); muted = Color(hex: 0x736d60)
             hair = Color(hex: 0xdcd6c8, opacity: 0.12); accent = Color(hex: 0xc9a961)
-            hi = Color(hex: 0xc9a961, opacity: 0.20);   hiInk = Color(hex: 0xf1e9dc)
+            hi = Color(hex: 0xc9a961, opacity: 0.20)
             soft = Color(hex: 0xdcd6c8, opacity: 0.06)
             // The night accent is a light gold; white text on it is low-contrast,
             // so on-accent text uses the dark background instead.

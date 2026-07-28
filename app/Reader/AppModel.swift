@@ -68,9 +68,13 @@ final class AppModel {
     /// Last import failure, surfaced as an alert.
     var importError: String?
     /// Import succeeded but scanned/image-only pages were omitted (a
-    /// non-subscriber's mixed book) — surfaced as a notice offering Membership,
-    /// never a silent partial import.
+    /// non-subscriber's mixed book, or an OCR pass that failed) — surfaced as a
+    /// notice, never a silent partial import.
     var importNotice: String?
+    /// The omission was the Membership gate rather than a failed OCR pass — only
+    /// then does the notice offer a way into Membership (a subscriber whose OCR
+    /// failed has nothing to buy).
+    var importNoticeNeedsMembership = false
     /// The failure was the Membership gate (a non-subscriber's scanned import) —
     /// the alert then offers a way INTO Membership instead of dead-ending on OK.
     var importErrorNeedsMembership = false
@@ -126,6 +130,7 @@ final class AppModel {
         importError = nil
         importErrorNeedsMembership = false
         importNotice = nil
+        importNoticeNeedsMembership = false
         let displayName = url.deletingPathExtension().lastPathComponent
         let scoped = url.startAccessingSecurityScopedResource()
         let temp = FileManager.default.temporaryDirectory
@@ -158,7 +163,10 @@ final class AppModel {
                                                         pageCount: pages, recognizer: ocr, fallback: document)
                 } else {
                     saveImported(document, title: displayName)
-                    if pages > 0 { importNotice = L10n.importPartialBody(pages) }
+                    if pages > 0 {
+                        importNoticeNeedsMembership = true
+                        importNotice = L10n.importPartialBody(pages)
+                    }
                     try? FileManager.default.removeItem(at: temp)
                 }
             } catch {
@@ -187,6 +195,22 @@ final class AppModel {
                 try? FileManager.default.removeItem(at: p.url)
                 importProgress = nil
             }
+            // This confirm can sit on screen indefinitely, so the entitlement that
+            // produced `p.recognizer` may be stale — revalidate locally before
+            // spending on the paid OCR route (its 403 is only the backstop). A
+            // lapsed user keeps the text pages, with the same partial notice a
+            // non-subscriber's mixed book gets.
+            guard await services.isSubscribed() else {
+                if let fallback = p.fallback {
+                    saveImported(fallback, title: p.title)
+                    importNoticeNeedsMembership = true
+                    importNotice = L10n.importPartialBody(p.pageCount)
+                } else {
+                    importErrorNeedsMembership = true
+                    importError = L10n.importOCRUnavailable
+                }
+                return
+            }
             do {
                 let document = try await Task.detached(priority: .userInitiated) {
                     try await Importer.document(from: p.url, ocr: p.recognizer) { done, total in
@@ -195,9 +219,17 @@ final class AppModel {
                 }.value
                 saveImported(document, title: p.title)
             } catch {
-                // OCR failed: keep whatever text we already had (mixed book), else report.
-                if let fallback = p.fallback { saveImported(fallback, title: p.title) }
-                else { importError = error.localizedDescription }
+                // OCR failed after the user approved (and may already have been
+                // billed for) the pass. Keep the text we did extract (mixed book),
+                // but SAY the scanned pages are missing: saving the fallback
+                // silently reports a complete book the user never got.
+                if let fallback = p.fallback {
+                    saveImported(fallback, title: p.title)
+                    importNoticeNeedsMembership = false
+                    importNotice = L10n.importPartialOCRFailed(p.pageCount)
+                } else {
+                    importError = error.localizedDescription
+                }
             }
         }
     }
@@ -234,6 +266,15 @@ final class AppModel {
         var document = document
         document.title = title
         services.library.save(document)
+        // library.json is the ONLY copy of an imported book's text, and the store
+        // writes it off the main actor — wait for that write to land before the UI
+        // reports the import as done (a force-quit would otherwise drop the queued
+        // write and the book would be gone on relaunch), and surface a write that
+        // genuinely failed instead of swallowing it.
+        if !services.library.flush() {
+            importErrorNeedsMembership = false
+            importError = L10n.importSaveFailed
+        }
         libraryRevision &+= 1
     }
 }

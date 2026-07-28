@@ -109,16 +109,27 @@ struct PDFImporter: DocumentImporter {
         return count
     }
 
+    /// Upper bound on one rasterized page, in pixels. A media box is untrusted
+    /// input (and the format allows pages up to 200×200 in): at 200 DPI a max-size
+    /// page asks for a multi-gigabyte bitmap and the app is killed before OCR even
+    /// starts. Oversized pages render at the largest scale that fits instead — 8 MP
+    /// still OCRs cleanly, and it keeps a full `ocrWindow` of pages bounded.
+    private static let maxRasterPixels: CGFloat = 8_000_000
+
     /// Rasterize a page for OCR. 200 DPI balances accuracy against memory
-    /// (US-letter → ~1700×2200 px). White background so transparent scans don't OCR
-    /// as noise. PDFKit's origin is bottom-left, so the context is flipped before
-    /// drawing. Always returns an image (a 1×1 white fallback for a nil/zero-size
-    /// page) so the OCR results stay 1:1 with the page list.
+    /// (US-letter → ~1700×2200 px), clamped to `maxRasterPixels`. White background
+    /// so transparent scans don't OCR as noise. PDFKit's origin is bottom-left, so
+    /// the context is flipped before drawing. Always returns an image (a 1×1 white
+    /// fallback for a nil/zero-size page) so the OCR results stay 1:1 with the page
+    /// list.
     static func render(_ page: PDFPage?, dpi: CGFloat = 200) -> CGImage {
         let bounds = page?.bounds(for: .mediaBox) ?? .zero
-        guard let page, bounds.width > 0, bounds.height > 0 else { return blankPixel }
-        let scale = dpi / 72.0
+        guard let page, bounds.width > 0, bounds.height > 0,
+              bounds.width.isFinite, bounds.height.isFinite else { return blankPixel }
+        // Downscale rather than allocate a bitmap the device can't hold.
+        let scale = min(dpi / 72.0, (maxRasterPixels / (bounds.width * bounds.height)).squareRoot())
         let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        guard size.width >= 1, size.height >= 1 else { return blankPixel }
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 1
         format.opaque = true

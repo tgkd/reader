@@ -16,17 +16,34 @@ final class WorkerOCRServiceTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeService(userId: String? = "user-123", maxConcurrent: Int = 2) -> WorkerOCRService {
+    /// Each service gets its OWN page-cache directory: the recognized-page cache is
+    /// content-addressed and persists in Caches, so a shared dir would leak results
+    /// between tests (and between runs). Pass an explicit `cacheDir` to exercise a
+    /// cache shared by two services.
+    private func makeService(userId: String? = "user-123", maxConcurrent: Int = 2,
+                             cacheDir: URL? = nil,
+                             inFlight: OCRInFlightPages = OCRInFlightPages()) -> WorkerOCRService {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         return WorkerOCRService(baseURL: URL(string: "https://test.example.com")!,
                                 userId: userId, session: URLSession(configuration: config),
-                                maxConcurrent: maxConcurrent)
+                                maxConcurrent: maxConcurrent,
+                                cache: OCRPageCache(dir: cacheDir ?? Self.tempCacheDir()),
+                                inFlight: inFlight)
     }
 
-    private func makeImage() -> CGImage {
+    private static func tempCacheDir() -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OCRCacheTests-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// `shade` varies the pixels so pages hash to DIFFERENT page-cache keys —
+    /// identical images are (correctly) one cached page.
+    private func makeImage(shade: CGFloat = 1) -> CGImage {
         UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).image { ctx in
-            UIColor.white.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+            UIColor(white: shade, alpha: 1).setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
         }.cgImage!
     }
 
@@ -96,18 +113,144 @@ final class WorkerOCRServiceTests: XCTestCase {
         }
         // maxConcurrent 1 → deterministic call order maps to page order.
         let out = try await makeService(maxConcurrent: 1)
-            .recognize([makeImage(), makeImage(), makeImage()], progress: nil)
+            .recognize([makeImage(shade: 1), makeImage(shade: 0.5), makeImage(shade: 0)], progress: nil)
         XCTAssertEqual(out, ["P0", "P1", "P2"])
     }
 
     func testProgressFiresPerPage() async throws {
         MockURLProtocol.handler = { _ in self.ok("x") }
         let last = Counter()
-        _ = try await makeService().recognize([makeImage(), makeImage()]) { done, total in
+        _ = try await makeService().recognize([makeImage(shade: 1), makeImage(shade: 0)]) { done, total in
             last.set(done)
             XCTAssertEqual(total, 2)
         }
         XCTAssertEqual(last.value, 2)   // reached total
+    }
+
+    /// A page recognized once is checkpointed under its image-content key, so a
+    /// re-import (after an import that failed in a later window) reads it back
+    /// instead of paying for the same page again.
+    func testRecognizedPageIsCheckpointedAndNotRequestedAgain() async throws {
+        let calls = Counter()
+        MockURLProtocol.handler = { _ in calls.increment(); return self.ok("認識済み") }
+        let dir = Self.tempCacheDir()
+        let page = makeImage()
+
+        let first = try await makeService(cacheDir: dir).recognize([page], progress: nil)
+        let second = try await makeService(cacheDir: dir).recognize([page], progress: nil)
+
+        XCTAssertEqual(first, ["認識済み"])
+        XCTAssertEqual(second, ["認識済み"])
+        XCTAssertEqual(calls.value, 1, "the second pass must be served from the page cache — OCR is billed per page")
+    }
+
+    /// Byte-identical pages (blank leaves between chapters in a scan) inside one
+    /// concurrency window both miss the not-yet-written page cache, so both used to
+    /// POST the same JPEG to the per-page billed route. Only one may be sent.
+    func testIdenticalPagesInOneWindowAreBilledOnce() async throws {
+        let calls = Counter()
+        MockURLProtocol.handler = { _ in calls.increment(); return self.ok("同じページ") }
+        let page = makeImage(shade: 0.25)
+
+        let out = try await makeService(maxConcurrent: 2).recognize([page, page, page], progress: nil)
+
+        XCTAssertEqual(out, ["同じページ", "同じページ", "同じページ"])
+        XCTAssertEqual(calls.value, 1, "identical pages must coalesce into one billed request")
+    }
+
+    /// Two CONCURRENT imports (nothing serializes them — `AppModel.importFile` starts
+    /// a Task per pick, each with its own recognizer) of the same scanned page both
+    /// miss the page cache neither has written yet. The session-scoped in-flight
+    /// registry must collapse them onto one billed request.
+    func testSamePageAcrossConcurrentServicesIsBilledOnce() async throws {
+        let calls = Counter()
+        MockURLProtocol.handler = { _ in
+            calls.increment()
+            // Slow, so the second import's request would overlap the first's.
+            Thread.sleep(forTimeInterval: 0.2)
+            return self.ok("重複ページ")
+        }
+        let dir = Self.tempCacheDir()
+        let shared = OCRInFlightPages()
+        let page = makeImage(shade: 0.75)
+        let first = makeService(cacheDir: dir, inFlight: shared)
+        let second = makeService(cacheDir: dir, inFlight: shared)
+
+        async let a = first.recognize([page], progress: nil)
+        async let b = second.recognize([page], progress: nil)
+        let (outA, outB) = try await (a, b)
+
+        XCTAssertEqual(outA, ["重複ページ"])
+        XCTAssertEqual(outB, ["重複ページ"])
+        XCTAssertEqual(calls.value, 1, "concurrent imports of the same page must share one billed request")
+    }
+
+    /// `recognize` probes the page cache BEFORE hopping into the in-flight registry,
+    /// so a page can arrive there after the owning request stored its text and
+    /// dropped its entry: an empty registry then reads as "nobody is doing this" and
+    /// the page is billed a second time. The registry re-probes the cache itself to
+    /// close that window — `store` lands before the entry is cleared, so no entry
+    /// always means the text is on disk.
+    func testRegistryServesACachedPageWithoutStartingWork() async throws {
+        let cache = OCRPageCache(dir: Self.tempCacheDir())
+        let registry = OCRInFlightPages()
+        let digest = "deadbeef"
+        let calls = Counter()
+
+        // The owner: recognizes, checkpoints, settles — its entry is dropped on return.
+        let first = try await registry.text(for: digest, cached: { cache.text(for: digest) }) {
+            calls.increment()
+            cache.store("認識済み", for: digest)
+            return "認識済み"
+        }
+        // A page whose own cache probe missed before that store landed.
+        let second = try await registry.text(for: digest, cached: { cache.text(for: digest) }) {
+            calls.increment()
+            return "再課金"
+        }
+
+        XCTAssertEqual(first, "認識済み")
+        XCTAssertEqual(second, "認識済み")
+        XCTAssertEqual(calls.value, 1,
+                       "a page already on disk must never start a second billed request")
+    }
+
+    /// A page failing must not cancel the pages ALREADY in flight: the Worker may
+    /// have recognized and billed them, so their text has to reach the page cache
+    /// even though the import as a whole fails. (Rethrowing straight out of the task
+    /// group used to cancel them, forcing a re-bill on the next import.)
+    func testInFlightPagesStillCheckpointWhenAnotherPageFails() async throws {
+        let dir = Self.tempCacheDir()
+        let good = makeImage(shade: 0)
+        let bad = makeImage(shade: 1)
+        // Discriminate by payload, not by arrival order: both pages are dispatched
+        // together, so which request lands first is not deterministic.
+        let goodPayload = try XCTUnwrap(UIImage(cgImage: good).jpegData(compressionQuality: 0.7))
+            .base64EncodedString()
+        let calls = Counter()
+        MockURLProtocol.handler = { req in
+            calls.increment()
+            let body = MockURLProtocol.body(of: req)
+            let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let payload = json?["image_base64"] as? String
+            guard payload == goodPayload else { return self.status(500) }
+            // Slow, so the other page's failure lands while this one is still in
+            // flight — the exact window where unwinding the group destroyed paid work.
+            Thread.sleep(forTimeInterval: 0.15)
+            return self.ok("二ページ目")
+        }
+
+        do {
+            _ = try await makeService(maxConcurrent: 2, cacheDir: dir).recognize([bad, good], progress: nil)
+            XCTFail("the failing page should propagate")
+        } catch {}
+
+        // The sibling's paid text must be on disk: recognizing it again costs nothing.
+        let before = calls.value
+        let out = try await makeService(maxConcurrent: 1, cacheDir: dir).recognize([good], progress: nil)
+        XCTAssertEqual(out, ["二ページ目"])
+        XCTAssertEqual(calls.value, before,
+                       "an in-flight page must finish and checkpoint — it may already have been billed")
     }
 }
 
@@ -156,8 +299,9 @@ final class MockURLProtocol: URLProtocol {
     override func stopLoading() {}
 
     /// URLSession turns `httpBody` into `httpBodyStream` by the time a protocol sees
-    /// it, so read whichever is present.
-    private static func body(of request: URLRequest) -> Data? {
+    /// it, so read whichever is present. Also callable from a `handler`, to route a
+    /// canned response by payload rather than by (nondeterministic) arrival order.
+    static func body(of request: URLRequest) -> Data? {
         if let body = request.httpBody { return body }
         guard let stream = request.httpBodyStream else { return nil }
         stream.open(); defer { stream.close() }

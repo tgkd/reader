@@ -97,14 +97,38 @@ final class AppServices {
     /// entries a chunked chapter left behind (normally pruned post-stitch, but a
     /// crash between synth and the whole-chapter save could orphan some). Mirrors
     /// `ChunkingTTSService`'s split so the segment keys match. Idempotent.
-    func purgeAudio(for document: Document) {
+    func purgeAudio(for document: Document) async {
+        // `ContentKey` is content-addressed, not document-addressed: a re-import of the
+        // same file, or two books sharing a chapter, resolve to the SAME cache entry.
+        // Whatever the surviving shelf still points at is not this document's to
+        // reclaim — removing it (or cancelling its in-flight paid request) would strip
+        // narration the other book already paid for. Compare under the same
+        // normalization the key is built from.
+        let stillReferenced = Set(
+            library.all()
+                .filter { $0.id != document.id }
+                .flatMap(\.chapters)
+                .map { Normalize.nfkc($0.text) }
+        )
         for chapter in document.chapters {
             let normalized = Normalize.nfkc(chapter.text)
+            guard !stillReferenced.contains(normalized) else { continue }
             let segments = Chunker.split(normalized)
             // Sweep every catalog voice: the user may have listened to this book
             // under a previous voice pick, whose entries live under other keys.
             for voice in Voice.catalog {
-                audioStore.remove(SynthesisRequest(text: normalized, voice: voice).cacheKey)
+                let key = SynthesisRequest(text: normalized, voice: voice).cacheKey
+                // A synthesis still running for this chapter would save its result
+                // AFTER the purge and resurrect audio for a book that no longer
+                // exists — unreachable, and only reclaimable by clearing the whole
+                // cache. `cancel` alone is not a barrier (it only sets a flag, and a
+                // response already in hand still saves on resume), so WAIT for the
+                // task to unwind before deleting. Deleting the book is the explicit
+                // destructive action, so abandoning its request is the intended
+                // outcome here; merely LEAVING the reader still must not cancel
+                // (see SynthesisCoordinator).
+                await synthesis.cancelAndWait(key)
+                audioStore.remove(key)
                 if segments.count > 1 {
                     for segment in segments {
                         audioStore.remove(SynthesisRequest(text: segment, voice: voice).cacheKey)
@@ -128,6 +152,29 @@ final class AppServices {
         return info?.entitlements[AppServices.entitlementID]?.isActive == true
     }
 
+    /// RevenueCat's pushed updates to the `reader Pro` state, each element the
+    /// freshly-resolved entitlement. A renewal, an expiry, a refund or a purchase
+    /// made on another device changes the tier without going through this app's
+    /// purchase/restore callbacks (`AppModel.entitlementTick`), so a view that read
+    /// `isSubscribed()` once keeps showing the old tier for as long as it stays on
+    /// screen — subscriber-only controls offered to a lapsed user, the upsell
+    /// hidden from them. Views that gate on the entitlement follow this instead.
+    /// Finishes immediately when RevenueCat is unconfigured (which always reads
+    /// not-subscribed, so there is nothing to follow).
+    func entitlementUpdates() -> AsyncStream<Bool> {
+        guard Purchases.isConfigured else { return AsyncStream { $0.finish() } }
+        let entitlement = AppServices.entitlementID
+        return AsyncStream { continuation in
+            let task = Task {
+                for await info in Purchases.shared.customerInfoStream {
+                    continuation.yield(info.entitlements[entitlement]?.isActive == true)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     /// OCR engine for scanned-PDF pages (those with no text layer) — the Worker's
     /// cloud OCR (Gemini via AI Gateway), gated on subscription. `nil` for
     /// non-subscribers: a scanned import then surfaces a Membership prompt, while
@@ -135,8 +182,16 @@ final class AppServices {
     /// quality wasn't good enough for a reading app.
     func ocrRecognizer() async -> PDFTextRecognizer? {
         guard await isSubscribed() else { return nil }
-        return WorkerOCRService(baseURL: AppServices.workerBaseURL, userId: AppServices.userId)
+        // Each import gets its own recognizer, but they share the in-flight page
+        // registry: nothing serializes imports, and OCR is billed per page, so two
+        // overlapping imports of the same scan must not POST the same image twice.
+        return WorkerOCRService(baseURL: AppServices.workerBaseURL, userId: AppServices.userId,
+                                inFlight: ocrInFlight)
     }
+
+    /// Session-scoped OCR request coalescer shared by every recognizer this app
+    /// hands out (see `ocrRecognizer`).
+    private let ocrInFlight = OCRInFlightPages()
 
     /// The RevenueCat appUserID for the Worker's X-User-ID header — the real
     /// appUserID once RevenueCat is configured. `nil` (no key) leaves the header

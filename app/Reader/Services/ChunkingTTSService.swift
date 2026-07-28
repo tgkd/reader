@@ -41,8 +41,14 @@ final class ChunkingTTSService: TTSService {
         // saving here first means a crash in that gap can't leave the chapter with
         // neither its segments nor its whole-chapter entry (all paid work lost).
         store?.save(stitched, for: request.cacheKey)
-        for segment in segments {
-            store?.remove(SynthesisRequest(text: segment, voice: request.voice, model: request.model).cacheKey)
+        // Reclaim the per-segment entries ONLY once the whole-chapter entry is
+        // verifiably on disk. `save` can't report failure (disk full, a directory
+        // race), and pruning against a save that didn't land would delete every
+        // paid segment at once — the whole chapter would have to be re-billed.
+        if store?.has(request.cacheKey) != false {
+            for segment in segments {
+                store?.remove(SynthesisRequest(text: segment, voice: request.voice, model: request.model).cacheKey)
+            }
         }
         return stitched
     }
@@ -51,28 +57,58 @@ final class ChunkingTTSService: TTSService {
     /// assembling the results back into spine order by index.
     private func synthesizeSegments(_ segments: [String], voice: Voice,
                                     model: SynthesisModel) async throws -> [SynthesizedAudio] {
-        var results = [SynthesizedAudio?](repeating: nil, count: segments.count)
+        // Identical segments (a repeated passage in an oversized chapter) share ONE
+        // `ContentKey`: dispatched separately, two of them in the same concurrency
+        // window both miss the per-segment cache before either writes it, and the same
+        // text is billed twice. Request each DISTINCT text once and fan its result out
+        // to every occurrence — which is what the cache would have served anyway.
+        var distinct: [String] = []
+        var slot: [String: Int] = [:]
+        for segment in segments where slot[segment] == nil {
+            slot[segment] = distinct.count
+            distinct.append(segment)
+        }
+        var results = [SynthesizedAudio?](repeating: nil, count: distinct.count)
+        var failure: Error?
 
-        try await withThrowingTaskGroup(of: (Int, SynthesizedAudio).self) { group in
+        // A NON-throwing group on purpose: rethrowing out of `group.next()` unwinds
+        // the group and cancels the siblings still in flight — segments ElevenLabs
+        // may already have generated and billed, whose audio would then never reach
+        // the per-segment cache and would be paid for a second time on retry.
+        // Collect per-task results instead, let everything already dispatched finish
+        // (and cache itself), then propagate the failure.
+        await withTaskGroup(of: (Int, Result<SynthesizedAudio, Error>).self) { group in
             var dispatched = 0
             func dispatchNext() {
-                guard dispatched < segments.count else { return }
+                // Don't spend on further segments once one has failed — the chapter
+                // can't be stitched anyway. In-flight ones still run to completion.
+                guard dispatched < distinct.count, failure == nil else { return }
                 let i = dispatched
-                let text = segments[i]
+                let text = distinct[i]
                 dispatched += 1
-                group.addTask { (i, try await self.synthesizeSegment(text, voice: voice, model: model)) }
+                group.addTask {
+                    do { return (i, .success(try await self.synthesizeSegment(text, voice: voice, model: model))) }
+                    catch { return (i, .failure(error)) }
+                }
             }
             // Prime the window, then refill as each task completes.
-            for _ in 0..<min(maxConcurrent, segments.count) { dispatchNext() }
-            while let (i, audio) = try await group.next() {
-                results[i] = audio
+            for _ in 0..<min(maxConcurrent, distinct.count) { dispatchNext() }
+            while let (i, result) = await group.next() {
+                switch result {
+                case .success(let audio): results[i] = audio
+                case .failure(let error): if failure == nil { failure = error }
+                }
                 dispatchNext()
             }
         }
+        if let failure { throw failure }
 
         let assembled = results.compactMap { $0 }
-        guard assembled.count == segments.count else { throw WorkerTTSService.WorkerError.badResponse }
-        return assembled
+        guard assembled.count == distinct.count else { throw WorkerTTSService.WorkerError.badResponse }
+        // Back to spine order, repeats included.
+        let ordered = segments.compactMap { slot[$0].map { assembled[$0] } }
+        guard ordered.count == segments.count else { throw WorkerTTSService.WorkerError.badResponse }
+        return ordered
     }
 
     /// One segment: served from the per-segment cache if present, else synthesized

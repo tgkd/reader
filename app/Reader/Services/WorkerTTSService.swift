@@ -75,8 +75,12 @@ final class WorkerTTSService: TTSService {
         }
 
         let decoded = try JSONDecoder().decode(TimestampedAudio.self, from: data)
+        // `Data(base64Encoded: "")` SUCCEEDS with zero bytes, so an empty
+        // `audio_base64` would otherwise be cached as paid narration: `AVAudioPlayer`
+        // then fails to init (a chapter that can never play until the cache is
+        // cleared), or the stitched chapter silently loses a segment.
         guard let alignment = decoded.alignment,
-              let audio = Data(base64Encoded: decoded.audioBase64) else {
+              let audio = Data(base64Encoded: decoded.audioBase64), !audio.isEmpty else {
             throw WorkerError.badResponse
         }
         // The three alignment arrays are parallel and indexed together downstream

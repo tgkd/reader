@@ -13,6 +13,9 @@
 "library.delete" = "Delete";
 "library.delete.title" = "Delete this text?";
 "library.delete.body.format" = "“%@” and any saved audio will be removed from this device.";
+/* The library file couldn’t be rewritten, so the deletion won’t survive a relaunch. */
+"library.delete.failed.title" = "Couldn’t remove this book";
+"library.delete.failed.body" = "The change couldn’t be saved to your library. Free up some space — this book may come back the next time you open Yomi.";
 
 /* Settings — reading preferences (font + size) */
 "settings.title" = "Settings";
@@ -111,6 +114,8 @@
 "membership.subscribe" = "Subscribe";
 "membership.restore" = "Restore Purchases";
 "membership.restore.none" = "No previous purchases found.";
+/* A purchase completed but the Membership entitlement still isn’t active. */
+"membership.purchase.incomplete" = "Your purchase went through, but Membership isn’t active yet. Try Restore Purchases — if it still doesn’t appear, please get in touch.";
 
 /* Subscription-details sheet (Settings → Manage subscription) */
 "membership.details.renews.format" = "Renews %@.";
@@ -145,6 +150,10 @@
 /* Notice after a non-subscriber imports a mixed book: text kept, scanned pages left out; %d = omitted page count. */
 "import.partial.title" = "Some pages were left out";
 "import.partial.body.format" = "%d page(s) have no selectable text and were left out. Reading them with AI needs Membership — after joining, import the file again to include them.";
+/* Notice when an approved OCR pass failed: text pages kept, scanned pages left out; %d = omitted page count. */
+"import.partial.ocrFailed.format" = "%d page(s) couldn’t be read with AI and were left out. The rest of the book was imported — import the file again to retry those pages.";
+/* The library file couldn’t be written, so the imported book won’t survive a relaunch. */
+"import.saveFailed" = "Couldn’t save this book to your library. Free up some space and import it again.";
 
 /* Accessibility — VoiceOver labels for icon-only / custom-drawn controls */
 "a11y.back" = "Back";

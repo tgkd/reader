@@ -11,6 +11,9 @@
 "library.delete" = "削除";
 "library.delete.title" = "この本を削除しますか？";
 "library.delete.body.format" = "「%@」と保存された音声がこの端末から削除されます。";
+/* ライブラリファイルを書き込めず、削除が再起動後に残らない場合。 */
+"library.delete.failed.title" = "この本を削除できませんでした";
+"library.delete.failed.body" = "変更をライブラリに保存できませんでした。空き容量を確保してください。次回Yomiを開いたときにこの本が戻る場合があります。";
 
 /* 設定 — 読書の表示（フォント・サイズ） */
 "settings.title" = "設定";
@@ -109,6 +112,8 @@
 "membership.subscribe" = "登録する";
 "membership.restore" = "購入を復元";
 "membership.restore.none" = "復元できる購入が見つかりませんでした。";
+/* 購入は完了したがメンバーシップの権利がまだ有効になっていない場合。 */
+"membership.purchase.incomplete" = "購入は完了しましたが、メンバーシップがまだ有効になっていません。「購入を復元」をお試しください。それでも反映されない場合はご連絡ください。";
 
 /* Subscription-details sheet (Settings → Manage subscription) */
 "membership.details.renews.format" = "%@ に更新されます。";
@@ -143,6 +148,10 @@
 /* 非サブスクの混在ブック読み込み後の通知：テキストは保持、スキャンページは除外。%d は除外ページ数。 */
 "import.partial.title" = "読み込めなかったページがあります";
 "import.partial.body.format" = "選択可能なテキストのない %d ページを除いて読み込みました。AIでの読み取りにはメンバーシップが必要です。加入後にもう一度このファイルを読み込むと、残りのページを取り込めます。";
+/* 承認済みのOCRが失敗したときの通知：テキストページは保持、スキャンページは除外。%d は除外ページ数。 */
+"import.partial.ocrFailed.format" = "%d ページをAIで読み取れなかったため、除いて読み込みました。ほかのページは取り込み済みです。もう一度このファイルを読み込むと再試行できます。";
+/* ライブラリファイルを書き込めず、読み込んだ本が再起動後に残らない場合。 */
+"import.saveFailed" = "この本をライブラリに保存できませんでした。空き容量を確保してから読み込み直してください。";
 
 /* アクセシビリティ — アイコンのみ・カスタム描画コントロールのVoiceOverラベル */
 "a11y.back" = "戻る";

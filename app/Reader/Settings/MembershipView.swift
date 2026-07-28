@@ -34,14 +34,8 @@ struct MembershipView: View {
         Group {
             if showingPaywall {
                 PaywallView(displayCloseButton: true)
-                    .onPurchaseCompleted { _ in
-                        app.entitlementTick += 1
-                        dismiss()
-                    }
-                    .onRestoreCompleted { _ in
-                        app.entitlementTick += 1
-                        dismiss()
-                    }
+                    .onPurchaseCompleted { completed($0, otherwise: L10n.membershipPurchaseIncomplete) }
+                    .onRestoreCompleted { completed($0, otherwise: L10n.membershipRestoreNone) }
             } else {
                 // Features scroll (if they must); the action buttons stay pinned
                 // at the bottom of the screen, not trailing the content.
@@ -183,6 +177,24 @@ struct MembershipView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24).padding(.top, 16)
+    }
+
+    /// The paywall reported a completed purchase or restore. RevenueCat documents
+    /// that the returned `CustomerInfo` does NOT imply an entitlement — restore
+    /// fires even when it finds nothing, and a purchase can complete against an
+    /// offering that isn't wired to `reader Pro`. So verify before believing it:
+    /// only an ACTIVE entitlement closes the sheet. Anything else falls back to
+    /// this screen with the reason, instead of dismissing onto a still-locked app
+    /// (possibly after payment) with no explanation. Mirrors `restore()`.
+    private func completed(_ customerInfo: CustomerInfo, otherwise reason: String) {
+        info = customerInfo
+        guard customerInfo.entitlements[AppServices.entitlementID]?.isActive == true else {
+            showingPaywall = false
+            notice = reason
+            return
+        }
+        app.entitlementTick += 1
+        dismiss()
     }
 
     /// Restore outside the paywall: an entitlement coming back closes the screen;

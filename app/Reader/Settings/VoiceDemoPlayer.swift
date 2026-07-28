@@ -29,9 +29,23 @@ final class VoiceDemoPlayer {
         task = Task { [weak self] in
             let request = SynthesisRequest(text: Self.sampleText, voice: voice)
             var synth = services.audioStore.load(request.cacheKey)
-            if synth == nil, let fresh = try? await services.tts.synthesize(request) {
-                services.audioStore.save(fresh, for: request.cacheKey)
-                synth = fresh
+            if synth == nil {
+                // Cache miss = a paid request. Revalidate the entitlement locally
+                // first: this sheet can outlive the check that revealed the voice
+                // picker, and the Worker's 403 is only meant to be the backstop.
+                guard await services.isSubscribed() else { self?.synthesizingID = nil; return }
+                // Stop / dismiss / another voice cancels this task, but the entitlement
+                // lookup above is a suspension its continuation still returns from —
+                // entering the coordinator afterwards would start a paid sample the
+                // user already cancelled (rapid voice switching = one bill per tap).
+                guard !Task.isCancelled else { return }
+                // Route through the coordinator, which owns the request and saves
+                // the result the moment it lands. Dismissing Settings / tapping Stop
+                // / switching voices then only DETACHES this UI — previously it
+                // cancelled a request ElevenLabs may already have billed, leaving no
+                // cached sample, so the next tap paid for it again. It also dedupes
+                // a double tap on the same voice into one request.
+                synth = try? await services.synthesis.task(for: request).value
             }
             guard let self, !Task.isCancelled else { return }
             self.synthesizingID = nil

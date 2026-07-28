@@ -8,8 +8,9 @@ import ReaderCore
 ///    right in vertical text — no change needed between orientations),
 ///  • tategaki via a frame with `kCTFrameProgressionAttributeName` = `rightToLeft`
 ///    + `kCTVerticalFormsAttributeName` on the string,
-///  • the synced highlight drawn as a rounded fill behind the active token, whose
-///    text is recolored to `hiInk`,
+///  • the synced highlight drawn as a translucent rounded fill OVER the active
+///    token — the base glyphs are never recolored (see `rebuild`: every run
+///    carries an explicit ink color, so nothing is repainted per highlight frame),
 ///  • taps hit-tested against the same per-token rects → token index.
 ///
 /// The drawer (`RubyContentView`) is sized to the WHOLE chapter and hosted in a
@@ -55,7 +56,7 @@ struct RubyTextView: UIViewRepresentable {
                      activeIndex: activeIndex, vertical: vertical,
                      fontName: fontName, fontScale: fontScale, showFurigana: showFurigana,
                      topInset: topInset, bottomInset: bottomInset,
-                     ink: theme.ink.ui, hi: theme.hi.ui, hiInk: theme.hiInk.ui)
+                     ink: theme.ink.ui, hi: theme.hi.ui)
     }
 }
 
@@ -148,7 +149,7 @@ final class RubyScrollView: UIScrollView {
     func configure(spans: [TokenSpan], structureVersion: Int, activeIndex: Int?, vertical: Bool,
                    fontName: String, fontScale: CGFloat, showFurigana: Bool,
                    topInset: CGFloat, bottomInset: CGFloat,
-                   ink: UIColor, hi: UIColor, hiInk: UIColor) {
+                   ink: UIColor, hi: UIColor) {
         let orientationChanged = (self.vertical != vertical)
         self.vertical = vertical
         // Always draggable along the reading axis (cross axis stays locked), so a
@@ -161,7 +162,7 @@ final class RubyScrollView: UIScrollView {
         let structureChanged = content.configure(
             spans: spans, structureVersion: structureVersion, activeIndex: activeIndex,
             vertical: vertical, fontName: fontName, fontScale: fontScale, showFurigana: showFurigana,
-            ink: ink, hi: hi, hiInk: hiInk)
+            ink: ink, hi: hi)
         if nextButtonInk == nil || !RubyContentView.sameColor(nextButtonInk!, ink) {
             nextButtonInk = ink
             nextButton.configuration?.baseForegroundColor = ink
@@ -418,7 +419,7 @@ final class RubyContentView: UIView {
     @discardableResult
     func configure(spans: [TokenSpan], structureVersion: Int, activeIndex: Int?, vertical: Bool,
                    fontName: String, fontScale: CGFloat, showFurigana: Bool,
-                   ink: UIColor, hi: UIColor, hiInk: UIColor) -> Bool {
+                   ink: UIColor, hi: UIColor) -> Bool {
         // Ink recolor (theme switch) needs a full base repaint; the highlight fill
         // color is applied to the vector layer separately. Compare resolved RGBA —
         // `UIColor !=` is unreliable for SwiftUI-bridged colors, and a missed compare

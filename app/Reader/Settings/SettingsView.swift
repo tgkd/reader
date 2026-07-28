@@ -85,7 +85,14 @@ struct SettingsView: View {
             .padding(.bottom, 24)
         }
         .onAppear { cacheBytes = app.services.audioStore.totalBytes() }
-        .task { isSubscribed = await app.services.isSubscribed() }
+        .task {
+            isSubscribed = await app.services.isSubscribed()
+            // Then FOLLOW RevenueCat: an expiry, refund or cross-device purchase
+            // never reaches `entitlementTick` (only this app's own purchase/restore
+            // does), and this sheet would go on offering the subscriber-only voice
+            // picker — and claiming Membership is active — to a lapsed user.
+            for await active in app.services.entitlementUpdates() { isSubscribed = active }
+        }
         .onDisappear { demo.stop() }
         .sheet(isPresented: $showingAbout) {
             AboutView()

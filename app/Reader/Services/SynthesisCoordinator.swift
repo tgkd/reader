@@ -49,6 +49,21 @@ final class SynthesisCoordinator {
         inFlight[key]?.cancel()
         inFlight[key] = nil
     }
+
+    /// Cancel AND wait for the task to finish unwinding. A deletion must use this
+    /// rather than `cancel`: cancellation only sets a flag, and a request whose
+    /// response has already arrived still runs `store.save` when its continuation
+    /// resumes — after a purge that merely cancelled it and deleted the files. That
+    /// resurrects narration for a book that no longer exists: unreachable, and
+    /// reclaimable only by clearing the whole cache. Awaiting makes every save this
+    /// task will ever perform (the stitched chapter and its per-segment entries)
+    /// happen strictly BEFORE the caller removes anything.
+    func cancelAndWait(_ key: ContentKey) async {
+        guard let task = inFlight[key] else { return }
+        task.cancel()
+        inFlight[key] = nil
+        _ = try? await task.value
+    }
 }
 
 /// One UIKit background-task assertion, ended at most once (explicitly or on

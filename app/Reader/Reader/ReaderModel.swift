@@ -76,6 +76,11 @@ final class ReaderModel {
     /// `.ended` + `.shouldResume` never un-pauses a manually paused reader.
     private var wasPlayingBeforeInterruption = false
     private var isSwitchingChapter = false
+    /// The current chapter's tokens from `load()`'s pass, kept with the exact
+    /// (normalized) string they were produced from. `buildPlayback` reuses them when
+    /// the synthesized text is that same string, instead of running the tokenizer a
+    /// second time over identical input.
+    private var chapterTokens: (text: String, tokens: [Token])?
     /// Bumped at the top of every `load()`. A load that finds itself superseded
     /// (a newer chapter switch, or the view torn down) after its `await` bails
     /// before touching the shared player/timeline/loadState — so two overlapping
@@ -167,6 +172,10 @@ final class ReaderModel {
         guard let tokens else {
             loadState = .failed(L10n.readerFailedTokenizer); return
         }
+        // `MeCabTokenizer` NFKC-normalizes its input, so these tokens ARE the tokens of
+        // `Normalize.nfkc(text)` — the string TTS is asked to speak. Keep them so the
+        // audio path can fold char timings onto this same pass.
+        chapterTokens = (Normalize.nfkc(text), tokens)
         setTimeline(SpanTimeline(untimedTokens: tokens))
         loadState = .ready
 
@@ -242,6 +251,11 @@ final class ReaderModel {
         services.synthesis.cancel(
             SynthesisRequest(text: currentChapter?.text ?? "",
                              voice: services.narrationVoice).cacheKey)
+        // Cancel our own side too: between Play and the request existing there is a
+        // suspension (the local entitlement lookup) where the coordinator has nothing
+        // to cancel, and without this the tap would be swallowed and the paid request
+        // created anyway. `ensureAudio` checks cancellation across that await.
+        playbackTask?.cancel()
     }
 
     /// Wall-clock estimate for synthesizing `charCount` chars through the Worker,
@@ -290,6 +304,28 @@ final class ReaderModel {
         if let cached = services.audioStore.load(key) {
             synth = cached
         } else {
+            // A cache miss is the only path that spends money, and this reader's
+            // `.idle` may be days old — revalidate the entitlement LOCALLY before
+            // the request, so a lapse while the screen stayed open can't reach the
+            // paid Worker (its 403 is the backstop, not the gate). A request already
+            // in flight is exempt: that is paid work this user started, and refusing
+            // to await it would throw the money away. Cached playback is untouched —
+            // it returned above, before this check.
+            if !services.synthesis.isSynthesizing(key) {
+                let subscribed = await services.isSubscribed()
+                // The pill's X can be tapped WHILE that lookup is suspended, when the
+                // coordinator has no task to cancel yet — so `cancelSynthesis` cancels
+                // this task instead, and the cancellation has to land here, before the
+                // paid request is created. Same for a chapter switch that superseded us.
+                guard gen == loadGeneration, !Task.isCancelled else {
+                    if gen == loadGeneration { audioState = .idle }
+                    return false
+                }
+                guard subscribed else {
+                    audioState = .locked
+                    return false
+                }
+            }
             do {
                 beginSynthesisProgress(charCount: request.text.count)
                 // The coordinator owns the request (and saves the paid result to
@@ -348,7 +384,11 @@ final class ReaderModel {
             fallthrough
         case .aborted:
             endSynthesisProgress(success: false)
-            if gen == loadGeneration { audioState = .failed(L10n.readerFailedAudio) }
+            // A cancel landing while playback is being built is the user's doing, not
+            // a failure: return the pill to Play rather than raising an error banner.
+            if gen == loadGeneration {
+                audioState = Task.isCancelled ? .idle : .failed(L10n.readerFailedAudio)
+            }
             return false
         }
     }
@@ -366,10 +406,19 @@ final class ReaderModel {
     private func buildPlayback(from synth: SynthesizedAudio, gen: Int) async -> PlaybackBuild {
         guard gen == loadGeneration, !Task.isCancelled else { return .aborted }
 
-        // Tokenize the EXACT text the alignment indexes (single source of truth) and
-        // fold the char timings onto the tokens for the moving highlight.
-        guard let tokens = await services.tokenizerWorker.tokenize(synth.text),
-              gen == loadGeneration, !Task.isCancelled else { return .aborted }
+        // The EXACT text the alignment indexes is the tokenizer's single source of
+        // truth. `load()` already tokenized this chapter under the same normalization,
+        // so when the synthesized text is that same string those tokens are — by the
+        // tokenizer's determinism — what a second pass would return: reuse them and
+        // fold the char timings onto them. Anything else (a stale cache entry from
+        // edited text) still tokenizes what the alignment actually indexes.
+        let tokens: [Token]?
+        if let loaded = chapterTokens, loaded.text == synth.text {
+            tokens = loaded.tokens
+        } else {
+            tokens = await services.tokenizerWorker.tokenize(synth.text)
+        }
+        guard let tokens, gen == loadGeneration, !Task.isCancelled else { return .aborted }
         setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: synth.alignment)))
 
         // The audio SESSION is activated in play() (first real playback), not here —

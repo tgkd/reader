@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import UIKit
 import ZIPFoundation
 import ReaderCore
@@ -174,11 +175,27 @@ struct EPUBImporter: DocumentImporter {
         return out
     }
 
-    /// Decode image bytes to a `CGImage`, or a 1×1 white pixel for missing/undecodable
-    /// data — so results stay 1:1 with the image list (a dropped image would misalign
-    /// every later chapter).
+    /// Longest edge (px) an EPUB page image is decoded to. The archive's images are
+    /// untrusted: `UIImage(data:)` decodes at whatever dimensions the file declares,
+    /// so one 12000×16000 scan (or a decompression bomb well under the 256 MB
+    /// compressed-entry cap) allocates ~750 MB — times a whole `ocrWindow`. An
+    /// ImageIO thumbnail bounds the DECODE itself; 3000 px still OCRs cleanly.
+    private static let maxImagePixelSize = 3000
+
+    /// Decode image bytes to a `CGImage` no larger than `maxImagePixelSize` on its
+    /// longest edge, or a 1×1 white pixel for missing/undecodable data — so results
+    /// stay 1:1 with the image list (a dropped image would misalign every later
+    /// chapter).
     private static func decode(_ data: Data?) -> CGImage {
-        guard let data, let cg = UIImage(data: data)?.cgImage else { return blankPixel }
+        guard let data, let source = CGImageSourceCreateWithData(data as CFData, nil) else { return blankPixel }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxImagePixelSize,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return blankPixel
+        }
         return cg
     }
 

@@ -21,6 +21,9 @@ enum L10n {
     static func libraryDeleteBody(_ title: String) -> String {
         String(format: String(localized: "library.delete.body.format"), title)
     }
+    /// The shelf file couldn't be rewritten, so the deletion won't survive a relaunch.
+    static var libraryDeleteFailedTitle: String { String(localized: "library.delete.failed.title") }
+    static var libraryDeleteFailedBody: String { String(localized: "library.delete.failed.body") }
 
     // Settings — reading preferences (font + size)
     static var settings: String { String(localized: "settings.title") }
@@ -103,6 +106,9 @@ enum L10n {
     static var membershipSubscribe: String { String(localized: "membership.subscribe") }
     static var membershipRestore: String { String(localized: "membership.restore") }
     static var membershipRestoreNone: String { String(localized: "membership.restore.none") }
+    /// A paywall purchase completed but `reader Pro` still isn't active (an
+    /// offering/entitlement misconfiguration) — never dismiss silently on that.
+    static var membershipPurchaseIncomplete: String { String(localized: "membership.purchase.incomplete") }
     /// Subscription-details sheet; the renews/expires lines take a formatted date.
     static func membershipRenews(_ date: String) -> String {
         String(format: String(localized: "membership.details.renews.format"), date)
@@ -145,6 +151,14 @@ enum L10n {
     static func importPartialBody(_ pages: Int) -> String {
         String(format: String(localized: "import.partial.body.format"), pages)
     }
+    /// Same notice for a subscriber whose approved OCR pass failed: the text pages
+    /// were kept, the scanned ones weren't. Nothing to buy — just retry.
+    static func importPartialOCRFailed(_ pages: Int) -> String {
+        String(format: String(localized: "import.partial.ocrFailed.format"), pages)
+    }
+    /// The library file couldn't be written (disk full) — the imported book won't
+    /// survive relaunch, so say so instead of reporting a successful import.
+    static var importSaveFailed: String { String(localized: "import.saveFailed") }
 
     static var importOCRConfirmTitle: String { String(localized: "import.ocr.confirm.title") }
     static var importOCRConfirmAction: String { String(localized: "import.ocr.confirm.action") }

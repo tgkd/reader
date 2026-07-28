@@ -7,6 +7,18 @@ public protocol LibraryStore {
     func all() -> [Document]
     func save(_ document: Document)
     func remove(_ id: Document.ID)
+    /// Wait for every queued mutation to be durably committed, reporting whether
+    /// the last write succeeded. A caller that must not report success before the
+    /// data survives a kill calls this — import writes the ONLY copy of a book's
+    /// text, unlike the frequent progress saves that may stay queued. Defaults to
+    /// `true` for impls that commit synchronously (or don't persist at all).
+    @discardableResult
+    func flush() -> Bool
+}
+
+public extension LibraryStore {
+    @discardableResult
+    func flush() -> Bool { true }
 }
 
 /// Caches synthesized audio + alignment keyed by `ContentKey`, so a chapter is

@@ -50,6 +50,19 @@ final class DiskLibraryStore: LibraryStore {
         persist()
     }
 
+    /// Block until the queued writes have landed; `false` if the last one failed
+    /// (disk full, protected data unavailable). Import calls this before reporting
+    /// success: the queued-and-forgotten write would otherwise be lost to a
+    /// force-quit, and the book — whose only copy is this file — would be gone on
+    /// relaunch with the UI having claimed it was imported.
+    @discardableResult
+    func flush() -> Bool { writeQueue.sync { !writeState.failed } }
+
+    /// Outcome of the most recent queued write. Touched only from `writeQueue`
+    /// (async writes, the `flush` barrier), so it is settled when `flush` reads it.
+    private final class WriteState: @unchecked Sendable { var failed = false }
+    private let writeState = WriteState()
+
     private func persist() {
         // Snapshot (COW, O(1)) then encode+write off the main actor: a progress save
         // fires on pause/background and would otherwise re-encode every book's full
@@ -57,9 +70,14 @@ final class DiskLibraryStore: LibraryStore {
         // truncate library.json — the only copy of every imported book's text.
         let snapshot = docs
         let url = self.url
+        let state = writeState
         writeQueue.async {
-            guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: url, options: .atomic)
+            do {
+                try JSONEncoder().encode(snapshot).write(to: url, options: .atomic)
+                state.failed = false
+            } catch {
+                state.failed = true
+            }
         }
     }
 }
