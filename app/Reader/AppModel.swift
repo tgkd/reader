@@ -83,7 +83,7 @@ final class AppModel {
     /// Narration voice (a subscriber Settings pick). Persisted by id; resolved
     /// against `Voice.catalog` on load so a removed voice falls back to the
     /// default. Mirrored into `AppServices` for cache-key probes and synthesis.
-    var narrationVoice: Voice = .george {
+    var narrationVoice: Voice = .shizuka {
         didSet {
             UserDefaults.standard.set(narrationVoice.id, forKey: Self.voiceKey)
             services.narrationVoice = narrationVoice

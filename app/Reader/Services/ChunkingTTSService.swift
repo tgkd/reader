@@ -15,11 +15,14 @@ import ReaderCore
 final class ChunkingTTSService: TTSService {
     private let inner: TTSService
     private let store: GeneratedAudioStore?
-    private let maxChars: Int
+    /// `nil` = derive the cap from the request's model, which is what production
+    /// wants: the models' input limits differ by 8x, so a fixed size is either
+    /// wasteful or over the limit. Tests pass an explicit small cap.
+    private let maxChars: Int?
     private let maxConcurrent: Int
 
     init(inner: TTSService, store: GeneratedAudioStore?,
-         maxChars: Int = Chunker.defaultMaxChars, maxConcurrent: Int = 2) {
+         maxChars: Int? = nil, maxConcurrent: Int = 2) {
         self.inner = inner
         self.store = store
         self.maxChars = maxChars
@@ -28,7 +31,7 @@ final class ChunkingTTSService: TTSService {
 
     func synthesize(_ request: SynthesisRequest) async throws -> SynthesizedAudio {
         let text = Normalize.nfkc(request.text)
-        let segments = Chunker.split(text, maxChars: maxChars)
+        let segments = Chunker.split(text, maxChars: maxChars ?? request.model.maxRequestChars)
         // Common case: fits in one request — no chunking, no stitching. Still wrap in
         // the 429 backoff so a short chapter (the majority) retries rate limits just
         // like the chunked path, instead of failing on the first 429.

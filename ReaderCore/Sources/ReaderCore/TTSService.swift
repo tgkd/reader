@@ -26,7 +26,7 @@ public struct SynthesisRequest: Equatable {
     public let voice: Voice
     public let model: SynthesisModel
 
-    public init(text: String, voice: Voice = .george, model: SynthesisModel = .multilingualV2) {
+    public init(text: String, voice: Voice = .shizuka, model: SynthesisModel = .v3) {
         self.text = text
         self.voice = voice
         self.model = model

@@ -49,7 +49,9 @@ PDFKit / networking live in the `app/` target only.
 - **TTS:** `WorkerTTSService` (POSTs `/tts/aligned` on the aiwork Worker → ElevenLabs
   `with-timestamps`, behind a RevenueCat gate; client sends only `X-User-ID`; 300 s request
   timeout — the route buffers the whole response, so a long chunk yields no bytes until done) →
-  wrapped by `ChunkingTTSService` (splits chapters over `Chunker.defaultMaxChars` ≈ 9k chars,
+  wrapped by `ChunkingTTSService` (splits chapters over `model.maxRequestChars` — per-model, since
+  the models' input limits differ 8x and v3's 5k is half multilingual_v2's; in practice chapters are
+  capped below every model's limit so the chunked path never fires,
   bounded concurrency ~2, exponential 429 backoff on **both** the chunked and single-request paths;
   saves the whole chapter durably **before** pruning per-segment entries; then `AlignmentStitcher`
   stitches) → cached by `DiskAudioStore`, content-addressed by
@@ -164,7 +166,19 @@ PDFKit / networking live in the `app/` target only.
   mirrored from `AppModel`) — the voice is part of `ContentKey`, so a defaulted request silently
   misses the cache and re-bills synthesis. Current sites: `ReaderModel` (eager probe + synth),
   `AppServices.firstChapterKey` (library ↓ badge; memoized, invalidated on voice change),
-  `purgeAudio` (sweeps ALL `Voice.catalog` voices), `VoiceDemoPlayer`.
+  `purgeAudio` (sweeps ALL `Voice.catalog` voices **x** ALL `SynthesisModel` cases — the model is in
+  the key too, so a sweep assuming today's default strands audio made under the previous one).
+- **Narration is Japanese-native by construction, and the request says so.** The default voice is a
+  native JA library voice (an English voice speaking Japanese inherits its phonology: English accent
+  + flattened pitch accent, unrecoverable by any parameter), and every request pins
+  `language_code: "ja"` — without it the multilingual pipeline resolves kanji through *Chinese*
+  (日本橋 romanizes as "Ri Ben Qiao"). `voice_settings` are sent explicitly so a shared-library
+  voice's own saved settings don't decide delivery; they are deliberately NOT in `ContentKey`, so
+  retuning them does not invalidate paid audio. **Never send
+  `apply_language_text_normalization`** — it is an LLM pass that speaks its own reasoning aloud
+  ("Wait, let me redo this properly: …"), 4x duration, one char absorbing 15 s of alignment
+  (measured 2026-07-29; `WorkerTTSServiceTests` asserts it stays off the wire). Old orthography
+  (生れ) is why the default model is `eleven_v3`: multilingual_v2 reads it なまれ, v3 うまれ, same price.
 - **Theme via the SwiftUI Environment, not props** — four themes (paper / white / sepia / night).
   Native controls pick up the theme accent from the root-level `.tint` in `RootView` (never
   system blue).
@@ -218,7 +232,7 @@ screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 Simulator
 - **Library starts empty** — users import their own books. Swipe-to-delete a row also purges its
   cached narration (`AppServices.purgeAudio`). Settings has a "clear audio cache" control
   (`audioStore.clear()` / `totalBytes()`). Reading font/size/orientation/furigana + theme + the
-  narration voice (by `Voice.catalog` id, falling back to George) persist via `UserDefaults` in
+  narration voice (by `Voice.catalog` id, falling back to Shizuka) persist via `UserDefaults` in
   `AppModel`. Voice samples in Settings synthesize one fixed sentence per voice through the normal
   gated TTS path and cache content-addressed — first listen bills, replays are free.
 - **Local purchase testing:** `Reader.storekit` is wired into the scheme (run from Xcode, no sandbox

@@ -52,7 +52,7 @@ final class AppServices {
     /// pick, mirrored here by `AppModel`. Changing it drops the memoized
     /// first-chapter keys so the Library's downloaded badges re-probe under the
     /// new voice's cache keys.
-    var narrationVoice: Voice = .george {
+    var narrationVoice: Voice = .shizuka {
         didSet { if narrationVoice != oldValue { contentKeyCache.removeAll() } }
     }
 
@@ -113,25 +113,32 @@ final class AppServices {
         for chapter in document.chapters {
             let normalized = Normalize.nfkc(chapter.text)
             guard !stillReferenced.contains(normalized) else { continue }
-            let segments = Chunker.split(normalized)
-            // Sweep every catalog voice: the user may have listened to this book
-            // under a previous voice pick, whose entries live under other keys.
-            for voice in Voice.catalog {
-                let key = SynthesisRequest(text: normalized, voice: voice).cacheKey
-                // A synthesis still running for this chapter would save its result
-                // AFTER the purge and resurrect audio for a book that no longer
-                // exists — unreachable, and only reclaimable by clearing the whole
-                // cache. `cancel` alone is not a barrier (it only sets a flag, and a
-                // response already in hand still saves on resume), so WAIT for the
-                // task to unwind before deleting. Deleting the book is the explicit
-                // destructive action, so abandoning its request is the intended
-                // outcome here; merely LEAVING the reader still must not cancel
-                // (see SynthesisCoordinator).
-                await synthesis.cancelAndWait(key)
-                audioStore.remove(key)
-                if segments.count > 1 {
-                    for segment in segments {
-                        audioStore.remove(SynthesisRequest(text: segment, voice: voice).cacheKey)
+            // Sweep every catalog voice AND every model: the user may have listened
+            // to this book under an earlier voice or model default, whose entries
+            // live under other keys. Both are in `ContentKey`, so a sweep that
+            // assumes today's defaults leaves the old audio on disk forever —
+            // undeletable per-book, reclaimable only by clearing the whole cache.
+            // Segments are re-split per model because the chunk cap is per-model.
+            for model in SynthesisModel.allCases {
+                let segments = Chunker.split(normalized, maxChars: model.maxRequestChars)
+                for voice in Voice.catalog {
+                    let key = SynthesisRequest(text: normalized, voice: voice, model: model).cacheKey
+                    // A synthesis still running for this chapter would save its result
+                    // AFTER the purge and resurrect audio for a book that no longer
+                    // exists — unreachable, and only reclaimable by clearing the whole
+                    // cache. `cancel` alone is not a barrier (it only sets a flag, and a
+                    // response already in hand still saves on resume), so WAIT for the
+                    // task to unwind before deleting. Deleting the book is the explicit
+                    // destructive action, so abandoning its request is the intended
+                    // outcome here; merely LEAVING the reader still must not cancel
+                    // (see SynthesisCoordinator).
+                    await synthesis.cancelAndWait(key)
+                    audioStore.remove(key)
+                    if segments.count > 1 {
+                        for segment in segments {
+                            audioStore.remove(
+                                SynthesisRequest(text: segment, voice: voice, model: model).cacheKey)
+                        }
                     }
                 }
             }

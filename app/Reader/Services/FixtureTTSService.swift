@@ -31,8 +31,10 @@ final class FixtureTTSService: TTSService {
         return SynthesizedAudio(audio: audio, alignment: m.alignment, text: m.text)
     }
 
-    /// Library "cached" hint: is there offline audio for this text at the default
-    /// voice/model? (UI-only; the real cache state is `GeneratedAudioStore`.)
+    /// Library "cached" hint: is there offline audio for this text at the voice and
+    /// model the bundled fixtures were captured with (George + multilingual_v2 —
+    /// `capture-alignment.mjs`'s defaults), not the app's current defaults?
+    /// (UI-only; the real cache state is `GeneratedAudioStore`.)
     func hasFixture(for text: String) -> Bool {
         match(text: text, voiceId: Voice.george.id, modelId: SynthesisModel.multilingualV2.rawValue) != nil
     }

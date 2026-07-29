@@ -59,10 +59,28 @@ final class WorkerTTSService: TTSService {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let userId = userId(), !userId.isEmpty { req.setValue(userId, forHTTPHeaderField: "X-User-ID") }
+        // `language_code` and `voice_settings` are forwarded by the Worker when
+        // present; an older Worker simply drops them (no error, no behaviour
+        // change), so the app can ship ahead of a Worker deploy.
+        //
+        // NOT sent: `apply_language_text_normalization`. It reads as the obvious fix
+        // for Japanese misreadings — and its readings ARE right — but it is an LLM
+        // pass that leaks its own reasoning into the spoken output ("Wait, let me
+        // redo this properly: …" narrated aloud, 4x the expected duration, one
+        // character absorbing 15 s of the alignment). Measured 2026-07-29; do not
+        // re-enable without re-measuring.
         req.httpBody = try JSONSerialization.data(withJSONObject: [
             "text": text,
             "model_id": request.model.rawValue,
             "voice_id": request.voice.id,
+            "language_code": NarrationSettings.languageCode,
+            "voice_settings": [
+                "stability": NarrationSettings.stability,
+                "similarity_boost": NarrationSettings.similarityBoost,
+                "style": NarrationSettings.style,
+                "use_speaker_boost": NarrationSettings.useSpeakerBoost,
+                "speed": NarrationSettings.speed,
+            ],
         ])
 
         let (data, response) = try await session.data(for: req)
