@@ -259,6 +259,14 @@ struct ReaderView: View {
                                     .foregroundStyle(i == model.chapterIndex ? theme.accent : theme.ink)
                                     .lineLimit(1).truncationMode(.tail)
                                 Spacer(minLength: 12)
+                                // Which chapters are already paid for and offline —
+                                // the same mark the library row uses for a book.
+                                if model.cachedChapters.contains(i) {
+                                    Image(systemName: "arrow.down.circle")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(theme.muted)
+                                        .accessibilityLabel(L10n.a11yAudioCached)
+                                }
                                 if i == model.chapterIndex {
                                     PlayTriangle().fill(theme.accent).frame(width: 9, height: 11)
                                 }
@@ -276,5 +284,8 @@ struct ReaderView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Refreshed per presentation, so a chapter generated during this session
+        // shows its mark the next time the sheet is opened.
+        .task { model.refreshCachedChapters() }
     }
 }

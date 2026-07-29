@@ -128,6 +128,7 @@
 "reader.chapters" = "Chapters";
 /* Fallback title for an untitled imported chapter; %d is the 1-based index. */
 "reader.chapterNumber.format" = "Chapter %d";
+"reader.idle.estimate.format" = "Tap to generate · about %d min";
 /* Header subtitle for an untitled chapter; %1$d current, %2$d total. */
 "reader.chapterOfCount.format" = "Chapter %1$d of %2$d";
 /* Generation label beside the live percent while speech is generated. */

@@ -142,10 +142,48 @@ struct PlayerView: View {
                                a11y: model.isPlaying ? L10n.a11yPause : L10n.a11yPlay) {
                 model.togglePlay()
             }
-            Slider(value: seekBinding, in: 0...max(1, model.duration)) {
+            // `enabledBounds` renders the not-yet-generated tail as unavailable
+            // INSIDE the native track, and refuses a drag into it — so the scrubber
+            // stops promising audio that doesn't exist yet, rather than accepting
+            // the drag and silently snapping back from the model's clamp.
+            Slider(value: seekBinding,
+                   in: 0...max(1, model.duration),
+                   enabledBounds: generatedBounds) {
                 Text(L10n.a11yPosition)
             }
             .tint(theme.accent)
+            // `enabledBounds` refuses the drag but draws nothing (verified on
+            // iOS 26.5), so the tail has to be painted here or the restriction is
+            // invisible: the scrubber looks fully seekable and simply resists.
+            // Drawn over the UNGENERATED tail rather than the buffered head, so it
+            // can never overlap the thumb, which sits at the playhead well behind it.
+            .overlay {
+                if model.isGenerating {
+                    GeometryReader { geo in
+                        // Only the LEFT edge is inset. Insetting both ends made the
+                        // band stop ~11 pt short of the track's end, which reads as
+                        // generation stalling around 90% and never finishing. The
+                        // fill is the page colour, so running past the track's right
+                        // edge is invisible, while falling short is not — so the
+                        // mapping is biased to overshoot.
+                        let inset: CGFloat = 8
+                        let usable = max(0, geo.size.width - inset)
+                        let done = min(1, max(0, model.generatedFraction))
+                        // Masked toward the page colour rather than darkened: the
+                        // track then appears to END at the generated point and grow
+                        // rightward, which reads as loading. Darkening it instead
+                        // made the tail the heaviest thing on the control, so it
+                        // read as filled — as progress that was stuck near 100%.
+                        Capsule()
+                            .fill(theme.bg.opacity(0.75))
+                            .frame(width: usable * (1 - done), height: 4)
+                            .position(x: inset + usable * (done + (1 - done) / 2),
+                                      y: geo.size.height / 2)
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+            .animation(.linear(duration: 0.3), value: model.generatedTime)
             Text(remainingLabel)
                 .font(.system(size: 12)).monospacedDigit()
                 .foregroundStyle(theme.muted)
@@ -156,9 +194,16 @@ struct PlayerView: View {
         .padding(.trailing, 8)
     }
 
-    /// Speech generation in flight: native spinner, label with a live percent,
-    /// and a thin determinate bar. No collapse control — cancel is the one
-    /// deliberate action here, and the progress should stay visible.
+    /// The wait before the first audio arrives — now a few seconds rather than the
+    /// whole chapter, since playback starts as soon as there is a head start and
+    /// generation continues behind it.
+    ///
+    /// The percent is now MEASURED — characters delivered by the stream over the
+    /// chapter's total — rather than eased against a time estimate. It reads low
+    /// (playback begins around a few percent) but it is true, and the rest of
+    /// generation stays visible afterwards as the scrubber's buffered extent.
+    /// Cancel still belongs here: this is the only window where stopping costs
+    /// nothing, because past it the chapter always finishes and caches.
     private var synthesizingRow: some View {
         HStack(spacing: 12) {
             ZStack {
@@ -229,6 +274,10 @@ struct PlayerView: View {
                     Text(msg)
                 } else if model.audioState == .notGenerated {
                     Text(L10n.readerNotGeneratedTitle)
+                } else if model.audioState == .idle {
+                    // Otherwise this capsule is a bare play button with no hint that
+                    // tapping it generates narration, nor how long the result runs.
+                    Text(L10n.readerIdleEstimate(model.estimatedNarrationMinutes))
                 }
             }
             .font(.system(size: 12.5))
@@ -257,7 +306,7 @@ struct PlayerView: View {
         .accessibilityLabel(a11y)
     }
 
-    /// Tap-to-cycle speed control (1× → 1.25× → 0.75×). `?? 0` self-heals a
+    /// Tap-to-cycle speed control (1× → 1.25× → 1.5× → 0.75×). `?? 0` self-heals a
     /// persisted speed that fell out of the cycle.
     private var speedPill: some View {
         Button {
@@ -277,7 +326,7 @@ struct PlayerView: View {
         .accessibilityValue("\(speedText(model.speed))×")
     }
 
-    private static let speedCycle: [Double] = [1.0, 1.25, 0.75]
+    private static let speedCycle: [Double] = [1.0, 1.25, 1.5, 0.75]
 
     private var collapseButton: some View {
         Button { isExpanded = false } label: {
@@ -303,6 +352,18 @@ struct PlayerView: View {
 
     /// Two-way bridge for the native scrubber: reads the playhead, writes it
     /// through `seek`.
+    /// The seekable span: everything once the chapter is generated, otherwise only
+    /// what has arrived. `nil` (not `0...duration`) when complete, so a finished
+    /// chapter uses the slider's plain appearance rather than a full-width
+    /// "enabled" region that would keep drawing the generating treatment.
+    private var generatedBounds: ClosedRange<Double>? {
+        guard model.isGenerating else { return nil }
+        let total = max(1, model.duration)
+        // Keep the range non-empty and inside the track's bounds — an inverted or
+        // out-of-range value traps.
+        return 0...min(total, max(0.1, model.generatedTime))
+    }
+
     private var seekBinding: Binding<Double> {
         Binding(get: { model.currentTime }, set: { model.seek(to: $0) })
     }

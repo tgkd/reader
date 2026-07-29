@@ -127,6 +127,11 @@ enum L10n {
     static func chapterNumber(_ n: Int) -> String {
         String(format: String(localized: "reader.chapterNumber.format"), n)
     }
+    /// The idle player's one line: what Play will do, and roughly how long the
+    /// resulting narration runs. %d is whole minutes.
+    static func readerIdleEstimate(_ minutes: Int) -> String {
+        String(format: String(localized: "reader.idle.estimate.format"), minutes)
+    }
     /// Header subtitle for an untitled chapter; %1$d current, %2$d total.
     static func chapterOfCount(_ n: Int, _ count: Int) -> String {
         String(format: String(localized: "reader.chapterOfCount.format"), n, count)

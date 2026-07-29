@@ -126,6 +126,7 @@
 "reader.chapters" = "目次";
 /* タイトルのないインポート章のフォールバック名。%d は1始まりの番号。 */
 "reader.chapterNumber.format" = "第%d章";
+"reader.idle.estimate.format" = "タップして生成 · 約%d分";
 /* タイトルのない章のヘッダーサブタイトル。%1$d は現在、%2$d は総数。 */
 "reader.chapterOfCount.format" = "第%1$d章 / 全%2$d章";
 /* 音声生成中、進捗パーセントの横に表示。 */
