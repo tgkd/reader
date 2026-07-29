@@ -38,6 +38,7 @@
 /* 設定 — 朗読の声（サブスク限定セクション） */
 "settings.section.voice" = "朗読の声";
 "settings.voice.note" = "声を変更すると、次の再生時に各章の音声が再生成されます。";
+"narration.disclaimer" = "音声はAI生成のため、読み間違いが起こることがあります。ふりがなは辞書に基づいています。";
 
 /* 設定 — メンバーシップの状態と管理 */
 "settings.section.membership" = "メンバーシップ";

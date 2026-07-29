@@ -72,6 +72,9 @@ struct SettingsView: View {
                     Text(L10n.settingsVoiceNote)
                         .font(.system(size: 11.5)).foregroundStyle(theme.muted)
                         .padding(.horizontal, 24).padding(.top, 8)
+                    Text(L10n.narrationDisclaimer)
+                        .font(.system(size: 11.5)).foregroundStyle(theme.muted)
+                        .padding(.horizontal, 24).padding(.top, 4)
                 }
 
                 sectionHeader(L10n.settingsMembership)

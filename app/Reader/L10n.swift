@@ -44,6 +44,9 @@ enum L10n {
     static var settingsTheme: String { String(localized: "settings.section.theme") }
     static var settingsVoice: String { String(localized: "settings.section.voice") }
     static var settingsVoiceNote: String { String(localized: "settings.voice.note") }
+    /// Shown wherever narration is sold or configured. Furigana is dictionary-derived
+    /// and authoritative; the narration is a model and occasionally disagrees with it.
+    static var narrationDisclaimer: String { String(localized: "narration.disclaimer") }
 
     // Settings — membership status/management.
     static var settingsMembership: String { String(localized: "settings.section.membership") }

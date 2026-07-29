@@ -136,6 +136,12 @@ struct MembershipView: View {
             .buttonStyle(.plain)
             .opacity(restoring ? 0.4 : 1)
             .disabled(restoring)
+
+            // Set the expectation BEFORE payment: narration is the thing being sold,
+            // and it occasionally misreads a word.
+            Text(L10n.narrationDisclaimer)
+                .font(.system(size: 12)).foregroundStyle(theme.muted)
+                .multilineTextAlignment(.center)
         }
         .padding(.horizontal, 24).padding(.top, 16)
     }

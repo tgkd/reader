@@ -40,6 +40,7 @@
 /* Settings — narration voice (subscriber-only section) */
 "settings.section.voice" = "Narration voice";
 "settings.voice.note" = "Changing the voice regenerates each chapter's audio on its next play.";
+"narration.disclaimer" = "Narration is AI-generated and can misread a word. Furigana comes from a dictionary.";
 
 /* Settings — membership status/management */
 "settings.section.membership" = "Membership";
