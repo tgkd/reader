@@ -7,16 +7,18 @@ import ReaderCore
 /// gate. The ElevenLabs key stays server-side; the client sends only `X-User-ID`
 /// (the RevenueCat appUserID). End-to-end synthesis requires a subscribed user.
 final class WorkerTTSService: TTSService {
-    enum WorkerError: LocalizedError {
+    enum WorkerError: LocalizedError, Equatable {
         case subscriptionRequired
         case http(Int)
         case badResponse
+        case truncatedStream
 
         var errorDescription: String? {
             switch self {
             case .subscriptionRequired: return "Subscription required"
             case .http(let code): return "TTS failed (\(code))"
             case .badResponse: return "Malformed TTS response"
+            case .truncatedStream: return "Narration ended early"
             }
         }
     }
@@ -24,29 +26,38 @@ final class WorkerTTSService: TTSService {
     private let baseURL: URL
     private let userId: @Sendable () -> String?
     private let session: URLSession
+    private let onProgress: (@Sendable (Double) -> Void)?
 
     /// `AppServices` injects the URL from the `WorkerBaseURL` Info.plist key
     /// (overridable via the gitignored `Signing.xcconfig`'s `WORKER_HOST`); this
     /// default mirrors its production fallback. `userId` is read per request, not
     /// captured — a purchase/restore that rotates the RevenueCat appUserID after
     /// launch must reach this long-lived service (built once in `AppServices.init`).
+    ///
+    /// `onProgress` receives the fraction of the chapter's characters that have
+    /// actually arrived, as they arrive — a measurement, unlike the reader's
+    /// current eased estimate, which exists only because the buffered route
+    /// produced no signal at all.
     init(baseURL: URL = URL(string: "https://api.thetango.org")!,
          userId: @escaping @Sendable () -> String?,
-         session: URLSession? = nil) {
+         session: URLSession? = nil,
+         onProgress: (@Sendable (Double) -> Void)? = nil) {
         self.baseURL = baseURL
         self.userId = userId
-        // `/tts/aligned` buffers the WHOLE ElevenLabs `with-timestamps` response
-        // server-side, so no bytes reach us until a chunk (up to ~9k chars) is fully
-        // synthesized — well past URLSession's default 60s request timeout for long
-        // chapters. Use a synthesis-appropriate window so long chapters don't fail
-        // with `URLError.timedOut` (which the caller does NOT retry) while ElevenLabs
-        // still bills the abandoned generation.
+        self.onProgress = onProgress
+        // Streaming changes what each timeout means. `timeoutIntervalForRequest` is
+        // the gap BETWEEN chunks, which is now seconds rather than the whole
+        // synthesis, so 300 s is generous. `timeoutIntervalForResource` caps the
+        // total — a 3,900-char chapter on v3 measured ~200 s end to end, so 300 s
+        // left almost no headroom for a slower one; 900 s does. Timing out here is
+        // the expensive failure: `URLError.timedOut` is not retried by the caller,
+        // and ElevenLabs bills the generation we abandoned.
         if let session {
             self.session = session
         } else {
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = 300
-            config.timeoutIntervalForResource = 300
+            config.timeoutIntervalForResource = 900
             self.session = URLSession(configuration: config)
         }
     }
@@ -74,6 +85,12 @@ final class WorkerTTSService: TTSService {
             "model_id": request.model.rawValue,
             "voice_id": request.voice.id,
             "language_code": NarrationSettings.languageCode,
+            // Stream, always. On the buffered route ElevenLabs emits nothing until a
+            // whole chapter is synthesized and its own edge 524s first (~200 s of
+            // work against roughly a 100 s ceiling) — a chapter simply could not be
+            // generated. Streaming also turns synthesis progress into a measurement
+            // rather than an easing curve.
+            "stream": true,
             "voice_settings": [
                 "stability": NarrationSettings.stability,
                 "similarity_boost": NarrationSettings.similarityBoost,
@@ -83,7 +100,7 @@ final class WorkerTTSService: TTSService {
             ],
         ])
 
-        let (data, response) = try await session.data(for: req)
+        let (bytes, response) = try await session.bytes(for: req)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             // 403 = entitlement rejected; 401 = no X-User-ID reached the Worker (no
             // RevenueCat identity on this install). Both mean "this user can't bill
@@ -92,15 +109,12 @@ final class WorkerTTSService: TTSService {
                 ? WorkerError.subscriptionRequired : WorkerError.http(http.statusCode)
         }
 
-        let decoded = try JSONDecoder().decode(TimestampedAudio.self, from: data)
+        let (audio, alignment) = try await accumulate(bytes, expecting: text.count)
         // `Data(base64Encoded: "")` SUCCEEDS with zero bytes, so an empty
         // `audio_base64` would otherwise be cached as paid narration: `AVAudioPlayer`
         // then fails to init (a chapter that can never play until the cache is
         // cleared), or the stitched chapter silently loses a segment.
-        guard let alignment = decoded.alignment,
-              let audio = Data(base64Encoded: decoded.audioBase64), !audio.isEmpty else {
-            throw WorkerError.badResponse
-        }
+        guard !audio.isEmpty else { throw WorkerError.badResponse }
         // The three alignment arrays are parallel and indexed together downstream
         // (CharTokenMapper → Alignment.startTime/endTime(at:)). Reject a malformed
         // response here rather than letting a length mismatch surface as bad timing.
@@ -110,5 +124,40 @@ final class WorkerTTSService: TTSService {
             throw WorkerError.badResponse
         }
         return SynthesizedAudio(audio: audio, alignment: alignment, text: text)
+    }
+
+    /// Fold the NDJSON stream into one audio blob and one alignment.
+    ///
+    /// Each line is a `TimestampedAudio` covering a slice of the chapter, and the
+    /// chunk timestamps are ABSOLUTE — verified against the live API, chunk N+1
+    /// starts where chunk N ended — so the arrays concatenate directly and no
+    /// `AlignmentStitcher` offsetting is involved.
+    ///
+    /// A truncated stream (connection dropped mid-chapter) therefore yields a
+    /// SHORT but internally consistent alignment. `expecting` is the guard: a
+    /// partial result must fail rather than be cached as a complete chapter, which
+    /// would leave the reader permanently missing its tail with no way to notice.
+    private func accumulate(_ bytes: URLSession.AsyncBytes,
+                            expecting characterCount: Int) async throws -> (Data, Alignment) {
+        var audio = Data()
+        var characters: [String] = []
+        var startTimes: [Double] = []
+        var endTimes: [Double] = []
+        let decoder = JSONDecoder()
+
+        for try await line in bytes.lines {
+            guard !line.isEmpty, let data = line.data(using: .utf8),
+                  let chunk = try? decoder.decode(TimestampedAudio.self, from: data) else { continue }
+            if let decoded = Data(base64Encoded: chunk.audioBase64) { audio.append(decoded) }
+            if let a = chunk.alignment {
+                characters.append(contentsOf: a.characters)
+                startTimes.append(contentsOf: a.startTimes)
+                endTimes.append(contentsOf: a.endTimes)
+            }
+            onProgress?(Double(characters.count) / Double(max(characterCount, 1)))
+        }
+
+        guard characters.count >= characterCount else { throw WorkerError.truncatedStream }
+        return (audio, Alignment(characters: characters, startTimes: startTimes, endTimes: endTimes))
     }
 }

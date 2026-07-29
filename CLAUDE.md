@@ -48,7 +48,13 @@ PDFKit / networking live in the `app/` target only.
 
 - **TTS:** `WorkerTTSService` (POSTs `/tts/aligned` on the aiwork Worker → ElevenLabs
   `with-timestamps`, behind a RevenueCat gate; client sends only `X-User-ID`; 300 s request
-  timeout — the route buffers the whole response, so a long chunk yields no bytes until done) →
+  timeout between chunks, 900 s total) — the client sends `stream: true` and the route proxies
+  ElevenLabs' NDJSON **unbuffered**. This is not an optimization: on the buffered endpoint
+  ElevenLabs emits nothing until the whole chapter is done and its own edge 524s first
+  (~200 s of work on v3 against roughly a 100 s ceiling), so a chapter could not be generated
+  at all. Chunk timestamps are ABSOLUTE, so the client concatenates rather than stitches, and a
+  short reassembly is rejected — a truncated stream is internally consistent and would
+  otherwise cache as a complete chapter missing its tail) →
   wrapped by `ChunkingTTSService` (splits chapters over `model.maxRequestChars` — per-model, since
   the models' input limits differ 8x and v3's 5k is half multilingual_v2's; in practice chapters are
   capped below every model's limit so the chunked path never fires,
@@ -74,8 +80,10 @@ PDFKit / networking live in the `app/` target only.
   down on explicit stop/leave. `NowPlayingController` publishes lock-screen/Control Center
   metadata + remote commands — playback state is written at transitions only
   (play/pause/seek/speed/chapter), never per tick; the system extrapolates. `.synthesizing` shows `synthesisProgress`, a purely
-  cosmetic 10 Hz eased estimate (the Worker buffers the whole response, so no real signal
-  exists) that creeps toward ~0.92 and snaps to 1 on success. `RubyTextView` (custom CoreText)
+  cosmetic 10 Hz eased estimate that creeps toward ~0.92 and snaps to 1 on success. It dates from
+  the buffered route, where no real signal existed; streaming now reports true progress via
+  `WorkerTTSService`'s `onProgress` (delivered characters / total), which is NOT yet wired to the
+  UI — doing so needs a progress channel through `TTSService`/`SynthesisCoordinator`. `RubyTextView` (custom CoreText)
   renders furigana via `CTRubyAnnotation` and vertical text via frame progression: the base text is
   drawn once with an **explicit per-run ink color** (NOT `kCTForegroundColorFromContext` — the first
   ruby annotation clobbers the context fill, invisibly in paper but black-on-black in night), and

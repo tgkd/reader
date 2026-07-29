@@ -18,27 +18,42 @@ final class WorkerTTSServiceTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeService() -> WorkerTTSService {
+    private func makeService(
+        onProgress: (@Sendable (Double) -> Void)? = nil
+    ) -> WorkerTTSService {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         return WorkerTTSService(baseURL: URL(string: "https://test.example.com")!,
                                 userId: { "user-123" },
-                                session: URLSession(configuration: config))
+                                session: URLSession(configuration: config),
+                                onProgress: onProgress)
     }
 
-    /// A minimal well-formed `with-timestamps` response: one character, parallel
-    /// timing arrays, non-empty audio (an empty `audio_base64` is rejected).
-    private func alignedResponse() -> @Sendable (URLRequest) throws -> (HTTPURLResponse, Data) {
-        { request in
+    /// One NDJSON line per character, mirroring the live stream: each chunk carries
+    /// its own audio slice, and chunk timestamps are ABSOLUTE (chunk N+1 starts
+    /// where N ended), which is what lets the client concatenate rather than offset.
+    private func streamed(_ text: String) -> Data {
+        var out = Data()
+        for (i, ch) in text.enumerated() {
+            let line = """
+            {"audio_base64":"\(Data("mp3".utf8).base64EncodedString())",\
+            "alignment":{"characters":["\(ch)"],\
+            "character_start_times_seconds":[\(Double(i) * 0.5)],\
+            "character_end_times_seconds":[\(Double(i + 1) * 0.5)]}}
+
+            """
+            out.append(Data(line.utf8))
+        }
+        return out
+    }
+
+    private func alignedResponse(_ text: String = "あ")
+        -> @Sendable (URLRequest) throws -> (HTTPURLResponse, Data) {
+        let body = streamed(text)
+        return { request in
             let resp = HTTPURLResponse(url: request.url!, statusCode: 200,
                                        httpVersion: nil, headerFields: nil)!
-            let json = """
-            {"audio_base64":"\(Data("mp3".utf8).base64EncodedString())",
-             "alignment":{"characters":["あ"],
-                          "character_start_times_seconds":[0.0],
-                          "character_end_times_seconds":[0.5]}}
-            """
-            return (resp, Data(json.utf8))
+            return (resp, body)
         }
     }
 
@@ -48,7 +63,7 @@ final class WorkerTTSServiceTests: XCTestCase {
     }
 
     func testSendsJapaneseLanguageCodeAndExplicitVoiceSettings() async throws {
-        MockURLProtocol.handler = alignedResponse()
+        MockURLProtocol.handler = alignedResponse("日本橋")
         _ = try await makeService().synthesize(
             SynthesisRequest(text: "日本橋", voice: .shizuka, model: .multilingualV2))
 
@@ -70,10 +85,63 @@ final class WorkerTTSServiceTests: XCTestCase {
     /// (measured 2026-07-29). It must stay off the wire until that is fixed
     /// upstream — asserted rather than commented so re-adding it fails loudly.
     func testDoesNotSendLanguageTextNormalization() async throws {
-        MockURLProtocol.handler = alignedResponse()
+        MockURLProtocol.handler = alignedResponse("三人")
         _ = try await makeService().synthesize(SynthesisRequest(text: "三人", voice: .shizuka))
 
         XCTAssertNil(try sentBody()["apply_language_text_normalization"])
+    }
+
+    // MARK: - Streaming
+
+    /// Buffered synthesis of a whole chapter cannot complete: ElevenLabs emits no
+    /// bytes until it is done and its own edge returns 524 first. The stream flag
+    /// is what makes chapter narration possible at all, so it is asserted, not
+    /// assumed.
+    func testAlwaysRequestsAStream() async throws {
+        MockURLProtocol.handler = alignedResponse("本")
+        _ = try await makeService().synthesize(SynthesisRequest(text: "本", voice: .shizuka))
+
+        XCTAssertEqual(try sentBody()["stream"] as? Bool, true)
+    }
+
+    /// Chunks concatenate in order, and their ABSOLUTE timestamps carry through
+    /// untouched — CharTokenMapper folds these onto token spans, so a mis-ordered
+    /// or re-based array would desync the highlight for the whole chapter.
+    func testConcatenatesChunksInOrderPreservingAbsoluteTimes() async throws {
+        MockURLProtocol.handler = alignedResponse("吾輩は猫")
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+
+        XCTAssertEqual(out.alignment.characters, ["吾", "輩", "は", "猫"])
+        XCTAssertEqual(out.alignment.startTimes, [0.0, 0.5, 1.0, 1.5])
+        XCTAssertEqual(out.alignment.endTimes, [0.5, 1.0, 1.5, 2.0])
+        XCTAssertEqual(out.audio.count, 3 * 4)   // "mp3" per chunk, 4 chunks
+    }
+
+    /// A dropped connection mid-chapter yields a SHORT but internally consistent
+    /// alignment — which would otherwise be cached as a complete chapter, leaving
+    /// the reader permanently missing its tail with nothing to signal why.
+    func testRejectsATruncatedStream() async {
+        MockURLProtocol.handler = alignedResponse("吾輩")   // 2 of 4 characters
+        do {
+            _ = try await makeService().synthesize(
+                SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+            XCTFail("Expected a truncated stream to throw")
+        } catch {
+            XCTAssertEqual(error as? WorkerTTSService.WorkerError, .truncatedStream)
+        }
+    }
+
+    /// Progress is measured from characters actually delivered, not eased from a
+    /// guess — it must climb during the stream and finish at 1.
+    func testReportsProgressAsCharactersArrive() async throws {
+        let samples = ProgressSamples()
+        MockURLProtocol.handler = alignedResponse("吾輩は猫")
+        _ = try await makeService(onProgress: { samples.append($0) }).synthesize(
+            SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+
+        let values = samples.values
+        XCTAssertEqual(values, [0.25, 0.5, 0.75, 1.0])
     }
 
     /// The voice must travel per-request: `ContentKey` includes it, so a request
@@ -96,4 +164,13 @@ final class WorkerTTSServiceTests: XCTestCase {
         // single unchunked request even on the most restrictive model.
         XCTAssertLessThanOrEqual(Chapter.maxRenderableChars, SynthesisModel.v3.maxRequestChars)
     }
+}
+
+/// Collects progress callbacks, which arrive off the test's thread.
+private final class ProgressSamples: @unchecked Sendable {
+    private let lock = NSLock()
+    private var samples: [Double] = []
+
+    func append(_ v: Double) { lock.lock(); samples.append(v); lock.unlock() }
+    var values: [Double] { lock.lock(); defer { lock.unlock() }; return samples }
 }
