@@ -500,15 +500,37 @@ final class RubyContentView: UIView {
             // which are Upright, so digits stack straight down the column. Display-only
             // and 1:1 per scalar, so `tokenRanges` stay aligned with `span.surface`.
             let display = vertical ? Self.uprightDigits(span.surface) : span.surface
-            let piece = NSMutableAttributedString(string: display, attributes: baseAttrs)
-            if showFurigana, let reading = span.reading, !reading.isEmpty, Self.containsKanji(span.surface) {
+            // Annotate only the kanji the reading actually covers (生れ → うま over
+            // 生, not うまれ over both). Computed on the DISPLAYED string so the
+            // returned offsets index it directly — `uprightDigits` only swaps digit
+            // width, which the trim never touches.
+            let placement = showFurigana
+                ? Furigana.place(surface: display, reading: span.reading) : nil
+
+            let piece: NSMutableAttributedString
+            if let placement {
+                let chars = Array(display)
+                let prefix = String(chars[..<placement.range.lowerBound])
+                // CoreText DROPS a ruby annotation whose base gets split across a
+                // line break — so a word that happens to land at a line end loses its
+                // furigana entirely, and regains it at a different font size. Joining
+                // the base forbids that break instead. Only the annotated core is
+                // joined, so the untouched okurigana can still take a break.
+                let core = Self.wordJoined(String(chars[placement.range]))
+                let suffix = String(chars[placement.range.upperBound...])
+                piece = NSMutableAttributedString(string: prefix + core + suffix, attributes: baseAttrs)
+
                 let rubyFont = readingFont(fontSize * 0.5)
                 let ann = CTRubyAnnotationCreateWithAttributes(
-                    .center, .auto, .before, reading as CFString,
+                    .center, .auto, .before, placement.reading as CFString,
                     [kCTFontAttributeName: rubyFont,
                      kCTForegroundColorAttributeName: inkColor.cgColor] as CFDictionary)
                 piece.addAttribute(NSAttributedString.Key(kCTRubyAnnotationAttributeName as String),
-                                   value: ann, range: NSRange(location: 0, length: piece.length))
+                                   value: ann,
+                                   range: NSRange(location: (prefix as NSString).length,
+                                                  length: (core as NSString).length))
+            } else {
+                piece = NSMutableAttributedString(string: display, attributes: baseAttrs)
             }
             out.append(piece)
             ranges.append(NSRange(location: start, length: piece.length))
@@ -730,6 +752,17 @@ final class RubyContentView: UIView {
         return nil
     }
 
+    /// Insert U+2060 WORD JOINER between every character. UAX #14 gives it class WJ,
+    /// which forbids a break on both sides, and it is zero-width — so it changes no
+    /// glyph rect, and `tokenRanges` (built from the resulting piece length) stay
+    /// aligned for the highlight and tap hit-testing. Applied ONLY to ruby-bearing
+    /// tokens: joining everything would make ordinary prose unwrappable.
+    /// Internal rather than private so `RubyLineBreakTests` can drive the real
+    /// joiner against CoreText instead of reimplementing it.
+    static func wordJoined(_ s: String) -> String {
+        s.count > 1 ? s.map(String.init).joined(separator: "\u{2060}") : s
+    }
+
     /// Map half-width ASCII digits (0-9) to their full-width twins (U+FF10–FF19)
     /// for upright stacking in vertical text. A 1:1 scalar swap (both single UTF-16
     /// units), so it never shifts the offsets `tokenRanges` indexes into.
@@ -744,9 +777,5 @@ final class RubyContentView: UIView {
             }
         }
         return String(out)
-    }
-
-    private static func containsKanji(_ s: String) -> Bool {
-        s.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }
     }
 }
