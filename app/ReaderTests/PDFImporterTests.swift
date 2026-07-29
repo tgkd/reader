@@ -26,6 +26,18 @@ final class PDFImporterTests: XCTestCase {
         XCTAssertTrue(result[2].text.contains("Charlie"))
     }
 
+    func testReportsParsingProgressPerPage() async throws {
+        let url = Fixture.pdf(pages: ["Alpha", "Bravo", "Charlie"])
+        let progress = ImportProgressRecorder()
+        _ = try await PDFImporter(url: url, onParsingProgress: progress.record).chapters()
+        XCTAssertEqual(progress.values, [
+            ImportProgressSample(completed: 0, total: 3),
+            ImportProgressSample(completed: 1, total: 3),
+            ImportProgressSample(completed: 2, total: 3),
+            ImportProgressSample(completed: 3, total: 3),
+        ])
+    }
+
     func testBlankPagesAreSkipped() async throws {
         let url = Fixture.pdf(pages: ["Alpha", "", "Bravo"])
         let result = try await chapters(url)

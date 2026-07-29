@@ -46,6 +46,9 @@ struct LibraryView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                // The list still scrolls beneath the floating glass capsule (so
+                // there is content to blur), but its final row can clear the chrome.
+                .contentMargins(.bottom, app.importActivity == nil ? 0 : 94, for: .scrollContent)
                 // Claim the remaining height explicitly. Without this the List sizes to
                 // its content inside the VStack and overflows the screen without
                 // scrolling once there are more rows than fit (was latent when the
@@ -137,19 +140,14 @@ struct LibraryView: View {
                 .presentationBackground(theme.bg)
         }
         .overlay(alignment: .bottom) {
-            if let p = app.importProgress { importBanner(p) }
+            if let activity = app.importActivity {
+                ImportProgressView(activity: activity, cancel: app.cancelImport)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
-    }
-
-    /// Determinate banner while a scanned PDF is being OCR'd (the only slow import
-    /// path; text-layer imports are instant and show nothing).
-    private func importBanner(_ p: (completed: Int, total: Int)) -> some View {
-        Text(L10n.importRecognizing(p.completed, p.total))
-            .font(.system(size: 12.5).monospacedDigit()).foregroundStyle(theme.bg)
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(Capsule().fill(theme.ink))
-            .padding(.bottom, 28)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+        .animation(.easeInOut(duration: 0.22), value: app.importActivity?.phase)
     }
 
     private var showImportError: Binding<Bool> {
@@ -164,6 +162,10 @@ struct LibraryView: View {
         Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
     }
 
+    /// Both alert buttons already call the matching handler, and an `.alert` has no
+    /// other way out — so the setter only clears the flag. Calling `cancelImportOCR`
+    /// here too made SwiftUI's `isPresented` write race the button action, which
+    /// could save the fallback AND the OCR'd text as two separate books.
     private var showOCRConfirm: Binding<Bool> {
         Binding(get: { app.pendingImportOCR != nil }, set: { if !$0 { app.pendingImportOCR = nil } })
     }
@@ -195,9 +197,14 @@ struct LibraryView: View {
                 }
                 .glassEffect(.regular, in: Capsule())
                 Menu {
+                    // Only the file route is single-flight. Pasting never touches the
+                    // import pipeline, so it stays reachable — and disabling the whole
+                    // menu left the glass + looking identical to its enabled state,
+                    // reading as broken rather than busy.
                     Button { importing = true } label: {
                         Label(L10n.libraryAddImportFile, systemImage: "folder")
                     }
+                    .disabled(app.importActivity != nil)
                     Button { showingPaste = true } label: {
                         Label(L10n.libraryAddPasteText, systemImage: "document.on.clipboard")
                     }

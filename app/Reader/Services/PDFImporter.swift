@@ -15,7 +15,9 @@ struct PDFImporter: DocumentImporter {
     /// PDF then throws `.ocrUnavailable` (OCR is a Membership feature).
     var recognizer: PDFTextRecognizer? = nil
     /// Reports OCR page completion (`completed`, `total`) for a determinate banner.
-    var onProgress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil
+    var onProgress: ImportProgressHandler? = nil
+    /// Reports local text-layer inspection one page at a time.
+    var onParsingProgress: ImportProgressHandler? = nil
 
     /// How many page bitmaps to hold + recognize at once. Full-res (200 DPI) page
     /// bitmaps are large (~15 MB each), so a whole 200-page scan is never rasterized
@@ -37,8 +39,16 @@ struct PDFImporter: DocumentImporter {
         var slots: [Slot] = []
         var ocrPageIndices: [Int] = []
         var sawScannedPage = false // a page with no text layer (would need OCR)
+        onParsingProgress?(0, doc.pageCount)
         for i in 0..<doc.pageCount {
-            guard let page = doc.page(at: i) else { continue }
+            // Pass 1 is local and unbilled, so it is safe to abandon on cancel.
+            // Pass 2 (paid OCR) deliberately has no such check — accepted requests
+            // must drain into the page cache.
+            try Task.checkCancellation()
+            guard let page = doc.page(at: i) else {
+                onParsingProgress?(i + 1, doc.pageCount)
+                continue
+            }
             let layer = page.string ?? ""
             if !layer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 slots.append(.text(layer))
@@ -48,6 +58,7 @@ struct PDFImporter: DocumentImporter {
             } else {
                 sawScannedPage = true // no OCR engine (non-subscriber)
             }
+            onParsingProgress?(i + 1, doc.pageCount)
         }
 
         // Pass 2: OCR in bounded-memory windows. Each window is rendered, recognized,

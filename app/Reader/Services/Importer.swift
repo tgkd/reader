@@ -1,6 +1,11 @@
 import Foundation
 import ReaderCore
 
+/// Format-local parsing progress. The app keeps this deliberately separate from
+/// OCR progress: parsing can be local/cheap while OCR is a paid network phase,
+/// and the Library chrome labels them differently.
+typealias ImportProgressHandler = @Sendable (_ completed: Int, _ total: Int) -> Void
+
 /// Why an import failed — surfaced to the user as a short message.
 enum ImportError: LocalizedError, Equatable {
     case unsupported
@@ -36,12 +41,20 @@ enum Importer {
     /// bypass OCR; the text path and unsupported types ignore them.
     static func importer(for url: URL,
                          ocr: PDFTextRecognizer? = nil,
-                         onProgress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil) -> DocumentImporter? {
+                         onParsingProgress: ImportProgressHandler? = nil,
+                         onProgress: ImportProgressHandler? = nil) -> DocumentImporter? {
         switch url.pathExtension.lowercased() {
-        case "epub":            return EPUBImporter(url: url, recognizer: ocr, onProgress: onProgress)
-        case "pdf":             return PDFImporter(url: url, recognizer: ocr, onProgress: onProgress)
-        case "txt", "text", "": return TextImporter(url: url)
-        case "md", "markdown":  return TextImporter(url: url, stripMarkdown: true)
+        case "epub":
+            return EPUBImporter(url: url, recognizer: ocr, onProgress: onProgress,
+                                onParsingProgress: onParsingProgress)
+        case "pdf":
+            return PDFImporter(url: url, recognizer: ocr, onProgress: onProgress,
+                               onParsingProgress: onParsingProgress)
+        case "txt", "text", "":
+            return TextImporter(url: url, onParsingProgress: onParsingProgress)
+        case "md", "markdown":
+            return TextImporter(url: url, stripMarkdown: true,
+                                onParsingProgress: onParsingProgress)
         default:                return nil
         }
     }
@@ -63,9 +76,18 @@ enum Importer {
     /// `onProgress` reports OCR page completion for a determinate import banner.
     static func document(from url: URL,
                          ocr: PDFTextRecognizer? = nil,
-                         onProgress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil) async throws -> Document {
-        guard let importer = importer(for: url, ocr: ocr, onProgress: onProgress) else { throw ImportError.unsupported }
+                         onParsingProgress: ImportProgressHandler? = nil,
+                         onProgress: ImportProgressHandler? = nil) async throws -> Document {
+        guard let importer = importer(for: url, ocr: ocr,
+                                      onParsingProgress: onParsingProgress,
+                                      onProgress: onProgress) else {
+            throw ImportError.unsupported
+        }
         let chapters = try await importer.chapters()
+        // The split below is a second full pass the wrapper performs itself — on a
+        // whole-novel .txt it is the slowest step of the import. Drop back to an
+        // indeterminate signal so the bar doesn't sit at a false 100% through it.
+        onParsingProgress?(0, 0)
         // Split any oversized chapter (a whole-novel .txt, a long EPUB spine item) into
         // renderable sub-chapters — the reader draws one CoreText surface per chapter
         // and a huge one renders blank / janks. Small chapters pass through unchanged.

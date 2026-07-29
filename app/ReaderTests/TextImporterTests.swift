@@ -44,6 +44,16 @@ final class TextImporterTests: XCTestCase {
         XCTAssertEqual(decoded, sample)
     }
 
+    func testReportsParsingProgress() async throws {
+        let url = Fixture.textFile(sample, encoding: .utf8)
+        let progress = ImportProgressRecorder()
+        _ = try await TextImporter(url: url, onParsingProgress: progress.record).chapters()
+        XCTAssertEqual(progress.values, [
+            ImportProgressSample(completed: 0, total: 1),
+            ImportProgressSample(completed: 1, total: 1),
+        ])
+    }
+
     func testWhitespaceOnlyThrowsUnreadable() async {
         let url = Fixture.textFile("   \n\t  \n", encoding: .utf8)
         do {

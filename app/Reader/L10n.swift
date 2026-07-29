@@ -140,6 +140,16 @@ enum L10n {
     static var importOCRFailed: String { String(localized: "import.ocrFailed") }
     static var importOCRUnavailable: String { String(localized: "import.ocrUnavailable") }
     static var importPasswordProtected: String { String(localized: "import.passwordProtected") }
+    static var importBusy: String { String(localized: "import.busy") }
+    static var importPreparing: String { String(localized: "import.preparing") }
+    static var importParsing: String { String(localized: "import.parsing") }
+    static func importParsing(_ done: Int, _ total: Int) -> String {
+        String(format: String(localized: "import.parsing.format"), done, total)
+    }
+    static var importInspecting: String { String(localized: "import.inspecting") }
+    static var importAwaitingOCR: String { String(localized: "import.awaitingOCR") }
+    static var importSaving: String { String(localized: "import.saving") }
+    static var importCompleted: String { String(localized: "import.completed") }
     /// Determinate OCR progress while importing a scanned PDF; %1$d / %2$d.
     static func importRecognizing(_ done: Int, _ total: Int) -> String {
         String(format: String(localized: "import.recognizing.format"), done, total)

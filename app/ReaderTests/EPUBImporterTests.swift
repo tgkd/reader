@@ -22,6 +22,18 @@ final class EPUBImporterTests: XCTestCase {
         XCTAssertEqual(result.map(\.text), ["ALPHA", "BRAVO", "CHARLIE"])
     }
 
+    func testReportsParsingProgressPerSpineItem() async throws {
+        let url = try Fixture.simpleEPUB(["ALPHA", "BRAVO", "CHARLIE"])
+        let progress = ImportProgressRecorder()
+        _ = try await EPUBImporter(url: url, onParsingProgress: progress.record).chapters()
+        XCTAssertEqual(progress.values, [
+            ImportProgressSample(completed: 0, total: 3),
+            ImportProgressSample(completed: 1, total: 3),
+            ImportProgressSample(completed: 2, total: 3),
+            ImportProgressSample(completed: 3, total: 3),
+        ])
+    }
+
     func testLinearNoItemsAreSkipped() async throws {
         // Cover/footnotes marked linear="no" are auxiliary — not narrated chapters.
         let manifest = [

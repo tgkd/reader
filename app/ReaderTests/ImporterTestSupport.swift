@@ -4,6 +4,29 @@ import PDFKit
 import ZIPFoundation
 @testable import Reader
 
+struct ImportProgressSample: Equatable {
+    let completed: Int
+    let total: Int
+}
+
+/// Sendable, lock-protected callback recorder used by importer progress tests.
+final class ImportProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var samples: [ImportProgressSample] = []
+
+    func record(_ completed: Int, _ total: Int) {
+        lock.lock()
+        samples.append(ImportProgressSample(completed: completed, total: total))
+        lock.unlock()
+    }
+
+    var values: [ImportProgressSample] {
+        lock.lock()
+        defer { lock.unlock() }
+        return samples
+    }
+}
+
 /// Runtime fixture generators for the importer tests. Nothing is committed as a
 /// binary: EPUBs are zipped on the fly (so spine/manifest/linear variations are
 /// trivial to express), PDFs are rendered with real selectable text, and text

@@ -140,6 +140,14 @@
 "import.ocrFailed" = "Couldn’t read text from this scanned PDF";
 "import.ocrUnavailable" = "Reading scanned PDFs needs Membership";
 "import.passwordProtected" = "This PDF is password-protected. Remove the password and import it again.";
+"import.busy" = "Another file is already being imported";
+"import.preparing" = "Preparing file…";
+"import.parsing" = "Parsing text…";
+"import.parsing.format" = "Parsing text… %1$d / %2$d";
+"import.inspecting" = "Checking pages…";
+"import.awaitingOCR" = "Waiting to read scanned pages with AI";
+"import.saving" = "Adding to library…";
+"import.completed" = "Imported";
 /* OCR progress while importing a scanned PDF; %1$d done of %2$d pages. */
 "import.recognizing.format" = "Recognizing text… %1$d / %2$d";
 /* Confirm OCR of an image-only EPUB/PDF (subscriber); %d = page count. */

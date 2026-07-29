@@ -9,8 +9,10 @@ import ReaderCore
 struct TextImporter: DocumentImporter {
     let url: URL
     var stripMarkdown = false
+    var onParsingProgress: ImportProgressHandler? = nil
 
     func chapters() async throws -> [Chapter] {
+        onParsingProgress?(0, 1)
         let data = try Data(contentsOf: url)
         guard var text = JapaneseTextDecoder.decode(data) else {
             throw ImportError.unreadable
@@ -19,6 +21,7 @@ struct TextImporter: DocumentImporter {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ImportError.unreadable
         }
+        onParsingProgress?(1, 1)
         return [Chapter(title: nil, text: text)]
     }
 }

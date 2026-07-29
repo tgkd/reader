@@ -20,7 +20,9 @@ struct EPUBImporter: DocumentImporter {
     /// `PDFImporter`; reuses the same `WorkerOCRService` (the Worker's `/pdf/ocr`).
     var recognizer: PDFTextRecognizer? = nil
     /// Reports OCR image completion (`completed`, `total`) for a determinate banner.
-    var onProgress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil
+    var onProgress: ImportProgressHandler? = nil
+    /// Reports local XHTML extraction one spine item at a time.
+    var onParsingProgress: ImportProgressHandler? = nil
 
     /// How many page images to decode + recognize at once. Fixed-layout EPUB images
     /// can be large, so a whole image-only book is never decoded at once — windows
@@ -98,7 +100,12 @@ struct EPUBImporter: DocumentImporter {
         let titles = tocTitles(in: archive, opf: opf, opfDir: opfDir)
 
         var slots: [Slot] = []
-        for idref in opf.spine {
+        onParsingProgress?(0, opf.spine.count)
+        for (index, idref) in opf.spine.enumerated() {
+            // Local XHTML extraction is unbilled, so it is safe to abandon on cancel
+            // (the OCR window pass below deliberately has no such check).
+            try Task.checkCancellation()
+            defer { onParsingProgress?(index + 1, opf.spine.count) }
             guard let href = opf.manifest[idref] else { continue }
             let path = resolve(href, relativeTo: opfDir)
             guard let xhtml = try? data(at: path, in: archive) else { continue }
