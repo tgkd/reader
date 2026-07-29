@@ -19,6 +19,17 @@ final class AppServices {
     /// Paid synthesis, owned at session scope so it survives the reader that
     /// started it (leave ≠ cancel, reopen ≠ re-bill). See `SynthesisCoordinator`.
     let synthesis: SynthesisCoordinator
+    /// Live audio chunks from an in-flight synthesis, so the reader can start
+    /// playing a chapter while the rest of it is still being generated.
+    let synthesisStream = SynthesisStream()
+    /// Seconds of narration per character, learned from chapters actually
+    /// generated this session. Measured rates ranged 3.6–6.8 chars/s across
+    /// content, so a constant would be wrong by up to 2x — but within one book,
+    /// voice and model it is consistent, which is exactly the case that matters
+    /// for estimating the NEXT chapter. Session-scoped on purpose: it self-heals
+    /// when the voice changes, at the cost of being unset on the first chapter
+    /// after launch.
+    var measuredSecondsPerChar: Double?
     let fixtures: FixtureTTSService   // concrete, for the library "cached?" probe
     let audioStore: GeneratedAudioStore
     let library: LibraryStore
@@ -34,7 +45,12 @@ final class AppServices {
 
         // Chapters over the ElevenLabs per-request char cap are chunked and the
         // alignments stitched back together — transparently to the reader/cache.
-        let worker = WorkerTTSService(baseURL: AppServices.workerBaseURL, userId: { AppServices.userId })
+        let stream = synthesisStream
+        let worker = WorkerTTSService(
+            baseURL: AppServices.workerBaseURL, userId: { AppServices.userId },
+            onChunk: { key, audio, alignment in
+                stream.publish(key, audio: audio, alignment: alignment)
+            })
         tts = ChunkingTTSService(inner: worker, store: store)
         synthesis = SynthesisCoordinator(tts: tts, store: store)
 

@@ -27,6 +27,7 @@ final class WorkerTTSService: TTSService {
     private let userId: @Sendable () -> String?
     private let session: URLSession
     private let onProgress: (@Sendable (Double) -> Void)?
+    private let onChunk: (@Sendable (ContentKey, Data, Alignment) -> Void)?
 
     /// `AppServices` injects the URL from the `WorkerBaseURL` Info.plist key
     /// (overridable via the gitignored `Signing.xcconfig`'s `WORKER_HOST`); this
@@ -41,10 +42,12 @@ final class WorkerTTSService: TTSService {
     init(baseURL: URL = URL(string: "https://api.thetango.org")!,
          userId: @escaping @Sendable () -> String?,
          session: URLSession? = nil,
-         onProgress: (@Sendable (Double) -> Void)? = nil) {
+         onProgress: (@Sendable (Double) -> Void)? = nil,
+         onChunk: (@Sendable (ContentKey, Data, Alignment) -> Void)? = nil) {
         self.baseURL = baseURL
         self.userId = userId
         self.onProgress = onProgress
+        self.onChunk = onChunk
         // Streaming changes what each timeout means. `timeoutIntervalForRequest` is
         // the gap BETWEEN chunks, which is now seconds rather than the whole
         // synthesis, so 300 s is generous. `timeoutIntervalForResource` caps the
@@ -109,7 +112,8 @@ final class WorkerTTSService: TTSService {
                 ? WorkerError.subscriptionRequired : WorkerError.http(http.statusCode)
         }
 
-        let (audio, alignment) = try await accumulate(bytes, expecting: text.count)
+        let (audio, alignment) = try await accumulate(bytes, expecting: text.count,
+                                                      key: request.cacheKey)
         // `Data(base64Encoded: "")` SUCCEEDS with zero bytes, so an empty
         // `audio_base64` would otherwise be cached as paid narration: `AVAudioPlayer`
         // then fails to init (a chapter that can never play until the cache is
@@ -138,7 +142,8 @@ final class WorkerTTSService: TTSService {
     /// partial result must fail rather than be cached as a complete chapter, which
     /// would leave the reader permanently missing its tail with no way to notice.
     private func accumulate(_ bytes: URLSession.AsyncBytes,
-                            expecting characterCount: Int) async throws -> (Data, Alignment) {
+                            expecting characterCount: Int,
+                            key: ContentKey) async throws -> (Data, Alignment) {
         var audio = Data()
         var characters: [String] = []
         var startTimes: [Double] = []
@@ -148,13 +153,20 @@ final class WorkerTTSService: TTSService {
         for try await line in bytes.lines {
             guard !line.isEmpty, let data = line.data(using: .utf8),
                   let chunk = try? decoder.decode(TimestampedAudio.self, from: data) else { continue }
-            if let decoded = Data(base64Encoded: chunk.audioBase64) { audio.append(decoded) }
+            let slice = Data(base64Encoded: chunk.audioBase64) ?? Data()
+            audio.append(slice)
             if let a = chunk.alignment {
                 characters.append(contentsOf: a.characters)
                 startTimes.append(contentsOf: a.startTimes)
                 endTimes.append(contentsOf: a.endTimes)
             }
             onProgress?(Double(characters.count) / Double(max(characterCount, 1)))
+            // Hand the chunk on so the reader can play it now rather than after the
+            // whole chapter — the reason for streaming in the first place. The
+            // accumulation above still runs to completion, so the cached result is
+            // identical whether or not anyone is listening.
+            onChunk?(key, slice, chunk.alignment
+                     ?? Alignment(characters: [], startTimes: [], endTimes: []))
         }
 
         guard characters.count >= characterCount else { throw WorkerError.truncatedStream }

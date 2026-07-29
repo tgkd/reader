@@ -1,5 +1,5 @@
 import SwiftUI
-import AVFAudio
+import AVFoundation   // AVPlayer (progressive playback); AVFAudio alone lacks it
 import QuartzCore
 import ReaderCore
 import struct ReaderCore.Document   // disambiguate from SwiftUI.Document
@@ -35,9 +35,8 @@ final class ReaderModel {
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
     private(set) var isPlaying = false
-    /// Estimated synthesis progress (0…1) while `audioState == .synthesizing`.
-    /// Purely cosmetic: the Worker buffers the whole response, so no real signal
-    /// exists — eased against a char-count time estimate, snapped to 1 on success.
+    /// Synthesis progress (0…1) while `audioState == .synthesizing` — the fraction
+    /// of the chapter's characters the stream has delivered. Measured, not eased.
     private(set) var synthesisProgress: Double = 0
 
     var speed: Double = 1.0
@@ -51,7 +50,15 @@ final class ReaderModel {
     private(set) var entry: DictionaryEntry?
     var sheetVisible = false
 
-    private var player: AVAudioPlayer?
+    /// `AVPlayer`, not `AVAudioPlayer`, because narration is played WHILE it is
+    /// still being generated: `AVAudioPlayer(data:)` needs the finished file, which
+    /// meant ~200 s of silence for a chapter whose audio starts arriving at ~1.7 s.
+    /// Cached chapters go through the same player — their bytes simply all arrive
+    /// at once — so there is one set of transport, completion and interruption
+    /// behaviours rather than two that must be kept in agreement.
+    private var player: AVPlayer?
+    /// Backs `player`; retains the audio and serves it to `AVPlayer` on demand.
+    private var audioSource: ChapterAudioSource?
     /// On-device speech for the tap-to-define pronunciation button. Free and
     /// ungated — distinct from the subscription-gated chapter narration.
     private let speech = AVSpeechSynthesizer()
@@ -62,11 +69,10 @@ final class ReaderModel {
     /// cancel it — otherwise an orphaned synthesis finishes into a dismissed model
     /// and starts playback (and a reopen would run a second, duplicate paid synth).
     private var playbackTask: Task<Void, Never>?
-    /// The 10 Hz ticker behind `synthesisProgress`; dies with the synthesis it dresses.
-    private var synthesisProgressTask: Task<Void, Never>?
-    /// Bridges `AVAudioPlayer`'s completion callback (which fires even backgrounded,
-    /// when the display link is dead) back to the model.
-    private var audioDelegate: PlayerDelegate?
+    /// End-of-item observers. `AVPlayer` reports completion by notification rather
+    /// than delegate, but the requirement is unchanged: these fire even while
+    /// backgrounded, where the display-link clock is dead.
+    private var endObservers: [NSObjectProtocol] = []
     /// Tokens for the audio-session interruption + route-change observers, removed
     /// on deinit. `nonisolated(unsafe)`: written once in `init`, read once in the
     /// nonisolated `deinit` — no concurrent access.
@@ -258,35 +264,16 @@ final class ReaderModel {
         playbackTask?.cancel()
     }
 
-    /// Wall-clock estimate for synthesizing `charCount` chars through the Worker,
-    /// which buffers the whole response (~generation-time latency). Tunable.
-    private static func estimatedSynthesisSeconds(_ charCount: Int) -> Double {
-        8 + Double(charCount) / 90
-    }
-
-    /// Drive the cosmetic progress toward ~0.92 on an exponential ease: fast early,
-    /// ~0.84 around the estimate, and still creeping if synthesis runs long — the
-    /// bar never freezes, and never claims completion it can't know.
+    /// Reset progress for a new synthesis. There is no ticker any more: the eased
+    /// curve existed because the buffered route gave no signal, and `appendStreamed`
+    /// now reports characters actually delivered.
     private func beginSynthesisProgress(charCount: Int) {
-        synthesisProgressTask?.cancel()
         synthesisProgress = 0
-        let estimate = Self.estimatedSynthesisSeconds(charCount)
-        let start = Date()
-        synthesisProgressTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                guard let self, !Task.isCancelled else { return }
-                let t = Date().timeIntervalSince(start)
-                self.synthesisProgress = 0.92 * (1 - exp(-t / (estimate / 2.5)))
-            }
-        }
     }
 
-    /// Stop the cosmetic progress: full bar on success (shown briefly while
-    /// playback is built, just before `.ready`), reset on failure.
+    /// Full bar on success (shown briefly while playback is built, just before
+    /// `.ready`), reset on failure.
     private func endSynthesisProgress(success: Bool) {
-        synthesisProgressTask?.cancel()
-        synthesisProgressTask = nil
         synthesisProgress = success ? 1 : 0
     }
 
@@ -328,12 +315,33 @@ final class ReaderModel {
             }
             do {
                 beginSynthesisProgress(charCount: request.text.count)
+                // Subscribe BEFORE the request exists: chunks start arriving ~1.7 s
+                // in, and a subscription set up after the await would miss the
+                // opening of the chapter — the part the listener is waiting on.
+                beginProgressivePlayback(key: key, request: request, gen: gen)
+                // `finishProgressivePlayback` clears `progressive`, so this only
+                // fires on the failure paths — where the listener is mid-chapter
+                // with audio that will never be completed.
+                defer {
+                    services.synthesisStream.unsubscribe(key)
+                    if progressive != nil { abortProgressivePlayback() }
+                }
                 // The coordinator owns the request (and saves the paid result to
                 // the cache the moment it returns): leaving the reader doesn't
                 // cancel it, and a re-entry awaits this same task instead of
                 // re-billing. Only cancelSynthesis() abandons it.
                 synth = try await services.synthesis.task(for: request).value
                 endSynthesisProgress(success: true)
+                // Already playing from the stream: the audio is complete now, so
+                // seal the source and swap the estimated duration for the exact
+                // one. Building a second player here would restart the chapter.
+                if progressive?.isPlaying == true {
+                    finishProgressivePlayback(with: synth, gen: gen)
+                    return audioState == .ready
+                }
+                // Never got far enough to start (a very short chapter, or the
+                // stream outran nothing) — drop it and build playback normally.
+                progressive = nil
             } catch is CancellationError {
                 // Explicit user cancel from the synthesizing pill — back to the
                 // Play affordance, no error banner.
@@ -423,32 +431,280 @@ final class ReaderModel {
 
         // The audio SESSION is activated in play() (first real playback), not here —
         // merely opening a chapter with cached audio must not duck other apps' audio.
-        do {
-            let p = try AVAudioPlayer(data: synth.audio)
-            p.enableRate = true
-            p.rate = Float(speed)
-            p.prepareToPlay()
-            // Delegate owns natural-finish handling; it fires even backgrounded, when
-            // the CADisplayLink (a foreground-only clock) is paused.
-            let d = PlayerDelegate()
-            d.onFinish = { [weak self] ok in self?.handlePlaybackFinished(successfully: ok) }
-            p.delegate = d
-            audioDelegate = d
-            player = p
-            duration = p.duration
-        } catch {
-            return .undecodable
-        }
+        guard !synth.audio.isEmpty else { return .undecodable }
+        let source = ChapterAudioSource(expectedBytes: synth.audio.count)
+        source.append(synth.audio)
+        source.finish()
+        attachPlayer(to: source)
+        // Duration comes from the ALIGNMENT, not the player: it is exact, already
+        // loaded, and available before AVPlayer has finished inspecting the asset —
+        // whereas an asset served through a resource loader reports its duration
+        // asynchronously, which would leave the scrubber at zero on open.
+        duration = timeline.duration
+        recordMeasuredRate()
 
         // Resume where the last session left off (only for the saved chapter, and
         // unless it was effectively finished).
         let resume = document.progress.time
         if chapterIndex == document.progress.chapterIndex, resume > 0, resume < duration - 0.5 {
-            player?.currentTime = resume
+            seekPlayer(to: resume)
             currentTime = resume
             activeIndex = timeline.index(at: resume)
         }
         return .ready
+    }
+
+    /// Point `player` at `source` and take over completion reporting.
+    ///
+    /// Both end notifications matter and mean different things: reaching the end is
+    /// a finished chapter (読了 + auto-advance), while failing to reach it is a
+    /// decode failure whose cache entry must be evicted. `AVAudioPlayer` collapsed
+    /// both into one `successfully:` flag, and `handlePlaybackFinished` still takes
+    /// that shape so the downstream rules are untouched.
+    private func attachPlayer(to source: ChapterAudioSource) {
+        let queue = DispatchQueue(label: "app.reader.chapter-audio")
+        let item = AVPlayerItem(asset: source.makeAsset(queue: queue))
+        let p = AVPlayer(playerItem: item)
+        // Narration is a long download the user is actively listening to; stalling
+        // to re-buffer is worse than a brief gap, and the generator stays ~2.8x
+        // ahead of playback anyway.
+        p.automaticallyWaitsToMinimizeStalling = false
+
+        endObservers.forEach(NotificationCenter.default.removeObserver)
+        endObservers = [
+            NotificationCenter.default.addObserver(
+                forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.handlePlaybackFinished(successfully: true) }
+            },
+            NotificationCenter.default.addObserver(
+                forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: item, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.handlePlaybackFinished(successfully: false) }
+            },
+        ]
+        audioSource = source
+        player = p
+    }
+
+    // MARK: - Progressive playback
+
+    /// A chapter being listened to while it is still being generated.
+    ///
+    /// A class, not a struct: the alignment arrays are appended on every one of
+    /// ~1,200 chunks, and value semantics would copy-on-write the whole chapter
+    /// each time.
+    private final class Progressive {
+        let source: ChapterAudioSource
+        var characters: [String] = []
+        var startTimes: [Double] = []
+        var endTimes: [Double] = []
+        /// Playback has begun — past this point generation always runs to
+        /// completion so the chapter reaches the cache.
+        var isPlaying = false
+        /// Generated seconds at the last timeline rebuild, to throttle them.
+        var timelineBuiltTo: Double = 0
+
+        init(source: ChapterAudioSource) { self.source = source }
+
+        var alignment: ReaderCore.Alignment {
+            ReaderCore.Alignment(characters: characters, startTimes: startTimes, endTimes: endTimes)
+        }
+    }
+
+    /// Rough speech rate, used ONLY to size the audio source's advertised length
+    /// before any real timing exists. The scrubber does not use it: measured rates
+    /// on real chapters ranged 3.6–6.8 chars/s depending on content, so a constant
+    /// is wrong by up to 2x — and underestimating makes the scrubber claim the
+    /// chapter ended while audio is still playing. `estimatedTotal` extrapolates
+    /// from the alignment actually received instead.
+    private static let charsPerSecondOfSpeech = 5.6
+    /// 128 kbps mp3, over-estimated: `ChapterAudioSource` treats the advertised
+    /// length as the end of the asset, so guessing short would truncate playback.
+    private static let bytesPerSecondOfAudio = 20_000.0
+    /// Audio buffered before playback starts. Generation runs ~2.8x faster than
+    /// playback, so a short head start is never caught up with.
+    private static let headStartSeconds = 4.0
+    /// How much new audio to accumulate between timeline rebuilds.
+    private static let timelineRefreshSeconds = 5.0
+
+    private var progressive: Progressive?
+
+    /// Whether audio is still being generated for what is currently playing.
+    var isGenerating: Bool { progressive?.isPlaying == true }
+    /// Seconds of narration that exist so far — the scrubber's buffered extent,
+    /// and the limit a seek may travel to.
+    private(set) var generatedTime: Double = 0
+    /// How much of the chapter exists as audio (0…1). Only meaningful while
+    /// `isGenerating`; a finished chapter is entirely available.
+    var generatedFraction: Double {
+        guard duration > 0 else { return 0 }
+        return min(1, max(0, generatedTime / duration))
+    }
+
+    /// Whole minutes of narration this chapter is expected to produce, for the
+    /// idle player. Prefers a rate measured from a chapter already generated this
+    /// session — same book, voice and model, so it lands within a few percent —
+    /// and falls back to a middling constant before anything has been measured.
+    var estimatedNarrationMinutes: Int {
+        let chars = currentChapter?.text.count ?? 0
+        guard chars > 0 else { return 0 }
+        let secondsPerChar = services.measuredSecondsPerChar ?? (1 / 5.0)
+        return max(1, Int((Double(chars) * secondsPerChar / 60).rounded()))
+    }
+
+    /// Chapter indices whose narration is already on disk, for the chapters
+    /// sheet's download marks.
+    private(set) var cachedChapters: Set<Int> = []
+
+    /// Recompute which chapters have cached audio. Done once when the sheet opens
+    /// rather than per row: `has()` touches the filesystem, so a 400-chapter book
+    /// would otherwise stat on every scroll frame. Keyed the same way playback
+    /// keys, so audio generated under a previous voice or model correctly does not
+    /// count — it would not be played either.
+    func refreshCachedChapters() {
+        var found: Set<Int> = []
+        for (i, chapter) in document.chapters.enumerated() {
+            let key = SynthesisRequest(text: chapter.text, voice: services.narrationVoice).cacheKey
+            if services.audioStore.has(key) { found.insert(i) }
+        }
+        cachedChapters = found
+    }
+
+    /// Record what this chapter actually took, so the next one can be estimated
+    /// from evidence instead of a constant.
+    private func recordMeasuredRate() {
+        let chars = currentChapter?.text.count ?? 0
+        guard chars > 0, duration > 0 else { return }
+        services.measuredSecondsPerChar = duration / Double(chars)
+    }
+
+    private func beginProgressivePlayback(key: ContentKey, request: SynthesisRequest, gen: Int) {
+        let seconds = Double(request.text.count) / Self.charsPerSecondOfSpeech
+        progressive = Progressive(
+            source: ChapterAudioSource(expectedBytes: Int(seconds * Self.bytesPerSecondOfAudio)))
+        generatedTime = 0
+        services.synthesisStream.subscribe(key) { [weak self] audio, alignment in
+            MainActor.assumeIsolated { self?.appendStreamed(audio, alignment, gen: gen) }
+        }
+    }
+
+    private func appendStreamed(_ audio: Data, _ alignment: ReaderCore.Alignment, gen: Int) {
+        guard gen == loadGeneration, let p = progressive else { return }
+        p.source.append(audio)
+        p.characters.append(contentsOf: alignment.characters)
+        p.startTimes.append(contentsOf: alignment.startTimes)
+        p.endTimes.append(contentsOf: alignment.endTimes)
+        generatedTime = p.endTimes.last ?? 0
+        // Real progress, replacing the eased time estimate: this is the fraction of
+        // the chapter the stream has actually delivered.
+        let totalChars = currentChapter?.text.count ?? 0
+        if totalChars > 0 {
+            synthesisProgress = min(1, Double(p.characters.count) / Double(totalChars))
+        }
+
+        if !p.isPlaying {
+            if generatedTime >= Self.headStartSeconds { startProgressivePlayback(p) }
+        } else if generatedTime - p.timelineBuiltTo >= Self.timelineRefreshSeconds {
+            p.timelineBuiltTo = generatedTime
+            refreshTimings(p.alignment)
+            // Re-extrapolate as evidence accumulates; it converges within seconds
+            // and is replaced by the exact duration when generation ends.
+            duration = estimatedTotal(p)
+        }
+    }
+
+    /// Total chapter duration projected from the audio generated so far — this
+    /// chapter's own measured speech rate, not an average over other content.
+    private func estimatedTotal(_ p: Progressive) -> Double {
+        let generatedChars = p.characters.count
+        let totalChars = currentChapter?.text.count ?? generatedChars
+        guard generatedChars > 0, totalChars > 0, generatedTime > 0 else { return duration }
+        return generatedTime * Double(totalChars) / Double(generatedChars)
+    }
+
+    /// Begin playing what has arrived so far.
+    private func startProgressivePlayback(_ p: Progressive) {
+        guard let tokens = tokensForSynthesizedText() else { return }
+        p.isPlaying = true
+        p.timelineBuiltTo = generatedTime
+        // Structure IS new here (the first spans), so this one bumps the version.
+        setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: p.alignment)))
+        // Estimated total: the real one isn't known until generation ends, and a
+        // scrubber whose length grows under the thumb is worse than one slightly off.
+        duration = estimatedTotal(p)
+        attachPlayer(to: p.source)
+        endSynthesisProgress(success: true)
+        audioState = .ready
+        play()
+    }
+
+    /// Generation finished while its audio was already playing: seal the source and
+    /// replace the estimate with the exact alignment. Deliberately does NOT rebuild
+    /// the player — that would restart the chapter under the listener.
+    private func finishProgressivePlayback(with synth: SynthesizedAudio, gen: Int) {
+        guard gen == loadGeneration, let p = progressive else { return }
+        p.source.finish()
+        refreshTimings(synth.alignment)
+        duration = timeline.duration
+        generatedTime = duration
+        recordMeasuredRate()
+        progressive = nil
+        audioState = .ready
+    }
+
+    /// Generation failed after playback began. The audio on the device is a partial
+    /// chapter that can never be completed, so stop rather than let `AVPlayer` stall
+    /// silently at the end of the buffer.
+    private func abortProgressivePlayback() {
+        progressive = nil
+        generatedTime = 0
+        teardownPlayer()
+    }
+
+    /// Replace the span TIMINGS without touching structure. The surfaces and
+    /// readings are fixed at load; only their times grow as audio arrives. Going
+    /// through `setTimeline` would bump `structureVersion` and relayout the whole
+    /// CoreText surface every few seconds mid-playback.
+    private func refreshTimings(_ alignment: ReaderCore.Alignment) {
+        guard let tokens = tokensForSynthesizedText() else { return }
+        timeline = SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: alignment))
+    }
+
+    /// The tokens for the text being synthesized. `load()` already tokenized this
+    /// chapter under the same normalization the TTS request uses, so this is the
+    /// same pass the alignment indexes — no second MeCab run mid-playback.
+    private func tokensForSynthesizedText() -> [Token]? {
+        guard let loaded = chapterTokens,
+              loaded.text == Normalize.nfkc(currentChapter?.text ?? "") else { return nil }
+        return loaded.tokens
+    }
+
+    /// Drop the player and everything that outlives it. The end-of-item observers
+    /// are registered per item, so leaving them attached would deliver a finish for
+    /// a chapter that is no longer on screen.
+    private func teardownPlayer() {
+        player?.pause()
+        endObservers.forEach(NotificationCenter.default.removeObserver)
+        endObservers = []
+        audioSource?.abort()
+        audioSource = nil
+        player = nil
+    }
+
+    /// `AVPlayer` seeks asynchronously; the reader treats the playhead as moved
+    /// immediately (the highlight jumps on the same frame), so seek with zero
+    /// tolerance to keep audio and highlight from disagreeing after a scrub.
+    private func seekPlayer(to t: Double) {
+        player?.seek(to: CMTime(seconds: t, preferredTimescale: 600),
+                     toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    /// The playhead, in seconds. `AVPlayer` reports an indefinite time before the
+    /// asset is ready, which would otherwise surface as NaN in the scrubber.
+    private var playerTime: Double {
+        guard let t = player?.currentTime(), t.isNumeric else { return currentTime }
+        return t.seconds
     }
 
     // MARK: - Transport
@@ -458,13 +714,15 @@ final class ReaderModel {
     func play() {
         guard let player else { return }
         activateSession()
-        if currentTime >= duration { player.currentTime = 0 }
-        player.enableRate = true
-        player.rate = Float(speed)
+        if currentTime >= duration, duration > 0 { seekPlayer(to: 0) }
+        // `defaultRate` rather than `rate`: setting `rate` directly starts playback
+        // itself, which would bypass the session activation ordering above and
+        // fights `AVPlayer`'s own rate management on interruption resume.
+        player.defaultRate = Float(speed)
         player.play()
         isPlaying = true
         link.start()
-        nowPlaying.setPlayback(elapsed: player.currentTime, rate: speed)
+        nowPlaying.setPlayback(elapsed: playerTime, rate: speed)
     }
 
     /// Activate the playback audio session at the first real playback — deferred out
@@ -492,23 +750,27 @@ final class ReaderModel {
         isPlaying = false
         link.stop()
         persistProgress()
-        nowPlaying.setPlayback(elapsed: player?.currentTime ?? currentTime, rate: 0)
+        nowPlaying.setPlayback(elapsed: playerTime, rate: 0)
     }
 
     func setSpeed(_ v: Double) {
         speed = v
-        player?.enableRate = true
-        player?.rate = Float(v)
-        nowPlaying.setPlayback(elapsed: player?.currentTime ?? currentTime,
-                               rate: isPlaying ? v : 0)
+        player?.defaultRate = Float(v)
+        // Only touch the live rate while playing — assigning it when paused would
+        // start playback from a speed control.
+        if isPlaying { player?.rate = Float(v) }
+        nowPlaying.setPlayback(elapsed: playerTime, rate: isPlaying ? v : 0)
     }
 
     /// Move the playhead (scrubbing / VoiceOver adjust). Works while playing or
     /// paused; the highlight jumps to the new position immediately.
     func seek(to t: Double) {
-        guard let player, duration > 0 else { return }
-        let clamped = min(max(0, t), duration)
-        player.currentTime = clamped
+        guard player != nil, duration > 0 else { return }
+        // While generating, the audio past `generatedTime` does not exist yet —
+        // seeking into it would stall the player with no way back.
+        let limit = isGenerating ? min(duration, generatedTime) : duration
+        let clamped = min(max(0, t), limit)
+        seekPlayer(to: clamped)
         currentTime = clamped
         activeIndex = timeline.index(at: clamped)
         nowPlaying.setPlayback(elapsed: clamped, rate: isPlaying ? speed : 0)
@@ -561,10 +823,7 @@ final class ReaderModel {
         loadGeneration &+= 1
         playbackTask?.cancel()
         playbackTask = nil
-        synthesisProgressTask?.cancel()
-        synthesisProgressTask = nil
-        player?.stop()
-        player = nil            // don't let a stale player replay under a new chapter
+        teardownPlayer()        // don't let a stale player replay under a new chapter
         duration = 0
         isPlaying = false
         nowPlaying.deactivate()
@@ -603,12 +862,12 @@ final class ReaderModel {
     /// failed or not-generated open never clobbers saved progress with zeros. The
     /// keep-or-skip decision lives in `ReadingProgressResolver` (tested): a zero
     /// playhead from a never-played open is skipped, while a `completed` chapter is
-    /// always written (its `AVAudioPlayer` playhead has already reset to 0).
+    /// always written (its playhead has already reset to 0).
     func persistProgress(completed: Bool = false) {
         guard audioState == .ready, duration > 0 else { return }
         let stop: PlaybackStop = completed
             ? .completed
-            : .interrupted(time: player?.currentTime ?? currentTime)
+            : .interrupted(time: playerTime)
         guard let progress = ReadingProgressResolver.resolve(stop, duration: duration,
                                                              chapterIndex: chapterIndex,
                                                              chapterCount: chapterCount)
@@ -620,20 +879,23 @@ final class ReaderModel {
     }
 
     private func tick() {
-        guard let player, player.isPlaying else {
+        // `.paused` rather than `!= .playing`: an AVPlayer briefly reports
+        // `.waitingToPlayAtSpecifiedRate` while it buffers, and treating that as
+        // stopped would kill the clock mid-chapter.
+        guard let player, player.timeControlStatus != .paused else {
             // Not playing: either paused (link already stopped) or finished. Natural
-            // finish is owned by `handlePlaybackFinished` via the AVAudioPlayerDelegate
-            // (which fires even backgrounded, where this display-link clock is dead),
+            // finish is owned by `handlePlaybackFinished` via the end-of-item
+            // notification (which fires even backgrounded, where this clock is dead),
             // so don't persist here — just stop the foreground clock.
             link.stop()
             return
         }
-        currentTime = player.currentTime
+        currentTime = playerTime
         activeIndex = timeline.index(at: currentTime)
     }
 
-    /// Natural end of the chapter — routed through the AVAudioPlayerDelegate so it
-    /// also runs while backgrounded (screen locked). Marks the chapter complete
+    /// Natural end of the chapter — routed through the end-of-item notification so
+    /// it also runs while backgrounded (screen locked). Marks the chapter complete
     /// (読了), then continues into the next chapter IF its narration is already
     /// local — an unattended finish must never trigger a paid synthesis (the same
     /// rule as the lock-screen skip). Without a cached continuation the lock-screen
@@ -643,13 +905,12 @@ final class ReaderModel {
         isPlaying = false
         link.stop()
         guard successfully else {
-            // Decoder failure mid-chapter (the delegate's `successfully == false`):
-            // NOT a finished read — don't mark it 読了 or auto-advance on it, and
-            // don't touch saved progress. The data produced a decode error, so
-            // evict the cache entry (a retry would replay the same broken bytes)
-            // and surface the failure; Play regenerates.
-            player = nil
-            audioDelegate = nil
+            // Failed to play to the end (`failedToPlayToEndTime`): NOT a finished
+            // read — don't mark it 読了 or auto-advance on it, and don't touch saved
+            // progress. The data produced a decode error, so evict the cache entry
+            // (a retry would replay the same broken bytes) and surface the failure;
+            // Play regenerates.
+            teardownPlayer()
             services.audioStore.remove(
                 SynthesisRequest(text: currentChapter?.text ?? "",
                                  voice: services.narrationVoice).cacheKey)
@@ -795,9 +1056,3 @@ private final class DisplayLinkProxy: NSObject {
 /// `@Observable` and forwards the finish callback. The callback is delivered on the
 /// thread that started playback (the main run loop here), so hopping onto the main
 /// actor via `assumeIsolated` is valid — mirroring `DisplayLinkProxy`.
-private final class PlayerDelegate: NSObject, AVAudioPlayerDelegate {
-    var onFinish: ((_ successfully: Bool) -> Void)?
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        MainActor.assumeIsolated { onFinish?(flag) }
-    }
-}

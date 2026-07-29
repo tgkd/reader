@@ -69,8 +69,13 @@ PDFKit / networking live in the `app/` target only.
   pill's X is the one deliberate cancel.
   `FixtureTTSService` provides DEBUG offline fixtures and the library's "is this cached?" probe.
 
-- **Reader:** `ReaderModel` drives one chapter — `AVAudioPlayer` + a `CADisplayLink` proxy advance
-  `activeIndex` each frame via `SpanTimeline.index(at:)`; an `AVAudioPlayerDelegate` +
+- **Reader:** `ReaderModel` drives one chapter — **`AVPlayer`** (NOT `AVAudioPlayer`, which needs the
+  finished file: narration is played WHILE it is still being generated) fed by `ChapterAudioSource`,
+  an `AVAssetResourceLoaderDelegate` serving a growing mp3. Cached chapters take the same path with
+  all bytes appended at once, so there is ONE set of transport/completion/interruption behaviours.
+  A `CADisplayLink` proxy advances
+  `activeIndex` each frame via `SpanTimeline.index(at:)`; `AVPlayerItem`'s didPlayToEnd /
+  failedToPlayToEnd notifications +
   `AVAudioSession` interruption/route-change observers own completion / pause-resume so they
   still fire while backgrounded (the display link is a foreground-only clock) — resume after an
   interruption only if the user was playing when it began; pause when the output route
@@ -79,11 +84,16 @@ PDFKit / networking live in the `app/` target only.
   widget stays (paused at the end) and only the audio session is released — the widget is torn
   down on explicit stop/leave. `NowPlayingController` publishes lock-screen/Control Center
   metadata + remote commands — playback state is written at transitions only
-  (play/pause/seek/speed/chapter), never per tick; the system extrapolates. `.synthesizing` shows `synthesisProgress`, a purely
-  cosmetic 10 Hz eased estimate that creeps toward ~0.92 and snaps to 1 on success. It dates from
-  the buffered route, where no real signal existed; streaming now reports true progress via
-  `WorkerTTSService`'s `onProgress` (delivered characters / total), which is NOT yet wired to the
-  UI — doing so needs a progress channel through `TTSService`/`SynthesisCoordinator`. `RubyTextView` (custom CoreText)
+  (play/pause/seek/speed/chapter), never per tick; the system extrapolates.
+  **Playback starts after a ~4 s head start and generation continues behind it** — chunks arrive via
+  `SynthesisStream` (keyed by `ContentKey`, so a re-entering reader attaches to a generation it did
+  not start). Generation runs ~2.8x faster than playback, so it is not caught up with. `.synthesizing`
+  is therefore a ~4 s pre-roll, not the whole chapter, and `synthesisProgress` is MEASURED (delivered
+  characters / total), not eased. Seeks clamp to `generatedTime`, and the scrubber marks the
+  ungenerated tail. Two estimates are self-calibrating rather than constants, because measured speech
+  rates ranged 3.6–6.8 chars/s across content: the in-flight `duration` extrapolates from this
+  chapter's own alignment, and the idle player's "about N min" uses
+  `AppServices.measuredSecondsPerChar`, learned from a chapter already generated this session. `RubyTextView` (custom CoreText)
   renders furigana via `CTRubyAnnotation` and vertical text via frame progression: the base text is
   drawn once with an **explicit per-run ink color** (NOT `kCTForegroundColorFromContext` — the first
   ruby annotation clobbers the context fill, invisibly in paper but black-on-black in night), and
