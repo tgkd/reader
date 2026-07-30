@@ -90,10 +90,18 @@ PDFKit / networking live in the `app/` target only.
   not start). Generation runs ~2.8x faster than playback, so it is not caught up with. `.synthesizing`
   is therefore a ~4 s pre-roll, not the whole chapter, and `synthesisProgress` is MEASURED (delivered
   characters / total), not eased. Seeks clamp to `generatedTime`, and the scrubber marks the
-  ungenerated tail. Two estimates are self-calibrating rather than constants, because measured speech
-  rates ranged 3.6–6.8 chars/s across content: the in-flight `duration` extrapolates from this
-  chapter's own alignment, and the idle player's "about N min" uses
-  `AppServices.measuredSecondsPerChar`, learned from a chapter already generated this session. `RubyTextView` (custom CoreText)
+  ungenerated tail. **Chapter length is estimated from a measured rate, and the estimate is never
+  rendered as digits.** Measured speech rates ranged 3.6–6.8 chars/s across content, so a constant is
+  wrong by up to 2x: both the idle player's "about N min" and the in-flight `duration` come from
+  `AppServices.measuredSecondsPerChar`, learned at the seal of any chapter generated with that voice
+  and **persisted per voice** (session scope meant every cold launch fell back to the constant, so the
+  first chapter was seeded wrong and then jumped). `duration` is re-projected from this chapter's own
+  alignment only after `estimateEvidenceSeconds` of audio exists — extrapolating from the 4 s head
+  start, typically a title line and a pause, moved it by tens of percent. Even so the player shows
+  **elapsed (`+m:ss`) while generating and remaining (`−m:ss`) only once sealed**: the total is a
+  projection until then, and a remaining time that goes UP reads as a bug. The estimate still drives
+  the ring, the scrubber and the Now Playing duration, where the same error is a few pixels of arc.
+  `RubyTextView` (custom CoreText)
   renders furigana via `CTRubyAnnotation` and vertical text via frame progression: the base text is
   drawn once with an **explicit per-run ink color** (NOT `kCTForegroundColorFromContext` — the first
   ruby annotation clobbers the context fill, invisibly in paper but black-on-black in night), and

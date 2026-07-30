@@ -91,7 +91,7 @@ struct PlayerView: View {
                 .font(.system(size: 11, weight: .semibold)).monospacedDigit()
                 .foregroundStyle(theme.accent)
         case .ready where model.isPlaying:
-            Text(remainingLabel)
+            Text(positionLabel)
                 .font(.system(size: 11)).monospacedDigit()
                 .foregroundStyle(theme.muted)
         default:
@@ -103,7 +103,7 @@ struct PlayerView: View {
 
     private var collapsedA11yValue: String {
         switch model.audioState {
-        case .ready: return (model.isPlaying ? L10n.a11yPause : L10n.a11yPlay) + ", " + remainingLabel
+        case .ready: return (model.isPlaying ? L10n.a11yPause : L10n.a11yPlay) + ", " + positionLabel
         case .synthesizing: return L10n.readerGenerating + ", " + percentLabel
         case .locked: return L10n.readerSubscribeTitle
         case .notGenerated: return L10n.readerNotGeneratedTitle
@@ -184,7 +184,7 @@ struct PlayerView: View {
                 }
             }
             .animation(.linear(duration: 0.3), value: model.generatedTime)
-            Text(remainingLabel)
+            Text(positionLabel)
                 .font(.system(size: 12)).monospacedDigit()
                 .foregroundStyle(theme.muted)
             speedPill
@@ -342,8 +342,17 @@ struct PlayerView: View {
 
     // MARK: - Derived labels
 
-    private var remainingLabel: String {
-        "−" + model.timeLabel(max(0, model.duration - model.currentTime))
+    /// Elapsed while the chapter is still generating, remaining once it is not.
+    /// The total is an estimate until generation seals, so a countdown built on it
+    /// revises as evidence arrives — and a remaining time that goes UP reads as a
+    /// bug however sound the projection is. Elapsed is the playhead itself: exact,
+    /// monotonic, and unable to contradict what is being heard. `duration` still
+    /// drives the ring and the scrubber, where the same error is a few pixels of
+    /// arc rather than a number.
+    private var positionLabel: String {
+        model.isGenerating
+            ? "+" + model.timeLabel(model.currentTime)
+            : "−" + model.timeLabel(max(0, model.duration - model.currentTime))
     }
 
     private var percentLabel: String {

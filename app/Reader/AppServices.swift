@@ -22,14 +22,35 @@ final class AppServices {
     /// Live audio chunks from an in-flight synthesis, so the reader can start
     /// playing a chapter while the rest of it is still being generated.
     let synthesisStream = SynthesisStream()
-    /// Seconds of narration per character, learned from chapters actually
-    /// generated this session. Measured rates ranged 3.6–6.8 chars/s across
-    /// content, so a constant would be wrong by up to 2x — but within one book,
-    /// voice and model it is consistent, which is exactly the case that matters
-    /// for estimating the NEXT chapter. Session-scoped on purpose: it self-heals
-    /// when the voice changes, at the cost of being unset on the first chapter
-    /// after launch.
-    var measuredSecondsPerChar: Double?
+    /// Seconds of narration per character, measured from chapters actually
+    /// generated. Rates ranged 3.6–6.8 chars/s across content, so a constant is
+    /// wrong by up to 2x — but within one voice it is consistent, which is exactly
+    /// the case that matters for estimating the NEXT chapter.
+    ///
+    /// Persisted per voice rather than held for the session. Session scope meant
+    /// every cold launch fell back to the constant, so the first chapter after
+    /// launch was seeded visibly wrong and then jumped when enough audio existed
+    /// to re-project — the case a reviewer and every new user hits. Keying by
+    /// voice keeps the self-healing property (switching voices reads that voice's
+    /// own rate, or nothing) without discarding what was already measured. The
+    /// model is deliberately NOT in the key: unlike a cache key, a stale estimate
+    /// bills nothing and strands nothing, and it is replaced at the first seal.
+    var measuredSecondsPerChar: Double? {
+        get {
+            let stored = UserDefaults.standard.double(forKey: Self.rateKey(narrationVoice))
+            return stored > 0 ? stored : nil
+        }
+        set {
+            // Clamped to 2–10 chars/s. Measured content sits well inside that; a
+            // wilder value means a pathological chapter (long leading silence, a
+            // page of punctuation), and persistence would otherwise keep it
+            // forever where session scope used to discard it at relaunch.
+            guard let newValue, (0.1...0.5).contains(newValue) else { return }
+            UserDefaults.standard.set(newValue, forKey: Self.rateKey(narrationVoice))
+        }
+    }
+
+    private static func rateKey(_ voice: Voice) -> String { "measuredSecondsPerChar.\(voice.id)" }
     let fixtures: FixtureTTSService   // concrete, for the library "cached?" probe
     let audioStore: GeneratedAudioStore
     let library: LibraryStore
