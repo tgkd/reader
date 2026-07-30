@@ -496,6 +496,11 @@ final class ReaderModel {
     /// each time.
     private final class Progressive {
         let source: ChapterAudioSource
+        /// Characters of the NFKC-normalized text that was sent for synthesis —
+        /// the alphabet `characters` counts in, so the two divide meaningfully.
+        /// The raw chapter text does not: normalization folds half-width katakana,
+        /// so its length is not the length the alignment describes.
+        let totalChars: Int
         var characters: [String] = []
         var startTimes: [Double] = []
         var endTimes: [Double] = []
@@ -505,7 +510,10 @@ final class ReaderModel {
         /// Generated seconds at the last timeline rebuild, to throttle them.
         var timelineBuiltTo: Double = 0
 
-        init(source: ChapterAudioSource) { self.source = source }
+        init(source: ChapterAudioSource, totalChars: Int) {
+            self.source = source
+            self.totalChars = totalChars
+        }
 
         var alignment: ReaderCore.Alignment {
             ReaderCore.Alignment(characters: characters, startTimes: startTimes, endTimes: endTimes)
@@ -516,8 +524,8 @@ final class ReaderModel {
     /// before any real timing exists. The scrubber does not use it: measured rates
     /// on real chapters ranged 3.6–6.8 chars/s depending on content, so a constant
     /// is wrong by up to 2x — and underestimating makes the scrubber claim the
-    /// chapter ended while audio is still playing. `estimatedTotal` extrapolates
-    /// from the alignment actually received instead.
+    /// chapter ended while audio is still playing. The scrubber starts from
+    /// `seededDuration` and refines with `estimatedTotal` instead.
     private static let charsPerSecondOfSpeech = 5.6
     /// 128 kbps mp3, over-estimated: `ChapterAudioSource` treats the advertised
     /// length as the end of the asset, so guessing short would truncate playback.
@@ -527,6 +535,11 @@ final class ReaderModel {
     private static let headStartSeconds = 4.0
     /// How much new audio to accumulate between timeline rebuilds.
     private static let timelineRefreshSeconds = 5.0
+    /// How much audio must exist before this chapter's own alignment is trusted to
+    /// project a total. The head start is typically a title line and a pause, so a
+    /// rate extrapolated from it is unrepresentative by tens of percent — and every
+    /// revision moves the ring, the scrubber and the remaining-time readout.
+    private static let estimateEvidenceSeconds = 25.0
 
     private var progressive: Progressive?
 
@@ -547,10 +560,18 @@ final class ReaderModel {
     /// session — same book, voice and model, so it lands within a few percent —
     /// and falls back to a middling constant before anything has been measured.
     var estimatedNarrationMinutes: Int {
+        guard seededDuration > 0 else { return 0 }
+        return max(1, Int((seededDuration / 60).rounded()))
+    }
+
+    /// Chapter length projected from the same measured rate the idle player quotes,
+    /// so "about N min" and the scrubber that follows it agree. Unlike a projection
+    /// from this chapter's first seconds it does not move as audio arrives, which is
+    /// what the scrubber and the remaining-time readout need most while generating.
+    private var seededDuration: Double {
         let chars = currentChapter?.text.count ?? 0
         guard chars > 0 else { return 0 }
-        let secondsPerChar = services.measuredSecondsPerChar ?? (1 / 5.0)
-        return max(1, Int((Double(chars) * secondsPerChar / 60).rounded()))
+        return Double(chars) * (services.measuredSecondsPerChar ?? (1 / 5.0))
     }
 
     /// Chapter indices whose narration is already on disk, for the chapters
@@ -582,7 +603,8 @@ final class ReaderModel {
     private func beginProgressivePlayback(key: ContentKey, request: SynthesisRequest, gen: Int) {
         let seconds = Double(request.text.count) / Self.charsPerSecondOfSpeech
         progressive = Progressive(
-            source: ChapterAudioSource(expectedBytes: Int(seconds * Self.bytesPerSecondOfAudio)))
+            source: ChapterAudioSource(expectedBytes: Int(seconds * Self.bytesPerSecondOfAudio)),
+            totalChars: Normalize.nfkc(request.text).count)
         generatedTime = 0
         services.synthesisStream.subscribe(key) { [weak self] audio, alignment in
             MainActor.assumeIsolated { self?.appendStreamed(audio, alignment, gen: gen) }
@@ -608,9 +630,10 @@ final class ReaderModel {
         } else if generatedTime - p.timelineBuiltTo >= Self.timelineRefreshSeconds {
             p.timelineBuiltTo = generatedTime
             refreshTimings(p.alignment)
-            // Re-extrapolate as evidence accumulates; it converges within seconds
-            // and is replaced by the exact duration when generation ends.
-            duration = estimatedTotal(p)
+            // Re-extrapolate only once there is enough audio for this chapter's own
+            // rate to beat the seeded one; it converges from there, and is replaced
+            // by the exact duration when generation ends.
+            if generatedTime >= Self.estimateEvidenceSeconds { duration = estimatedTotal(p) }
         }
     }
 
@@ -618,9 +641,8 @@ final class ReaderModel {
     /// chapter's own measured speech rate, not an average over other content.
     private func estimatedTotal(_ p: Progressive) -> Double {
         let generatedChars = p.characters.count
-        let totalChars = currentChapter?.text.count ?? generatedChars
-        guard generatedChars > 0, totalChars > 0, generatedTime > 0 else { return duration }
-        return generatedTime * Double(totalChars) / Double(generatedChars)
+        guard generatedChars > 0, p.totalChars > 0, generatedTime > 0 else { return duration }
+        return generatedTime * Double(p.totalChars) / Double(generatedChars)
     }
 
     /// Begin playing what has arrived so far.
@@ -632,7 +654,7 @@ final class ReaderModel {
         setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: p.alignment)))
         // Estimated total: the real one isn't known until generation ends, and a
         // scrubber whose length grows under the thumb is worse than one slightly off.
-        duration = estimatedTotal(p)
+        duration = seededDuration
         attachPlayer(to: p.source)
         endSynthesisProgress(success: true)
         audioState = .ready
