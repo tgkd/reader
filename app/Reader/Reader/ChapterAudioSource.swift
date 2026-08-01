@@ -32,6 +32,16 @@ final class ChapterAudioSource: NSObject, AVAssetResourceLoaderDelegate {
 
     let url: URL
 
+    /// Bytes appended so far — the audio that genuinely exists to play. The
+    /// alignment stream runs AHEAD of the audio it describes (measured 1.4–3.1 s on
+    /// `eleven_v3`: whole chunks arrive carrying audio and no alignment, and vice
+    /// versa), so the reader cannot use the alignment frontier to decide how much
+    /// narration it holds.
+    var byteCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return data.count
+    }
+
     /// `expectedBytes` should over-estimate: `AVPlayer` treats the advertised
     /// length as the end of the asset, so guessing short truncates playback,
     /// while guessing long is corrected by `finish()` before it is reached.

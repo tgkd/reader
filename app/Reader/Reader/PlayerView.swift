@@ -84,6 +84,9 @@ struct PlayerView: View {
         }
     }
 
+    /// While the chapter is still generating there is no time to show (see
+    /// `positionLabel`), so the centre falls back to the one number that IS measured
+    /// and only ever moves forward: how much of the chapter has been generated.
     @ViewBuilder private var collapsedCenter: some View {
         switch row {
         case .synthesizing:
@@ -91,9 +94,15 @@ struct PlayerView: View {
                 .font(.system(size: 11, weight: .semibold)).monospacedDigit()
                 .foregroundStyle(theme.accent)
         case .ready where model.isPlaying:
-            Text(positionLabel)
-                .font(.system(size: 11)).monospacedDigit()
-                .foregroundStyle(theme.muted)
+            if let positionLabel {
+                Text(positionLabel)
+                    .font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(theme.muted)
+            } else {
+                Text(percentLabel)
+                    .font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(theme.muted)
+            }
         default:
             Image(systemName: "play.fill")
                 .font(.system(size: 15))
@@ -103,7 +112,14 @@ struct PlayerView: View {
 
     private var collapsedA11yValue: String {
         switch model.audioState {
-        case .ready: return (model.isPlaying ? L10n.a11yPause : L10n.a11yPlay) + ", " + positionLabel
+        case .ready:
+            let transport = model.isPlaying ? L10n.a11yPause : L10n.a11yPlay
+            // Generating: the position is deliberately unstated rather than
+            // announced from a total that is still a projection.
+            guard let positionLabel else {
+                return transport + ", " + L10n.readerGenerating + ", " + percentLabel
+            }
+            return transport + ", " + positionLabel
         case .synthesizing: return L10n.readerGenerating + ", " + percentLabel
         case .locked: return L10n.readerSubscribeTitle
         case .notGenerated: return L10n.readerNotGeneratedTitle
@@ -184,9 +200,14 @@ struct PlayerView: View {
                 }
             }
             .animation(.linear(duration: 0.3), value: model.generatedTime)
-            Text(positionLabel)
-                .font(.system(size: 12)).monospacedDigit()
-                .foregroundStyle(theme.muted)
+            // Absent entirely while generating — not blanked in place. A reserved
+            // slot would leave a hole beside the scrubber for the length of the
+            // generation, which reads as a control that failed to load.
+            if let positionLabel {
+                Text(positionLabel)
+                    .font(.system(size: 12)).monospacedDigit()
+                    .foregroundStyle(theme.muted)
+            }
             speedPill
             collapseButton
         }
@@ -342,17 +363,17 @@ struct PlayerView: View {
 
     // MARK: - Derived labels
 
-    /// Elapsed while the chapter is still generating, remaining once it is not.
-    /// The total is an estimate until generation seals, so a countdown built on it
-    /// revises as evidence arrives — and a remaining time that goes UP reads as a
-    /// bug however sound the projection is. Elapsed is the playhead itself: exact,
-    /// monotonic, and unable to contradict what is being heard. `duration` still
-    /// drives the ring and the scrubber, where the same error is a few pixels of
-    /// arc rather than a number.
-    private var positionLabel: String {
-        model.isGenerating
-            ? "+" + model.timeLabel(model.currentTime)
-            : "−" + model.timeLabel(max(0, model.duration - model.currentTime))
+    /// Remaining time — and ONLY once generation has sealed, which is why this is
+    /// optional. While a chapter is still being generated its total is a projection
+    /// that revises as evidence arrives, so every readout built on it moves: a
+    /// countdown that goes up reads as a bug however sound the projection is, and
+    /// elapsed-instead — the previous compromise — still redraws every second next
+    /// to a scrubber whose length is shifting underneath it. There is no honest
+    /// number to show yet, so nothing is shown. `duration` still drives the ring and
+    /// the scrubber, where the same error is a few pixels of arc rather than digits.
+    private var positionLabel: String? {
+        guard !model.isGenerating else { return nil }
+        return "−" + model.timeLabel(max(0, model.duration - model.currentTime))
     }
 
     private var percentLabel: String {

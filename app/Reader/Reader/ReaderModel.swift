@@ -507,8 +507,13 @@ final class ReaderModel {
         /// Playback has begun — past this point generation always runs to
         /// completion so the chapter reaches the cache.
         var isPlaying = false
-        /// Generated seconds at the last timeline rebuild, to throttle them.
+        /// Aligned seconds at the last timeline rebuild, to throttle them.
         var timelineBuiltTo: Double = 0
+        /// Aligned seconds at the last `duration` re-projection. Tracked separately
+        /// from `timelineBuiltTo` because the two want opposite cadences: the
+        /// timeline must keep up with the audio, while the projected total is the
+        /// scrubber's and the ring's full length and should settle, not twitch.
+        var estimateProjectedTo: Double = 0
 
         init(source: ChapterAudioSource, totalChars: Int) {
             self.source = source
@@ -518,6 +523,14 @@ final class ReaderModel {
         var alignment: ReaderCore.Alignment {
             ReaderCore.Alignment(characters: characters, startTimes: startTimes, endTimes: endTimes)
         }
+
+        /// How far the TIMINGS reach. Distinct from `generatedTime` (how far the
+        /// AUDIO reaches) because the two streams are not in step: on `eleven_v3`
+        /// most chunks carry audio with no alignment at all, and the alignment
+        /// frontier measured 1.4–3.1 s ahead of the audio describing it. Pairs with
+        /// `characters.count`, so it — not the audio clock — is what may be divided
+        /// by a character count to project a total.
+        var alignedTime: Double { endTimes.last ?? 0 }
     }
 
     /// Rough speech rate, used ONLY to size the audio source's advertised length
@@ -526,20 +539,41 @@ final class ReaderModel {
     /// is wrong by up to 2x — and underestimating makes the scrubber claim the
     /// chapter ended while audio is still playing. The scrubber starts from
     /// `seededDuration` and refines with `estimatedTotal` instead.
-    private static let charsPerSecondOfSpeech = 5.6
+    ///
+    /// Deliberately at the SLOW end (`eleven_v3` narrating Japanese prose measured
+    /// 3.85 chars/s): this divides into the byte estimate, so a rate that is too
+    /// fast advertises an asset shorter than the real one — the one direction
+    /// `ChapterAudioSource` says truncates playback.
+    private static let charsPerSecondOfSpeech = 3.5
     /// 128 kbps mp3, over-estimated: `ChapterAudioSource` treats the advertised
     /// length as the end of the asset, so guessing short would truncate playback.
     private static let bytesPerSecondOfAudio = 20_000.0
-    /// Audio buffered before playback starts. Generation runs ~2.8x faster than
-    /// playback, so a short head start is never caught up with.
+    /// The REAL rate, for converting bytes appended into seconds of narration that
+    /// exist. ElevenLabs' default output format is `mp3_44100_128` — constant
+    /// bitrate, and neither the app nor the Worker ever overrides it — so this is
+    /// exact rather than an estimate (measured: 344,861 bytes / 21.551 s).
+    private static let mp3BytesPerSecond = 16_000.0
+    /// Audio buffered before playback starts. Generation runs faster than playback,
+    /// so a short head start is not caught up with.
     private static let headStartSeconds = 4.0
-    /// How much new audio to accumulate between timeline rebuilds.
-    private static let timelineRefreshSeconds = 5.0
+    /// How much new ALIGNMENT to accumulate between timeline rebuilds. Between
+    /// rebuilds the highlight cannot advance past the frontier the last one carried,
+    /// so this is also how far behind the audio the highlight may fall — keep it
+    /// well under the head start. A rebuild is one `CharTokenMapper` pass over a
+    /// ≤4k-char chapter and changes no structure, so it is cheap to do often.
+    private static let timelineRefreshSeconds = 2.0
     /// How much audio must exist before this chapter's own alignment is trusted to
     /// project a total. The head start is typically a title line and a pause, so a
     /// rate extrapolated from it is unrepresentative by tens of percent — and every
     /// revision moves the ring, the scrubber and the remaining-time readout.
     private static let estimateEvidenceSeconds = 25.0
+    /// How much new alignment to accumulate between `duration` re-projections.
+    /// Deliberately far coarser than `timelineRefreshSeconds`: `duration` is the
+    /// FULL LENGTH of the ring and the scrubber, so every revision jumps the thumb
+    /// and the arc — the "it jumps every second, forwards and backwards" report.
+    /// Re-projecting rarely (and from steadily more evidence, so each revision is
+    /// smaller than the last) lets it converge instead of twitching.
+    private static let estimateRefreshSeconds = 20.0
 
     private var progressive: Progressive?
 
@@ -617,7 +651,12 @@ final class ReaderModel {
         p.characters.append(contentsOf: alignment.characters)
         p.startTimes.append(contentsOf: alignment.startTimes)
         p.endTimes.append(contentsOf: alignment.endTimes)
-        generatedTime = p.endTimes.last ?? 0
+        // Seconds of narration that EXIST, measured from the bytes actually held —
+        // not from `endTimes.last`, which is the alignment frontier and runs 1.4–3.1 s
+        // ahead of its own audio. Reading the head start, the seek limit and the
+        // scrubber's buffered band off the alignment had all three promising
+        // narration that had not arrived.
+        generatedTime = Double(p.source.byteCount) / Self.mp3BytesPerSecond
         // Real progress, replacing the eased time estimate: this is the fraction of
         // the chapter the stream has actually delivered.
         let totalChars = currentChapter?.text.count ?? 0
@@ -627,13 +666,21 @@ final class ReaderModel {
 
         if !p.isPlaying {
             if generatedTime >= Self.headStartSeconds { startProgressivePlayback(p) }
-        } else if generatedTime - p.timelineBuiltTo >= Self.timelineRefreshSeconds {
-            p.timelineBuiltTo = generatedTime
+        } else if p.alignedTime - p.timelineBuiltTo >= Self.timelineRefreshSeconds {
+            // Throttled on the ALIGNMENT frontier: that is what a rebuild moves, and
+            // most chunks carry audio without any, so throttling on audio would rebuild
+            // repeatedly with nothing new to fold in.
+            p.timelineBuiltTo = p.alignedTime
             refreshTimings(p.alignment)
             // Re-extrapolate only once there is enough audio for this chapter's own
-            // rate to beat the seeded one; it converges from there, and is replaced
-            // by the exact duration when generation ends.
-            if generatedTime >= Self.estimateEvidenceSeconds { duration = estimatedTotal(p) }
+            // rate to beat the seeded one, and then only on its own slow cadence; it
+            // converges from there, and is replaced by the exact duration when
+            // generation ends.
+            if p.alignedTime >= Self.estimateEvidenceSeconds,
+               p.alignedTime - p.estimateProjectedTo >= Self.estimateRefreshSeconds {
+                p.estimateProjectedTo = p.alignedTime
+                duration = estimatedTotal(p)
+            }
         }
     }
 
@@ -641,22 +688,29 @@ final class ReaderModel {
     /// chapter's own measured speech rate, not an average over other content.
     private func estimatedTotal(_ p: Progressive) -> Double {
         let generatedChars = p.characters.count
-        guard generatedChars > 0, p.totalChars > 0, generatedTime > 0 else { return duration }
-        return generatedTime * Double(p.totalChars) / Double(generatedChars)
+        // `alignedTime`, not `generatedTime`: this divides seconds by the characters
+        // spoken in them, and only the alignment clock counts the same characters.
+        guard generatedChars > 0, p.totalChars > 0, p.alignedTime > 0 else { return duration }
+        return p.alignedTime * Double(p.totalChars) / Double(generatedChars)
     }
 
     /// Begin playing what has arrived so far.
     private func startProgressivePlayback(_ p: Progressive) {
         guard let tokens = tokensForSynthesizedText() else { return }
         p.isPlaying = true
-        p.timelineBuiltTo = generatedTime
+        p.timelineBuiltTo = p.alignedTime
         // Structure IS new here (the first spans), so this one bumps the version.
         setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: p.alignment)))
         // Estimated total: the real one isn't known until generation ends, and a
         // scrubber whose length grows under the thumb is worse than one slightly off.
         duration = seededDuration
         attachPlayer(to: p.source)
-        endSynthesisProgress(success: true)
+        // Deliberately NOT `endSynthesisProgress(success: true)`: this is the ~4 s
+        // pre-roll ending, not the generation. The measured fraction set moments ago
+        // in `appendStreamed` carries across the transition untouched — the collapsed
+        // circle keeps showing it while generating, so completing the bar here would
+        // read 100% and then fall back to the real figure on the next chunk.
+        // Completion is the seal's job (`ensureAudio`, once the request returns).
         audioState = .ready
         play()
     }

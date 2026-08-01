@@ -87,10 +87,17 @@ PDFKit / networking live in the `app/` target only.
   (play/pause/seek/speed/chapter), never per tick; the system extrapolates.
   **Playback starts after a ~4 s head start and generation continues behind it** — chunks arrive via
   `SynthesisStream` (keyed by `ContentKey`, so a re-entering reader attaches to a generation it did
-  not start). Generation runs ~2.8x faster than playback, so it is not caught up with. `.synthesizing`
+  not start). Generation runs faster than playback, so it is not caught up with. `.synthesizing`
   is therefore a ~4 s pre-roll, not the whole chapter, and `synthesisProgress` is MEASURED (delivered
-  characters / total), not eased. Seeks clamp to `generatedTime`, and the scrubber marks the
-  ungenerated tail. **Chapter length is estimated from a measured rate, and the estimate is never
+  characters / total), not eased. **The two streams are NOT in step: the alignment frontier runs
+  1.4–3.1 s AHEAD of the audio it describes** (measured 2026-08-01 on `eleven_v3` — most chunks carry
+  audio with no alignment at all, and a few carry alignment for audio still to come). So the two
+  clocks are tracked separately and are not interchangeable: `generatedTime` (how much narration
+  EXISTS — the head start, the seek limit, the scrubber's buffered band) is bytes appended /
+  `mp3BytesPerSecond`, while `Progressive.alignedTime` (`endTimes.last`) is the only clock that may be
+  divided by a character count, because only it counts the same characters. Reading `generatedTime`
+  off the alignment had the player promising seconds of narration that had not arrived.
+  **Chapter length is estimated from a measured rate, and the estimate is never
   rendered as digits.** Measured speech rates ranged 3.6–6.8 chars/s across content, so a constant is
   wrong by up to 2x: both the idle player's "about N min" and the in-flight `duration` come from
   `AppServices.measuredSecondsPerChar`, learned at the seal of any chapter generated with that voice
@@ -98,8 +105,13 @@ PDFKit / networking live in the `app/` target only.
   first chapter was seeded wrong and then jumped). `duration` is re-projected from this chapter's own
   alignment only after `estimateEvidenceSeconds` of audio exists — extrapolating from the 4 s head
   start, typically a title line and a pause, moved it by tens of percent. Even so the player shows
-  **elapsed (`+m:ss`) while generating and remaining (`−m:ss`) only once sealed**: the total is a
-  projection until then, and a remaining time that goes UP reads as a bug. The estimate still drives
+  **NO time readout at all while generating** — remaining (`−m:ss`) appears only once sealed. The
+  total is a projection until then, so every readout built on it moves; a countdown that goes up
+  reads as a bug, and elapsed-instead (the previous compromise) still redrew every second beside a
+  scrubber whose length was shifting. There is no honest number yet, so none is shown — the collapsed
+  circle falls back to the generation percentage, which is shown precisely because it only ever moves
+  forward: the pre-roll ending (`startProgressivePlayback`) must NOT complete the bar, or the circle
+  reads 100% and then drops back to the real figure on the next chunk. The estimate still drives
   the ring, the scrubber and the Now Playing duration, where the same error is a few pixels of arc.
   `RubyTextView` (custom CoreText)
   renders furigana via `CTRubyAnnotation` and vertical text via frame progression: the base text is
@@ -160,6 +172,17 @@ PDFKit / networking live in the `app/` target only.
 ## Invariants (don't break without cause)
 
 - **`CharTokenMapper` is load-bearing.** Keep `CharTokenMapperTests` + `AlignmentFixtureTests` green.
+- **`SpanTimeline.index(at:)` must never answer past the last TIMED span.** A chapter is highlighted
+  while it is still generating, so the timeline is routinely the WHOLE chapter's tokens folded against
+  a PARTIAL alignment — and `CharTokenMapper` interpolates every token past the alignment's end from
+  its predecessor, giving that entire trailing run one identical start. Unclamped, the binary search
+  therefore returns the LAST TOKEN OF THE CHAPTER the instant the playhead touches the frontier, and
+  the highlight (and the auto-scroll following it) is thrown to the end of the text until the next
+  rebuild — the "highlight is nowhere near the audio" bug. The timings themselves were never at
+  fault: verified 2026-08-01 against the live API (alignment 21.520 s vs 21.551 s of real audio) and
+  `AVPlayer`'s clock (zero accumulating drift, even with a wrong advertised `contentLength`). Past
+  the frontier the highlight HOLDS; `timelineRefreshSeconds` is how long it may hold, so keep it well
+  under `headStartSeconds`.
 - **Read `alignment`, never `normalized_alignment`** from the TTS response — only `alignment`
   tracks the displayed/tokenized text.
 - **Normalize once (NFKC), identically everywhere** (`Normalize.nfkc`): tokenizer, TTS request,
