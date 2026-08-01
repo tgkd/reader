@@ -1,5 +1,6 @@
 import Foundation
 import MediaPlayer
+import UIKit
 
 /// Publishes playback to the system Now Playing surface (lock screen / Control
 /// Center) and routes remote commands back into the reader. Owned by
@@ -21,6 +22,20 @@ final class NowPlayingController {
 
     /// Registered command targets, removed on deactivate.
     private var tokens: [(MPRemoteCommand, Any)] = []
+
+    /// Books have no cover art, so the app icon stands in as the artwork slot's
+    /// image. Built from a dedicated 512 pt asset rather than the bundle's
+    /// `AppIcon60x60@2x.png` (120 px), which is soft in the expanded player.
+    /// Made once — the handler redraws per requested size, and the system asks
+    /// for several as the widget expands.
+    private static let artwork: MPMediaItemArtwork? = {
+        guard let icon = UIImage(named: "NowPlayingArtwork") else { return nil }
+        return MPMediaItemArtwork(boundsSize: icon.size) { size in
+            UIGraphicsImageRenderer(size: size).image { _ in
+                icon.draw(in: CGRect(origin: .zero, size: size))
+            }
+        }
+    }()
 
     /// Register the remote commands (once per activation). ±15s skips are
     /// disabled so the lock screen shows track-style chapter arrows instead.
@@ -61,6 +76,7 @@ final class NowPlayingController {
         info[MPMediaItemPropertyAlbumTrackNumber] = chapterIndex + 1
         info[MPMediaItemPropertyAlbumTrackCount] = chapterCount
         info[MPMediaItemPropertyPlaybackDuration] = duration
+        info[MPMediaItemPropertyArtwork] = Self.artwork
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
