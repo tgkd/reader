@@ -110,7 +110,10 @@ struct EPUBImporter: DocumentImporter {
         var taken = existing.map { $0.start..<$0.end }
         let chars = Array(text)
 
-        for (word, pairs) in index {
+        let ordered = index.sorted {
+            $0.key.count != $1.key.count ? $0.key.count > $1.key.count : $0.key < $1.key
+        }
+        for (word, pairs) in ordered {
             var from = text.startIndex
             while let r = text.range(of: word, range: from..<text.endIndex) {
                 from = r.upperBound
@@ -423,9 +426,9 @@ private enum HTMLText {
         var reading: String { pairs.map(\.reading).joined() }
     }
 
-    private static let rubyOpen: Character = "\u{E000}"
-    private static let rubyClose: Character = "\u{E001}"
-    private static let rubyGroupEnd: Character = "\u{E002}"
+    private static let rubyOpen: Character = "\u{0011}"
+    private static let rubyClose: Character = "\u{0012}"
+    private static let rubyGroupEnd: Character = "\u{0013}"
 
     static func extract(_ data: Data) -> String { extractWithReadings(data).text }
 
@@ -471,6 +474,7 @@ private enum HTMLText {
 
     private static func strip(_ data: Data, markingRuby: Bool) -> (String, [String]) {
         guard var s = JapaneseTextDecoder.decode(data) else { return ("", []) }
+        s.removeAll { $0 == rubyOpen || $0 == rubyClose || $0 == rubyGroupEnd }
 
         if let body = s.range(of: "(?is)<body[^>]*>.*</body>", options: .regularExpression) {
             s = String(s[body])
@@ -506,7 +510,7 @@ private enum HTMLText {
             return t.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        while let open = rest.range(of: "(?i)<ruby[^>]*>", options: .regularExpression) {
+        while let open = rest.range(of: "(?i)\(openTag("ruby"))", options: .regularExpression) {
             guard let close = rest.range(of: "(?i)</ruby\\s*>", options: .regularExpression,
                                          range: open.upperBound..<rest.endIndex) else { break }
             out += rest[rest.startIndex..<open.lowerBound]
@@ -514,9 +518,11 @@ private enum HTMLText {
             rest = rest[close.upperBound...]
 
             let body = String(inner).replacingOccurrences(
-                of: "(?is)<rp[^>]*>.*?</rp\\s*>", with: "", options: .regularExpression)
+                of: "(?is)\(openTag("rp")).*?</rp\\s*>", with: "", options: .regularExpression)
 
-            let pairs = capturePairs("(?is)<rb[^>]*>(.*?)</rb\\s*>\\s*<rt[^>]*>(.*?)</rt\\s*>", in: body)
+            var pairs = capturePairs(
+                "(?is)\(openTag("rb"))(.*?)</rb\\s*>\\s*\(openTag("rt"))(.*?)</rt\\s*>", in: body)
+            if pairs.isEmpty { pairs = groupedPairs(in: body) }
             if !pairs.isEmpty {
                 var wrote = false
                 for (base, reading) in pairs {
@@ -532,7 +538,7 @@ private enum HTMLText {
             var scan = Substring(body)
             var sawPair = false
             var wrote = false
-            while let rt = scan.range(of: "(?i)<rt[^>]*>", options: .regularExpression),
+            while let rt = scan.range(of: "(?i)\(openTag("rt"))", options: .regularExpression),
                   let rtEnd = scan.range(of: "(?i)</rt\\s*>", options: .regularExpression,
                                          range: rt.upperBound..<scan.endIndex) {
                 sawPair = true
@@ -553,6 +559,55 @@ private enum HTMLText {
         }
         out += rest
         return (out, readings)
+    }
+
+    private static func openTag(_ name: String) -> String {
+        "<\(name)\\b(?:\"[^\"]*\"|'[^']*'|[^>\"'])*>"
+    }
+
+    private static func groupedPairs(in body: String) -> [(String, String)] {
+        let bases = capture("(?is)\(openTag("rb"))(.*?)</rb\\s*>", in: body)
+        guard !bases.isEmpty else { return [] }
+        let scope = body.range(of: "(?is)\(openTag("rtc")).*?</rtc\\s*>", options: .regularExpression)
+            .map { String(body[$0]) } ?? body
+        let annotations = capturePairs(
+            "(?is)<rt\\b((?:\"[^\"]*\"|'[^']*'|[^>\"'])*)>(.*?)</rt\\s*>", in: scope)
+
+        var pairs: [(String, String)] = []
+        var next = 0
+        for (attributes, reading) in annotations {
+            let (limit, overflowed) = next.addingReportingOverflow(rbspan(attributes))
+            guard !overflowed, limit <= bases.count else { return [] }
+            pairs.append((bases[next..<limit].joined(), reading))
+            next = limit
+        }
+        guard next == bases.count else { return [] }
+        return pairs
+    }
+
+    private static func rbspan(_ attributes: String) -> Int {
+        guard let re = try? NSRegularExpression(
+            pattern: "([A-Za-z_:][-.A-Za-z0-9_:]*)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s\"'>]*))")
+        else { return 1 }
+        let ns = attributes as NSString
+        for m in re.matches(in: attributes, range: NSRange(location: 0, length: ns.length)) {
+            guard ns.substring(with: m.range(at: 1)).lowercased() == "rbspan" else { continue }
+            let value = (2...4).first { m.range(at: $0).location != NSNotFound }
+                .map { ns.substring(with: m.range(at: $0)) } ?? ""
+            let digits = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !digits.isEmpty, digits.allSatisfy({ $0.isASCII && $0.isNumber }) else { return 1 }
+            return Int(digits).map { max(1, $0) } ?? Int.max
+        }
+        return 1
+    }
+
+    private static func capture(_ pattern: String, in s: String) -> [String] {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = s as NSString
+        return re.matches(in: s, range: NSRange(location: 0, length: ns.length)).compactMap { m in
+            guard m.numberOfRanges >= 2, m.range(at: 1).location != NSNotFound else { return nil }
+            return ns.substring(with: m.range(at: 1))
+        }
     }
 
     private static func capturePairs(_ pattern: String, in s: String) -> [(String, String)] {
@@ -624,6 +679,7 @@ private enum HTMLText {
     }
 
     private static func scalarString(_ v: UInt32) -> String? {
-        Unicode.Scalar(v).map { String(Character($0)) }
+        guard v > 0x1F || v == 0x09 || v == 0x0A || v == 0x0D else { return "" }
+        return Unicode.Scalar(v).map { String(Character($0)) }
     }
 }

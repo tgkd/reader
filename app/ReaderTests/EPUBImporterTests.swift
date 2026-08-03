@@ -178,6 +178,179 @@ final class EPUBImporterTests: XCTestCase {
                        "a one-kanji reading must not be asserted over other contexts")
     }
 
+    func testKeepsEveryPairOfGroupedRuby() async throws {
+        let body = "<p><ruby><rbc><rb>漢</rb><rb>字</rb></rbc>"
+            + "<rtc><rt>かん</rt><rt>じ</rt></rtc></ruby>を読む</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "漢字を読む")
+        XCTAssertEqual(chapter.sourceReadings.map(\.surface), ["漢", "字"])
+        XCTAssertEqual(chapter.sourceReadings.map(\.reading), ["かん", "じ"],
+                       "a grouped rtc must not collapse onto the first reading")
+    }
+
+    func testGroupedRubyIgnoresASecondAnnotationGroup() async throws {
+        let body = "<p><ruby><rbc><rb>漢</rb><rb>字</rb></rbc>"
+            + "<rtc><rt>かん</rt><rt>じ</rt></rtc>"
+            + "<rtc><rt>Chinese</rt><rt>character</rt></rtc></ruby></p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "漢字")
+        XCTAssertEqual(chapter.sourceReadings.map(\.reading), ["かん", "じ"])
+    }
+
+    func testGroupedRubyHonorsRbspan() async throws {
+        let body = "<p><ruby><rbc><rb>東</rb><rb>京</rb><rb>都</rb></rbc>"
+            + "<rtc><rt rbspan=\"2\">とうきょう</rt><rt>と</rt></rtc></ruby>民</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "東京都民")
+        XCTAssertEqual(chapter.sourceReadings.map(\.surface), ["東京", "都"],
+                       "an rt spanning two bases must cover both, not all three")
+        XCTAssertEqual(chapter.sourceReadings.map(\.reading), ["とうきょう", "と"])
+        let chars = Array(chapter.text)
+        for r in chapter.sourceReadings {
+            XCTAssertEqual(String(chars[r.start..<r.end]), r.surface)
+        }
+    }
+
+    func testGroupedRubyIgnoresAnAttributeThatMerelyContainsRbspan() async throws {
+        let prefixed = "<p><ruby><rbc><rb>東</rb><rb>京</rb><rb>都</rb></rbc>"
+            + "<rtc><rt data-rbspan=\"2\">とう</rt><rt>きょう</rt><rt>と</rt></rtc></ruby>民</p>"
+        let quoted = "<p><ruby><rbc><rb>東</rb><rb>京</rb><rb>都</rb></rbc>"
+            + "<rtc><rt title=\"rbspan=2\">とう</rt><rt>きょう</rt><rt>と</rt></rtc></ruby>民</p>"
+        let url = try Fixture.epub(
+            manifest: [
+                Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: prefixed)),
+                Fixture.EPUBItem(id: "c1", href: "c1.xhtml", content: Fixture.xhtml(body: quoted)),
+            ],
+            spine: [Fixture.SpineRef("c0"), Fixture.SpineRef("c1")])
+        let all = try await chapters(url)
+
+        for chapter in all {
+            XCTAssertEqual(chapter.text, "東京都民")
+            XCTAssertEqual(chapter.sourceReadings.map(\.surface), ["東", "京", "都"],
+                           "only an rbspan attribute may widen a base, not one that contains the word")
+            XCTAssertEqual(chapter.sourceReadings.map(\.reading), ["とう", "きょう", "と"])
+        }
+    }
+
+    func testGroupedRubyRejectsAnRbspanTooLargeToAdd() async throws {
+        let body = "<p><ruby><rbc><rb>東</rb><rb>京</rb></rbc>"
+            + "<rtc><rt>とう</rt><rt rbspan=\"9223372036854775807\">きょう</rt></rtc></ruby>民</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "東京民")
+        let chars = Array(chapter.text)
+        for r in chapter.sourceReadings {
+            XCTAssertTrue(r.start >= 0 && r.end <= chars.count,
+                          "an unusable rbspan must degrade, never claim bases that do not exist")
+            XCTAssertEqual(String(chars[r.start..<r.end]), r.surface)
+        }
+    }
+
+    func testAngleBracketInATagAttributeIsNotReadAsText() async throws {
+        let mono = "<p><ruby><rb title=\"a > b\">漢</rb><rt>かん</rt></ruby>字</p>"
+        let grouped = "<p><ruby><rbc><rb class=\"a > b\">漢</rb><rb>字</rb></rbc>"
+            + "<rtc><rt>かん</rt><rt>じ</rt></rtc></ruby></p>"
+        let url = try Fixture.epub(
+            manifest: [
+                Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: mono)),
+                Fixture.EPUBItem(id: "c1", href: "c1.xhtml", content: Fixture.xhtml(body: grouped)),
+            ],
+            spine: [Fixture.SpineRef("c0"), Fixture.SpineRef("c1")])
+        let all = try await chapters(url)
+
+        XCTAssertEqual(all[0].text, "漢字", "an attribute value must not leak into the chapter")
+        XCTAssertEqual(all[0].sourceReadings.map(\.surface), ["漢"])
+        XCTAssertEqual(all[0].sourceReadings.map(\.reading), ["かん"])
+        XCTAssertEqual(all[1].text, "漢字")
+        XCTAssertEqual(all[1].sourceReadings.map(\.surface), ["漢", "字"])
+        XCTAssertEqual(all[1].sourceReadings.map(\.reading), ["かん", "じ"])
+    }
+
+    func testControlCharacterEntitiesCannotForgeARubyMarker() async throws {
+        let body = "<p>&#17;&#18;&#x13;<ruby><rb>黄</rb><rt>おう</rt></ruby>前&#18;</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "黄前", "a decoded control reference must not survive")
+        let r = try XCTUnwrap(chapter.sourceReadings.first)
+        XCTAssertEqual(String(Array(chapter.text)[r.start..<r.end]), "黄")
+        XCTAssertEqual(r.reading, "おう")
+    }
+
+    func testPrivateUseGaijiSurvivesImport() async throws {
+        let gaiji = "\u{E000}\u{E001}\u{E002}"
+        let plain = "<p>外字\(gaiji)あり</p>"
+        let withRuby = "<p><ruby><rb>黄</rb><rt>おう</rt></ruby>\(gaiji)</p>"
+        let url = try Fixture.epub(
+            manifest: [
+                Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: plain)),
+                Fixture.EPUBItem(id: "c1", href: "c1.xhtml", content: Fixture.xhtml(body: withRuby)),
+            ],
+            spine: [Fixture.SpineRef("c0"), Fixture.SpineRef("c1")])
+        let all = try await chapters(url)
+
+        XCTAssertEqual(all[0].text, "外字\(gaiji)あり", "gaiji must not be eaten as a ruby marker")
+        XCTAssertEqual(all[0].sourceReadings, [])
+        XCTAssertEqual(all[1].text, "黄\(gaiji)")
+        XCTAssertEqual(all[1].sourceReadings.map(\.surface), ["黄"])
+        let chars = Array(all[1].text)
+        for r in all[1].sourceReadings {
+            XCTAssertEqual(String(chars[r.start..<r.end]), r.surface)
+        }
+    }
+
+    func testSentinelCharactersInTheSourceCannotShiftRubyOffsets() async throws {
+        let sentinels = "\u{0011}\u{0012}\u{0013}"
+        let body = "<p>\(sentinels)<ruby><rb>黄</rb><rt>おう</rt></ruby>前</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "黄前", "marker characters in the source must be dropped")
+        let r = try XCTUnwrap(chapter.sourceReadings.first)
+        XCTAssertEqual(String(Array(chapter.text)[r.start..<r.end]), "黄")
+        XCTAssertEqual(r.reading, "おう")
+    }
+
+    func testOverlappingPropagationPrefersTheLongerWord() async throws {
+        let shortName = "<p><ruby><rb>久</rb><rt>く</rt><rb>美</rb><rt>み</rt>"
+            + "<rb>子</rb><rt>こ</rt></ruby>さん</p>"
+        let fullName = "<p><ruby><rb>黄</rb><rt>おう</rt><rb>前</rb><rt>まえ</rt>"
+            + "<rb>久</rb><rt>く</rt><rb>美</rb><rt>み</rt><rb>子</rb><rt>こ</rt></ruby>です</p>"
+        let bare = "<p>黄前久美子</p>"
+        let url = try Fixture.epub(
+            manifest: [
+                Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: shortName)),
+                Fixture.EPUBItem(id: "c1", href: "c1.xhtml", content: Fixture.xhtml(body: fullName)),
+                Fixture.EPUBItem(id: "c2", href: "c2.xhtml", content: Fixture.xhtml(body: bare)),
+            ],
+            spine: [Fixture.SpineRef("c0"), Fixture.SpineRef("c1"), Fixture.SpineRef("c2")])
+        let all = try await chapters(url)
+
+        XCTAssertEqual(all[2].text, "黄前久美子")
+        XCTAssertEqual(all[2].sourceReadings.map(\.surface), ["黄", "前", "久", "美", "子"],
+                       "overlapping index entries must resolve longest-first, not by hash order")
+        XCTAssertEqual(all[2].sourceReadings.map(\.reading), ["おう", "まえ", "く", "み", "こ"])
+    }
+
     func testRubyOffsetsSurviveTheRestOfTheStrip() async throws {
         let body = "<p>  &#x3042;&nbsp;&#x3044;   <b>x</b>\n<ruby><rb>黄</rb><rt>おう</rt></ruby>end</p>"
         let url = try Fixture.epub(
