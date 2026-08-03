@@ -26,7 +26,7 @@ public struct SynthesisRequest: Equatable {
     public let voice: Voice
     public let model: SynthesisModel
 
-    public init(text: String, voice: Voice = .shizuka, model: SynthesisModel = .v3) {
+    public init(text: String, voice: Voice = .shizuka, model: SynthesisModel = .flashV2_5) {
         self.text = text
         self.voice = voice
         self.model = model
@@ -35,6 +35,20 @@ public struct SynthesisRequest: Equatable {
     public var cacheKey: ContentKey {
         ContentKey(text: text, voice: voice.id, model: model.rawValue)
     }
+
+    /// The keys this same text+voice may already be cached under from a build whose
+    /// DEFAULT MODEL was different, most recent first. Read-only: audio is always
+    /// saved under `cacheKey`, so these only ever resolve entries an earlier version
+    /// of the app paid for. See `SynthesisModel.previousDefaults`.
+    public var legacyCacheKeys: [ContentKey] {
+        SynthesisModel.previousDefaults
+            .filter { $0 != model }
+            .map { ContentKey(text: text, voice: voice.id, model: $0.rawValue) }
+    }
+
+    /// Every key worth probing before spending money on this request: the current one
+    /// first, then the earlier defaults.
+    public var cacheKeyCandidates: [ContentKey] { [cacheKey] + legacyCacheKeys }
 }
 
 /// Produces narration + char alignment for a chunk of Japanese text. The reader

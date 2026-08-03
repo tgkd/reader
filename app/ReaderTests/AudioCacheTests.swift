@@ -44,6 +44,43 @@ final class AudioCacheTests: XCTestCase {
         var count: Int { lock.withLock { map.count } }
     }
 
+    // MARK: - Purge scope
+
+    /// Re-importing a book is now the only way an already-imported one picks up
+    /// publisher ruby, so the re-import must not cost the user their paid narration.
+    /// It doesn't, because `ContentKey` is content-addressed: the re-imported copy
+    /// has the same chapter text, so the same key, and deleting the old row must
+    /// leave that entry alone.
+    func testDeletingAReimportedCopyKeepsSharedNarration() {
+        let text = "吾輩は猫である。"
+        let original = Document(title: "book", chapters: [Chapter(text: text)])
+        // Same file imported again: new ids, identical text, plus the ruby the old
+        // copy was imported without.
+        let reimported = Document(title: "book", chapters: [
+            Chapter(text: text, sourceReadings: [
+                SourceReading(start: 0, length: 1, surface: "吾", reading: "わが")]),
+        ])
+
+        XCTAssertEqual(
+            AppServices.purgeableTexts(of: original, in: [original, reimported]), [],
+            "deleting the stale copy must not reclaim audio the new one still keys to")
+        // And with nothing else pointing at it, the deletion does reclaim.
+        XCTAssertEqual(AppServices.purgeableTexts(of: original, in: [original]),
+                       [Normalize.nfkc(text)])
+    }
+
+    /// Chapters a book repeats internally must not be swept twice, and a chapter
+    /// another book shares must survive.
+    func testPurgeScopeIsDeduplicatedAndRespectsOtherBooks() {
+        let shared = "共有", mine = "固有"
+        let doc = Document(title: "a", chapters: [
+            Chapter(text: mine), Chapter(text: mine), Chapter(text: shared),
+        ])
+        let other = Document(title: "b", chapters: [Chapter(text: shared)])
+        XCTAssertEqual(AppServices.purgeableTexts(of: doc, in: [doc, other]),
+                       [Normalize.nfkc(mine)])
+    }
+
     // MARK: - DiskAudioStore round-trip
 
     func testDiskStoreSaveLoadHasRemove() {

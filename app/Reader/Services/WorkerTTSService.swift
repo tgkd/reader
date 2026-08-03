@@ -12,6 +12,8 @@ final class WorkerTTSService: TTSService {
         case http(Int)
         case badResponse
         case truncatedStream
+        case misalignedStream
+        case audioAlignmentMismatch(seconds: Double)
 
         var errorDescription: String? {
             switch self {
@@ -19,9 +21,22 @@ final class WorkerTTSService: TTSService {
             case .http(let code): return "TTS failed (\(code))"
             case .badResponse: return "Malformed TTS response"
             case .truncatedStream: return "Narration ended early"
+            case .misalignedStream: return "Narration timings didn't match the text"
+            case .audioAlignmentMismatch: return "Narration timings didn't match the audio"
             }
         }
     }
+
+    /// ElevenLabs' output format is `mp3_44100_128` — constant bitrate, never
+    /// overridden by the app or the Worker — so bytes over this is the audio's real
+    /// length, not an estimate.
+    private static let mp3BytesPerSecond = 16_000.0
+    /// How far the alignment's extent may sit from the audio's real length before the
+    /// response is unusable, in EITHER direction. Fixed, not proportional: healthy
+    /// responses land 55-75 ms out at every length measured (44 s through 578 s), so
+    /// this is container overhead rather than duration-proportional uncertainty, and a
+    /// percentage rule would license seconds of desync on a long chapter.
+    private static let alignmentAudioTolerance = 1.0
 
     private let baseURL: URL
     private let userId: @Sendable () -> String?
@@ -126,6 +141,59 @@ final class WorkerTTSService: TTSService {
               alignment.startTimes.count == alignment.characters.count,
               alignment.endTimes.count == alignment.characters.count else {
             throw WorkerError.badResponse
+        }
+        // The alignment must index THIS text, character for character. `accumulate`'s
+        // count check only catches a stream that stopped early; it cannot see a stream
+        // that delivered enough characters but not the right ones — an overlapping or
+        // repeated chunk, a multi-character element, whitespace the API re-emitted.
+        // Such a response is internally consistent, so nothing downstream rejects it:
+        // `CharTokenMapper`'s tolerant ±8 resync absorbs the mismatch and expresses it
+        // as TIMINGS THAT DRIFT FROM THE AUDIO, and `DiskAudioStore` then caches it as
+        // paid narration that plays out of sync forever. Verified to hold on every
+        // captured response (v3 and multilingual_v2), so failing here costs nothing and
+        // turns a silent, permanent desync into one visible, retryable error.
+        // Element-wise, not `joined() == text`: `CharTokenMapper` reads only the FIRST
+        // grapheme of each element, so `["AB", ""]` joins to "AB" and passes while the
+        // mapper silently loses the "B". One element per character is the contract the
+        // fold actually depends on, and every captured response satisfies it.
+        guard alignment.characters == text.map(String.init) else {
+            throw WorkerError.misalignedStream
+        }
+        // The alignment must also describe ALL of the audio, not just the right
+        // characters. `eleven_v3` sometimes speaks material it returns no timings
+        // for — measured on a real chapter (851 chars): timings track the audio to
+        // ±0.1 s and then simply stop at 220.00 s, while the mp3 runs to 227.68 s.
+        // Every other check passes: the arrays are parallel, monotonic, and the
+        // characters reproduce the text exactly.
+        //
+        // Where that undescribed audio lands decides the damage. At the END the
+        // player merely thinks the chapter is short. ANYWHERE ELSE, every timing
+        // after it describes audio that now plays later than it says — a highlight
+        // running ahead of the narration by a fixed few seconds, from the first
+        // second of the chapter, with nothing downstream able to notice. The client
+        // cannot repair that; it can only refuse to cache it as paid narration.
+        //
+        // `mp3_44100_128` is constant bitrate and neither the app nor the Worker
+        // overrides it, so bytes/16000 is a measurement, not an estimate (3,643,812
+        // bytes → 227.74 s vs ffprobe's 227.68 s). Clean responses land within
+        // ~50 ms across 44 s, 121 s, 220 s and 578 s chapters, so this tolerance is
+        // two orders of magnitude looser than the noise it has to survive.
+        // Checked in BOTH directions, and against a FIXED allowance rather than a
+        // proportional one. The observed discrepancy on healthy responses is ~55–75 ms
+        // regardless of length (44 s, 121 s, 157 s, 199 s, 220 s, 578 s chapters) —
+        // container overhead, not something that grows with duration. A proportional
+        // rule would have accepted 11 s of desync on a ten-minute chapter, which is
+        // just as unlistenable there as it is in a one-minute one.
+        //
+        // The other direction matters because `accumulate` silently drops NDJSON lines
+        // it cannot decode: a lost audio slice with the later alignment intact yields
+        // complete text over incomplete audio, and `ReaderModel`'s
+        // `max(timeline.duration, bytes/16000)` would then hide it.
+        let audioSeconds = Double(audio.count) / Self.mp3BytesPerSecond
+        let describedSeconds = alignment.endTimes.last ?? 0
+        let delta = audioSeconds - describedSeconds
+        guard abs(delta) <= Self.alignmentAudioTolerance else {
+            throw WorkerError.audioAlignmentMismatch(seconds: delta)
         }
         return SynthesizedAudio(audio: audio, alignment: alignment, text: text)
     }

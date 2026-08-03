@@ -49,4 +49,22 @@ public extension GeneratedAudioStore {
     func remove(_ key: ContentKey) {}
     func clear() {}
     func totalBytes() -> Int { 0 }
+
+    /// Cached audio for `request`, accepting an entry an EARLIER DEFAULT MODEL wrote
+    /// (`SynthesisRequest.legacyCacheKeys`) — the upgrade path for narration the user
+    /// has already paid for. The key that actually hit comes back with it, because a
+    /// caller evicting a corrupt entry has to evict the one it loaded, not the one it
+    /// asked for.
+    func loadAllowingLegacyModel(_ request: SynthesisRequest) -> (key: ContentKey, audio: SynthesizedAudio)? {
+        for key in request.cacheKeyCandidates {
+            if let audio = load(key) { return (key, audio) }
+        }
+        return nil
+    }
+
+    /// Existence check matching `loadAllowingLegacyModel`, for the "is it downloaded?"
+    /// indicators — they must answer for the audio that will actually play.
+    func hasAllowingLegacyModel(_ request: SynthesisRequest) -> Bool {
+        request.cacheKeyCandidates.contains { has($0) }
+    }
 }

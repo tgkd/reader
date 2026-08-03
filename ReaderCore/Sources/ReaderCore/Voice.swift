@@ -49,21 +49,42 @@ public struct Voice: Identifiable, Codable, Equatable, Hashable {
 /// includes the model, so a removed case would make already-paid audio
 /// unnameable — neither playable nor sweepable by `purgeAudio`.
 public enum SynthesisModel: String, Codable, CaseIterable {
-    /// The default for prose. Reads pre-war orthography correctly where
-    /// `multilingual_v2` does not (生れ → うまれ, not なまれ), at identical cost
-    /// (1 credit/char). Verified to return char-level timestamps whose
-    /// `alignment.characters` reproduce the request text exactly.
+    /// NOT USABLE FOR A SYNCED HIGHLIGHT — kept only so audio generated under it
+    /// stays nameable. `eleven_v3` speaks material that is not in the text and
+    /// returns no timestamps for it, so its alignment does not describe its own
+    /// audio. Measured 2026-08-03 on a real 851-char chapter: 9.64 s of undescribed
+    /// audio on the streaming route, 6.94 s buffered, while `multilingual_v2` and
+    /// `flash_v2_5` came in at 0.04 s on the same text. Every other check passes —
+    /// the arrays are parallel and monotonic and the characters reproduce the text —
+    /// which is why it went unnoticed: the damage is a highlight that leads the
+    /// narration by however long the insertion was. It is also, per ElevenLabs' own
+    /// documentation, an alpha research preview whose output is "not fully
+    /// deterministic", and the defect is content- and length-dependent: a 119-char
+    /// probe comes back clean.
     case v3 = "eleven_v3"
-    /// The pre-2026-07-29 default.
+    /// The pre-2026-07-29 default. Alignment is exact; reads pre-war orthography
+    /// wrong (生れ as なまれ rather than うまれ), which is what drove the move to v3.
     case multilingualV2 = "eleven_multilingual_v2"
-    /// Cheaper and lower latency; for bulk/preview synthesis.
+    /// The default since 2026-08-03, chosen on how it READS: side by side on a probe
+    /// built from the hard cases (pre-war orthography, 日本橋, the book's surnames,
+    /// counters) it handled proper nouns more convincingly than `multilingual_v2`.
+    /// Alignment fidelity did not decide it — this, `multilingual_v2` and
+    /// `turbo_v2_5` all describe their own audio within 0.05 s on a full 851-char
+    /// chapter, so the choice was purely the voice. Being cheaper per character is
+    /// incidental, and its own selling point (latency) is irrelevant here: generation
+    /// already outruns playback behind the reader's head start.
     case flashV2_5 = "eleven_flash_v2_5"
+    /// Untested for reading quality, but alignment-exact (0.05 s on the same 851-char
+    /// chapter) and a tier above flash in the family. The candidate to compare
+    /// against the default when narration quality is revisited.
+    case turboV2_5 = "eleven_turbo_v2_5"
 
     public var displayName: String {
         switch self {
-        case .v3: return "v3 — quality"
+        case .v3: return "v3 — do not use"
         case .multilingualV2: return "Multilingual v2"
-        case .flashV2_5: return "Flash v2.5 — fast"
+        case .flashV2_5: return "Flash v2.5"
+        case .turboV2_5: return "Turbo v2.5"
         }
     }
 
@@ -77,8 +98,34 @@ public enum SynthesisModel: String, Codable, CaseIterable {
         case .v3: return 4_500              // API limit 5,000
         case .multilingualV2: return 9_000  // API limit 10,000
         case .flashV2_5: return 36_000      // API limit 40,000
+        case .turboV2_5: return 36_000      // API limit 40,000
         }
     }
+
+    /// The models that have been this app's default, most recent first — the shipped
+    /// history, not the case list.
+    ///
+    /// A default change moves every future `ContentKey`, so audio a user ALREADY PAID
+    /// FOR sits behind a key nothing constructs any more: silently re-synthesized (and
+    /// re-billed) for a subscriber, and simply gone for a lapsed one, who cannot
+    /// regenerate it at all. That is the same "unreachable cache = a second bill" trap
+    /// `Voice.george` is kept in the catalog to avoid, except a model default is worse:
+    /// the voice is a persisted per-user choice, while the model is hard-coded, so
+    /// changing it strands EVERY existing user at once and breaks the standing promise
+    /// that cached narration plays regardless of entitlement.
+    ///
+    /// Cache probes therefore fall back through this list (read-only — new synthesis
+    /// always uses the current default, so a legacy entry is only ever played, never
+    /// written). Append the outgoing default here whenever the default changes; a
+    /// model that was never a default has no keys on anyone's disk to find.
+    ///
+    /// A `.v3` entry replayed this way keeps that model's alignment defect: its
+    /// timings may not describe all of its audio, so the highlight can lead the
+    /// narration and then HOLD at the alignment's frontier (`SpanTimeline.index(at:)`
+    /// never answers past the last timed span). Degraded sync on audio the user owns
+    /// beats silently deleting it; Settings' "clear cached audio" is how someone who
+    /// would rather pay again gets it regenerated under the current model.
+    public static let previousDefaults: [SynthesisModel] = [.v3, .multilingualV2]
 }
 
 /// The ElevenLabs request parameters that shape *how* a voice reads, as opposed to

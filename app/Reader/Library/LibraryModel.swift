@@ -27,10 +27,12 @@ final class LibraryModel {
             let text = doc.chapters.first?.text ?? ""
             // ContentKey is memoized in AppServices (survives route switches), so a
             // return to the Library doesn't re-hash every first chapter on the main actor.
-            let key = services.firstChapterKey(for: doc)
-            // Offline audio available = already synthesized to disk, OR a bundled
+            let keys = services.firstChapterKeys(for: doc)
+            // Offline audio available = already synthesized to disk (under the current
+            // default model or an earlier one, both of which play), OR a bundled
             // fixture exists.
-            let cached = services.audioStore.has(key) || services.fixtures.hasFixture(for: text)
+            let cached = keys.contains { services.audioStore.has($0) }
+                || services.fixtures.hasFixture(for: text)
             return Item(document: doc, cached: cached)
         }
     }

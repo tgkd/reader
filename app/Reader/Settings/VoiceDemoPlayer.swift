@@ -28,7 +28,9 @@ final class VoiceDemoPlayer {
         synthesizingID = voice.id
         task = Task { [weak self] in
             let request = SynthesisRequest(text: Self.sampleText, voice: voice)
-            var synth = services.audioStore.load(request.cacheKey)
+            // Legacy-model entries count: a sample bought under the previous default
+            // is the same sentence in the same voice, and replaying it is free.
+            var synth = services.audioStore.loadAllowingLegacyModel(request)?.audio
             if synth == nil {
                 // Cache miss = a paid request. Revalidate the entitlement locally
                 // first: this sheet can outlive the check that revealed the voice

@@ -93,20 +93,22 @@ final class AppServices {
         didSet { if narrationVoice != oldValue { contentKeyCache.removeAll() } }
     }
 
-    /// First-chapter `ContentKey` per document, cached here (not in the view-owned
+    /// First-chapter `ContentKey`s per document, cached here (not in the view-owned
     /// `LibraryModel`, which a Library↔Reader route switch recreates — so its cache
     /// was cold on every return, re-hashing every book's first chapter on the main
     /// actor). Survives route switches; invalidated on delete and on voice change.
-    private var contentKeyCache: [Document.ID: ContentKey] = [:]
+    private var contentKeyCache: [Document.ID: [ContentKey]] = [:]
 
-    /// The audio cache key for a document's first chapter (the "is it downloaded?"
-    /// probe), memoized across Library reappearances.
-    func firstChapterKey(for document: Document) -> ContentKey {
+    /// The audio cache keys for a document's first chapter (the "is it downloaded?"
+    /// probe), memoized across Library reappearances. Plural because playback accepts
+    /// audio made under an earlier default model, so the badge has to look under those
+    /// keys too or it reports "not downloaded" for a chapter that plays offline.
+    func firstChapterKeys(for document: Document) -> [ContentKey] {
         if let cached = contentKeyCache[document.id] { return cached }
-        let key = SynthesisRequest(text: document.chapters.first?.text ?? "",
-                                   voice: narrationVoice).cacheKey
-        contentKeyCache[document.id] = key
-        return key
+        let keys = SynthesisRequest(text: document.chapters.first?.text ?? "",
+                                    voice: narrationVoice).cacheKeyCandidates
+        contentKeyCache[document.id] = keys
+        return keys
     }
 
     /// Drop a document's cached key (on delete).
@@ -129,27 +131,38 @@ final class AppServices {
         Purchases.configure(withAPIKey: key)
     }
 
+    /// The normalized chapter texts a deletion may actually reclaim.
+    ///
+    /// `ContentKey` is content-addressed, not document-addressed: a re-import of the
+    /// same file, or two books sharing a chapter, resolve to the SAME cache entry.
+    /// Whatever the surviving shelf still points at is not this document's to
+    /// reclaim — removing it (or cancelling its in-flight paid request) would strip
+    /// narration the other book already paid for.
+    ///
+    /// This is what makes re-importing a book safe, which matters now that a
+    /// re-import is the ONLY way to pick up publisher ruby for an already-imported
+    /// book: the text is unchanged, so the keys are unchanged, so importing the file
+    /// again and deleting the old row keeps every chapter the user paid to
+    /// synthesize. Normalized here because that is the alphabet the key is built in.
+    nonisolated static func purgeableTexts(of document: Document, in all: [Document]) -> [String] {
+        let stillReferenced = Set(
+            all.filter { $0.id != document.id }
+               .flatMap(\.chapters)
+               .map { Normalize.nfkc($0.text) }
+        )
+        var seen = Set<String>()
+        return document.chapters
+            .map { Normalize.nfkc($0.text) }
+            .filter { !stillReferenced.contains($0) && seen.insert($0).inserted }
+    }
+
     /// Reclaim a deleted document's cached narration so it doesn't linger in the
     /// audio cache. Removes each chapter's whole-chapter entry plus any per-segment
     /// entries a chunked chapter left behind (normally pruned post-stitch, but a
     /// crash between synth and the whole-chapter save could orphan some). Mirrors
     /// `ChunkingTTSService`'s split so the segment keys match. Idempotent.
     func purgeAudio(for document: Document) async {
-        // `ContentKey` is content-addressed, not document-addressed: a re-import of the
-        // same file, or two books sharing a chapter, resolve to the SAME cache entry.
-        // Whatever the surviving shelf still points at is not this document's to
-        // reclaim — removing it (or cancelling its in-flight paid request) would strip
-        // narration the other book already paid for. Compare under the same
-        // normalization the key is built from.
-        let stillReferenced = Set(
-            library.all()
-                .filter { $0.id != document.id }
-                .flatMap(\.chapters)
-                .map { Normalize.nfkc($0.text) }
-        )
-        for chapter in document.chapters {
-            let normalized = Normalize.nfkc(chapter.text)
-            guard !stillReferenced.contains(normalized) else { continue }
+        for normalized in Self.purgeableTexts(of: document, in: library.all()) {
             // Sweep every catalog voice AND every model: the user may have listened
             // to this book under an earlier voice or model default, whose entries
             // live under other keys. Both are in `ContentKey`, so a sweep that

@@ -73,11 +73,12 @@ final class ReaderModel {
     /// than delegate, but the requirement is unchanged: these fire even while
     /// backgrounded, where the display-link clock is dead.
     private var endObservers: [NSObjectProtocol] = []
-    /// Tokens for the audio-session interruption + route-change observers, removed
-    /// on deinit. `nonisolated(unsafe)`: written once in `init`, read once in the
-    /// nonisolated `deinit` — no concurrent access.
+    /// Tokens for the audio-session interruption, route-change and media-reset
+    /// observers, removed on deinit. `nonisolated(unsafe)`: written once in `init`,
+    /// read once in the nonisolated `deinit` — no concurrent access.
     nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
     nonisolated(unsafe) private var routeChangeObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var mediaResetObserver: NSObjectProtocol?
     /// Whether the user was actually playing when an interruption began — so
     /// `.ended` + `.shouldResume` never un-pauses a manually paused reader.
     private var wasPlayingBeforeInterruption = false
@@ -112,6 +113,14 @@ final class ReaderModel {
         ) { [weak self] note in
             MainActor.assumeIsolated { self?.handleRouteChange(note) }
         }
+        // A media-services reset tears down the audio server: the session we activated
+        // no longer exists, so drop the flag and let the next `play()` rebuild the
+        // category + activation from scratch.
+        mediaResetObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sessionIsActive = false }
+        }
         // Remote (lock-screen) commands route through the same transport methods
         // as the in-app controls, so Now Playing state stays consistent for free.
         nowPlaying.onPlay = { [weak self] in self?.play() }
@@ -135,6 +144,7 @@ final class ReaderModel {
         link.stop()
         if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
         if let routeChangeObserver { NotificationCenter.default.removeObserver(routeChangeObserver) }
+        if let mediaResetObserver { NotificationCenter.default.removeObserver(mediaResetObserver) }
     }
 
     var spans: [TokenSpan] { timeline.spans }
@@ -173,7 +183,7 @@ final class ReaderModel {
         // loaded. Tokenization (and the first-use IPADic load) runs on the worker
         // actor so the route transition never janks the main thread.
         let text = currentChapter?.text ?? ""
-        let tokens = await services.tokenizerWorker.tokenize(text)
+        let tokens = await tokenizeWithSourceReadings(text)
         guard gen == loadGeneration, !Task.isCancelled else { return }
         guard let tokens else {
             loadState = .failed(L10n.readerFailedTokenizer); return
@@ -190,8 +200,13 @@ final class ReaderModel {
         // service cost, and a lapsed subscriber keeps what they paid for. Probe
         // the cache first; the entitlement check runs only on a miss, so a cached
         // re-read never depends on a RevenueCat lookup (offline-proof).
-        let key = SynthesisRequest(text: text, voice: services.narrationVoice).cacheKey
-        if let cached = services.audioStore.load(key) {
+        // The probe accepts audio made under an EARLIER DEFAULT MODEL too: the model is
+        // in `ContentKey`, so a default change would otherwise make every chapter this
+        // user already paid for look uncached — locked for a lapsed subscriber, and
+        // silently re-billed for an active one (`SynthesisModel.previousDefaults`).
+        let request = SynthesisRequest(text: text, voice: services.narrationVoice)
+        let key = request.cacheKey
+        if let (cachedKey, cached) = services.audioStore.loadAllowingLegacyModel(request) {
             switch await buildPlayback(from: cached, gen: gen) {
             case .ready:
                 audioState = .ready
@@ -199,7 +214,7 @@ final class ReaderModel {
             case .undecodable:
                 // Corrupt entry (valid sidecar, undecodable mp3): evict it so
                 // the next Play regenerates instead of re-failing forever.
-                services.audioStore.remove(key)
+                services.audioStore.remove(cachedKey)
             case .aborted:
                 return
             }
@@ -219,6 +234,21 @@ final class ReaderModel {
             // they had never left.
             startAudio()
         }
+    }
+
+    /// Tokenize, then let the SOURCE overrule the tokenizer where the book supplied a
+    /// reading of its own.
+    ///
+    /// MeCab is the tokenizer and stays the single segmentation pass — this only
+    /// replaces `reading` on tokens a publisher ruby annotation covers exactly, and
+    /// leaves `dictionaryForm` alone so tap-to-define still looks up the kanji. It
+    /// matters because IPADic does not know proper nouns: 黄前 is おうまえ, not the
+    /// きぜん MeCab infers, and 緑輝 is サファイア, which nothing but the book knows.
+    private func tokenizeWithSourceReadings(_ text: String) async -> [Token]? {
+        guard let tokens = await services.tokenizerWorker.tokenize(text) else { return nil }
+        guard let chapter = currentChapter, !chapter.sourceReadings.isEmpty,
+              chapter.text == text else { return tokens }
+        return SourceReadingOverlay.apply(chapter.sourceReadings, to: tokens, text: text)
     }
 
     /// Launch synthesis+play as the model-held `playbackTask` so leaving the reader
@@ -288,7 +318,10 @@ final class ReaderModel {
         let key = request.cacheKey
 
         let synth: SynthesizedAudio
-        if let cached = services.audioStore.load(key) {
+        // Legacy-model entries count as a hit here too — see `load()`. Spending money
+        // on audio the user already bought under the previous default is the failure
+        // this prevents; the new default is used only when nothing is cached at all.
+        if let cached = services.audioStore.loadAllowingLegacyModel(request)?.audio {
             synth = cached
         } else {
             // A cache miss is the only path that spends money, and this reader's
@@ -424,7 +457,7 @@ final class ReaderModel {
         if let loaded = chapterTokens, loaded.text == synth.text {
             tokens = loaded.tokens
         } else {
-            tokens = await services.tokenizerWorker.tokenize(synth.text)
+            tokens = await tokenizeWithSourceReadings(synth.text)
         }
         guard let tokens, gen == loadGeneration, !Task.isCancelled else { return .aborted }
         setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: synth.alignment)))
@@ -436,11 +469,27 @@ final class ReaderModel {
         source.append(synth.audio)
         source.finish()
         attachPlayer(to: source)
-        // Duration comes from the ALIGNMENT, not the player: it is exact, already
-        // loaded, and available before AVPlayer has finished inspecting the asset —
-        // whereas an asset served through a resource loader reports its duration
-        // asynchronously, which would leave the scrubber at zero on open.
-        duration = timeline.duration
+        // Duration comes from the BYTES, not the alignment, and not the player: an
+        // asset served through a resource loader reports its duration asynchronously
+        // (the scrubber would sit at zero on open), while the alignment is not
+        // guaranteed to describe all of the audio.
+        //
+        // Measured on this book's chapter 5 (851 chars, `eleven_v3`): the alignment
+        // ends at 220.00 s and tracks the audio to ±0.1 s the whole way — and then the
+        // mp3 keeps going to 227.68 s, four more bursts of speech the API returned no
+        // timings for at all. 7.7 s, 3.4% of the chapter, invisible to every check we
+        // have: the arrays are parallel, monotonic, and `characters.joined() == text`.
+        // Trusting `timeline.duration` there makes the player claim the chapter ends
+        // 7.7 s before it does — the scrubber pins at 100% and the remaining readout
+        // hits zero while paid narration is still playing.
+        //
+        // ElevenLabs' output format is `mp3_44100_128`, constant bitrate, and neither
+        // the app nor the Worker overrides it, so bytes/16000 is exact rather than an
+        // estimate: 3,643,812 bytes → 227.74 s against ffprobe's 227.68 s, 60 ms out
+        // over four minutes. `timeline.duration` stays the floor for the degenerate
+        // case of an empty or unreadable asset.
+        duration = max(timeline.duration,
+                       Double(synth.audio.count) / Self.mp3BytesPerSecond)
         recordMeasuredRate()
 
         // Resume where the last session left off (only for the saved chapter, and
@@ -449,7 +498,7 @@ final class ReaderModel {
         if chapterIndex == document.progress.chapterIndex, resume > 0, resume < duration - 0.5 {
             seekPlayer(to: resume)
             currentTime = resume
-            activeIndex = timeline.index(at: resume)
+            activeIndex = highlightIndex(at: resume)
         }
         return .ready
     }
@@ -614,14 +663,15 @@ final class ReaderModel {
 
     /// Recompute which chapters have cached audio. Done once when the sheet opens
     /// rather than per row: `has()` touches the filesystem, so a 400-chapter book
-    /// would otherwise stat on every scroll frame. Keyed the same way playback
-    /// keys, so audio generated under a previous voice or model correctly does not
-    /// count — it would not be played either.
+    /// would otherwise stat on every scroll frame. Probed exactly the way playback
+    /// probes — including the earlier default models playback accepts — so a mark
+    /// means the chapter really does play offline. Audio under a previous VOICE still
+    /// correctly does not count: that one is a live user choice, not a legacy key.
     func refreshCachedChapters() {
         var found: Set<Int> = []
         for (i, chapter) in document.chapters.enumerated() {
-            let key = SynthesisRequest(text: chapter.text, voice: services.narrationVoice).cacheKey
-            if services.audioStore.has(key) { found.insert(i) }
+            let request = SynthesisRequest(text: chapter.text, voice: services.narrationVoice)
+            if services.audioStore.hasAllowingLegacyModel(request) { found.insert(i) }
         }
         cachedChapters = found
     }
@@ -722,7 +772,10 @@ final class ReaderModel {
         guard gen == loadGeneration, let p = progressive else { return }
         p.source.finish()
         refreshTimings(synth.alignment)
-        duration = timeline.duration
+        // Same rule as `buildPlayback`: the audio is the authority on its own length,
+        // because the alignment may stop short of it (see the note there).
+        duration = max(timeline.duration,
+                       Double(synth.audio.count) / Self.mp3BytesPerSecond)
         generatedTime = duration
         recordMeasuredRate()
         progressive = nil
@@ -801,13 +854,43 @@ final class ReaderModel {
         nowPlaying.setPlayback(elapsed: playerTime, rate: speed)
     }
 
+    /// Whether this model has an active audio session. `setActive(true)` is not free
+    /// and not idempotent in cost: it blocks the caller while the route is
+    /// established, and iOS logs "This method can lead to UI unresponsiveness if
+    /// called on the main thread" for every call. `play()` runs on every resume,
+    /// every lock-screen command and every interruption recovery, so activating
+    /// unconditionally produced that warning in pairs, over and over, and put a
+    /// blocking call on the main thread immediately before `player.play()` — the
+    /// same window the display-link clock has to survive.
+    ///
+    /// It tracks OUR activation only, so it must be cleared wherever the system takes
+    /// the session away without going through `deactivateSession` — an interruption
+    /// (call, Siri, another app) and a media-services reset both do. A stale `true`
+    /// there is silence: `play()` would skip the reactivation iOS requires after an
+    /// interruption ends, and nothing would ever set it right again.
+    private var sessionIsActive = false
+
     /// Activate the playback audio session at the first real playback — deferred out
     /// of `buildPlayback` so opening a cached chapter doesn't interrupt other audio.
     /// Now Playing rides along: the lock-screen widget exists exactly while the
     /// session does.
+    ///
+    /// The category is set ONCE per session rather than per play: it never changes,
+    /// and setting it is the other half of the same main-thread warning. The
+    /// asynchronous `activate(options:completionHandler:)` would remove the block
+    /// entirely, but it is iOS 27 and the deployment target is 26 — so the fix here
+    /// is to stop making the call N times, not to move it.
+    ///
+    /// The flag is set only once activation actually SUCCEEDED. `setActive(true)`
+    /// throws when another app holds the session non-mixably (a call in progress is
+    /// the ordinary case), and remembering that failure as success would skip every
+    /// later retry — the reader would stay mute for the rest of its life.
     private func activateSession() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        if !sessionIsActive {
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback)
+            sessionIsActive = (try? session.setActive(true)) != nil
+        }
         nowPlaying.activate()
         nowPlaying.setMetadata(bookTitle: document.title, chapterTitle: chapterTitle,
                                chapterIndex: chapterIndex, chapterCount: chapterCount,
@@ -818,6 +901,8 @@ final class ReaderModel {
 
     /// Release the session so other apps' audio can resume after we stop.
     private func deactivateSession() {
+        guard sessionIsActive else { return }
+        sessionIsActive = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
@@ -826,7 +911,13 @@ final class ReaderModel {
         isPlaying = false
         link.stop()
         persistProgress()
-        nowPlaying.setPlayback(elapsed: playerTime, rate: 0)
+        // Settle the highlight on the real playhead. The clock has just stopped, so
+        // whatever the last tick left behind is up to a frame stale — and
+        // `persistProgress` writes `currentTime` itself, so without this the scrubber
+        // and the marker can come to rest describing different moments.
+        currentTime = playerTime
+        activeIndex = highlightIndex(at: currentTime)
+        nowPlaying.setPlayback(elapsed: currentTime, rate: 0)
     }
 
     func setSpeed(_ v: Double) {
@@ -848,7 +939,7 @@ final class ReaderModel {
         let clamped = min(max(0, t), limit)
         seekPlayer(to: clamped)
         currentTime = clamped
-        activeIndex = timeline.index(at: clamped)
+        activeIndex = highlightIndex(at: clamped)
         nowPlaying.setPlayback(elapsed: clamped, rate: isPlaying ? speed : 0)
     }
 
@@ -955,19 +1046,56 @@ final class ReaderModel {
     }
 
     private func tick() {
-        // `.paused` rather than `!= .playing`: an AVPlayer briefly reports
-        // `.waitingToPlayAtSpecifiedRate` while it buffers, and treating that as
-        // stopped would kill the clock mid-chapter.
-        guard let player, player.timeControlStatus != .paused else {
-            // Not playing: either paused (link already stopped) or finished. Natural
-            // finish is owned by `handlePlaybackFinished` via the end-of-item
-            // notification (which fires even backgrounded, where this clock is dead),
-            // so don't persist here — just stop the foreground clock.
+        // Gate on OUR OWN `isPlaying`, never on `AVPlayer.timeControlStatus`.
+        //
+        // This guard used to stop the clock whenever the player reported `.paused`,
+        // which is a state `AVPlayer` enters transiently and on its own: a stall while
+        // the resource loader serves the next range, a route or buffer hiccup, the gap
+        // between `play()` and the rate actually taking effect. `link.stop()` is
+        // TERMINAL — nothing restarts the clock but another `play()` — so one such
+        // frame froze `currentTime` and `activeIndex` for the rest of the chapter while
+        // the audio played on. That is the "audio ran away from the marker" report:
+        // not drifting timings, a dead clock. It needs a real device to reproduce,
+        // because the simulator resumes instantly and never stalls.
+        //
+        // `isPlaying` is set false by exactly the three ends of playback — `pause()`,
+        // `stop()`, `handlePlaybackFinished` — each of which stops the link itself, so
+        // this is now a backstop rather than the mechanism. A player that stalls
+        // forever costs a no-op tick per frame, which is the cheap direction to be
+        // wrong in. Natural finish stays owned by the end-of-item notification (it
+        // fires backgrounded, where this clock is dead), so nothing is persisted here.
+        guard player != nil, isPlaying else {
             link.stop()
             return
         }
         currentTime = playerTime
-        activeIndex = timeline.index(at: currentTime)
+        activeIndex = highlightIndex(at: currentTime)
+    }
+
+    /// The token to LIGHT UP at `t` — the spoken token, never the whitespace
+    /// between tokens.
+    ///
+    /// `MeCabTokenizer` emits the whitespace MeCab drops as gap tokens, so a blank
+    /// line between two entries is a real token (`"\n\n"`) and the API charges the
+    /// pause between them to it — 1.4–2.0 s, measured. Highlighting it is honest but
+    /// unreadable: a whitespace token's rects are the tail of one line, the empty
+    /// line, and the head of the next, so the reader paints two or three empty boxes
+    /// out in the margin and the word that was just spoken goes dark. In a chapter
+    /// of short entries separated by blank lines that is a large share of playback.
+    /// Holding the last spoken token instead reads exactly right: the word stays lit
+    /// through the pause after it, and the auto-scroll keeps following text rather
+    /// than drifting to a blank line.
+    /// Deliberately whitespace ONLY, not `hasWordChar`: punctuation carries the
+    /// sentence pause and draws a visible box against the text it follows, which
+    /// reads correctly. Whitespace is the case with nothing to draw on.
+    private func highlightIndex(at t: Double) -> Int? {
+        guard let i = timeline.index(at: t) else { return nil }
+        // Walk back over the gap run; a leading gap (an indented first line) has no
+        // predecessor to hold, so it correctly yields nothing.
+        var k = i
+        while k >= 0, let span = timeline[k],
+              span.surface.allSatisfy(\.isWhitespace) { k -= 1 }
+        return k >= 0 ? k : nil
     }
 
     /// Natural end of the chapter — routed through the end-of-item notification so
@@ -999,7 +1127,7 @@ final class ReaderModel {
             return
         }
         currentTime = duration
-        activeIndex = timeline.index(at: duration)
+        activeIndex = highlightIndex(at: duration)
         persistProgress(completed: true)
         if canGoToNextChapter, nextChapterAudioCached {
             // The assertion covers the tokenize+load gap between players so a
@@ -1020,9 +1148,12 @@ final class ReaderModel {
     private var nextChapterAudioCached: Bool {
         let next = chapterIndex + 1
         guard document.chapters.indices.contains(next) else { return false }
-        return services.audioStore.has(
+        // Same probe `load()` will run when the chapter opens, legacy models included —
+        // the gate has to agree with it, or the advance either refuses a chapter that
+        // would have played free or opens one it cannot play without paying.
+        return services.audioStore.hasAllowingLegacyModel(
             SynthesisRequest(text: document.chapters[next].text,
-                             voice: services.narrationVoice).cacheKey)
+                             voice: services.narrationVoice))
     }
 
     /// Audio-session interruption (call, Siri, another app): pause on `.began`, and
@@ -1035,6 +1166,10 @@ final class ReaderModel {
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
         switch type {
         case .began:
+            // iOS has already deactivated our session — it did not go through
+            // `deactivateSession`, so record that here or the resume below would skip
+            // the reactivation and `player.play()` would run against a dead session.
+            sessionIsActive = false
             wasPlayingBeforeInterruption = isPlaying
             if isPlaying { pause() }
         case .ended:

@@ -45,12 +45,23 @@ struct EPUBImporter: DocumentImporter {
             recognized = try await recognize(imagePaths, in: archive, using: recognizer)
         }
 
+        // A Japanese book annotates a name ONCE, where it first appears, and never
+        // again: in this volume 希美 is ruby'd once and occurs 236 times, 緑輝 once
+        // and occurs 99. Applying a reading only where the markup sits would take
+        // about a percent of what the book actually tells us — and would leave the
+        // character-list page, which carries no ruby at all, reading きぜん for 黄前.
+        // So the readings are indexed across the whole book and materialised at every
+        // occurrence, here at import, which keeps `Chapter.sourceReadings` the single
+        // thing anything downstream has to understand.
+        let index = readingIndex(of: slots)
+
         var chapters: [Chapter] = []
         var ocrCursor = 0
         for slot in slots {
             switch slot {
-            case .text(let title, let text):
-                chapters.append(Chapter(title: title, text: text))
+            case .text(let title, let text, let readings, _):
+                chapters.append(Chapter(title: title, text: text,
+                                        sourceReadings: propagate(index, into: text, given: readings)))
             case .images(let title, let images):
                 guard recognizer != nil else { continue }   // non-subscriber: no OCR
                 let text = recognized[ocrCursor..<ocrCursor + images.count]
@@ -84,11 +95,83 @@ struct EPUBImporter: DocumentImporter {
         }
     }
 
+    // MARK: - Reading propagation
+
+    /// Word → its per-character split, for every ruby word safe to carry book-wide.
+    ///
+    /// Two exclusions, both because a wrong reading stated with the book's own
+    /// authority is worse than leaving the word to the tokenizer:
+    ///
+    /// 1. A word the book itself reads two ways (labelled 労 both いたわ and ねぎら) —
+    ///    one word of 207 in this volume.
+    /// 2. A SINGLE-character base. Uniqueness among the annotations does not mean the
+    ///    reading is context-free, and for one kanji it almost never is: publishers
+    ///    ruby a lone kanji exactly where the reading is unusual for it. Measured on
+    ///    響け！ユーフォニアム 2, the single-char entries are 長→た (63 occurrences —
+    ///    the reading of 長ける, propagated over 部長 and 長い), 初→しよ (37, over
+    ///    初めて), 端→ぱな (44, the rendaku'd 端から), 微→かす, 呆→あき, 傾→かし. Those
+    ///    64 entries account for 1,071 of the propagated occurrences and are wrong far
+    ///    more often than right.
+    ///
+    /// The 142 multi-character entries — 2,494 occurrences, and every name the exercise
+    /// was for (久美子, 希美, 黄前, 北宇治, 緑輝) — are kept: a multi-kanji proper noun
+    /// does not change reading with context, which is exactly why the publisher only
+    /// bothered to annotate it once.
+    private func readingIndex(of slots: [Slot]) -> [String: [SourceReading]] {
+        var byWord: [String: Set<String>] = [:]
+        var split: [String: [SourceReading]] = [:]
+        for case .text(_, _, _, let groups) in slots {
+            for g in groups where !g.surface.isEmpty && !g.reading.isEmpty {
+                byWord[g.surface, default: []].insert(g.reading)
+                // Offsets relative to the word, so they can be rebased onto any occurrence.
+                let base = g.pairs.first?.start ?? 0
+                split[g.surface] = g.pairs.map {
+                    SourceReading(start: $0.start - base, length: $0.length,
+                                  surface: $0.surface, reading: $0.reading)
+                }
+            }
+        }
+        return split.filter { byWord[$0.key]?.count == 1 && $0.key.count > 1 }
+    }
+
+    /// Every occurrence of an indexed word in `text`, as annotations — keeping the
+    /// ones the markup already placed and never overlapping them.
+    private func propagate(_ index: [String: [SourceReading]],
+                           into text: String,
+                           given existing: [SourceReading]) -> [SourceReading] {
+        guard !index.isEmpty else { return existing }
+        var out = existing
+        var taken = existing.map { $0.start..<$0.end }
+        let chars = Array(text)
+
+        for (word, pairs) in index {
+            var from = text.startIndex
+            while let r = text.range(of: word, range: from..<text.endIndex) {
+                from = r.upperBound
+                let start = text.distance(from: text.startIndex, to: r.lowerBound)
+                let span = start..<(start + word.count)
+                guard !taken.contains(where: { $0.overlaps(span) }) else { continue }
+                taken.append(span)
+                for p in pairs {
+                    let s = start + p.start
+                    guard s + p.length <= chars.count,
+                          String(chars[s..<(s + p.length)]) == p.surface else { continue }
+                    out.append(SourceReading(start: s, length: p.length,
+                                             surface: p.surface, reading: p.reading))
+                }
+            }
+        }
+        return out.sorted { $0.start < $1.start }
+    }
+
     // MARK: - Classification
 
     /// A spine item's content: its extracted text, or the archive paths of the images
     /// that stand in for its (image-only) text — plus its TOC title, when one exists.
-    private enum Slot { case text(title: String?, text: String); case images(title: String?, paths: [String]) }
+    private enum Slot {
+        case text(title: String?, text: String, readings: [SourceReading], groups: [HTMLText.RubyGroup])
+        case images(title: String?, paths: [String])
+    }
 
     /// Walk the spine once: each item becomes `.text` (extractable text) or, when it has
     /// none but references images, `.images` (archive paths to OCR). Items with neither
@@ -110,8 +193,12 @@ struct EPUBImporter: DocumentImporter {
             let path = resolve(href, relativeTo: opfDir)
             guard let xhtml = try? data(at: path, in: archive) else { continue }
             let title = titles[path.lowercased()]
-            let text = HTMLText.extract(xhtml)
-            if !text.isEmpty { slots.append(.text(title: title, text: text)); continue }
+            let extracted = HTMLText.extractWithReadings(xhtml)
+            if !extracted.text.isEmpty {
+                slots.append(.text(title: title, text: extracted.text,
+                                   readings: extracted.readings, groups: extracted.groups))
+                continue
+            }
             // No text — fold in any referenced images that actually exist in the archive,
             // resolved against THIS document's directory (not the OPF's).
             let itemDir = (path as NSString).deletingLastPathComponent
@@ -437,10 +524,79 @@ private extension String {
 /// tags are removed, and HTML entities are decoded in one left-to-right pass.
 /// Regex-based so it tolerates the not-quite-XML XHTML found in real EPUBs.
 private enum HTMLText {
-    static func extract(_ data: Data) -> String {
+    /// One `<ruby>` element's pairs. They form a WORD — 黄/おう followed by 前/まえ is
+    /// one annotation of 黄前 — and that boundary is what makes a reading safe to
+    /// reuse elsewhere in the book, so it is recorded rather than inferred from
+    /// adjacency.
+    struct RubyGroup {
+        let pairs: [SourceReading]
+        var surface: String { pairs.map(\.surface).joined() }
+        var reading: String { pairs.map(\.reading).joined() }
+    }
+
+    /// Sentinels wrapping a ruby base while the rest of the extraction runs.
+    ///
+    /// The extraction is a chain of whole-string rewrites — entity decoding, tag
+    /// removal, whitespace collapsing, trimming — so a character offset computed
+    /// before it means nothing after it. Rather than thread an offset map through
+    /// every step, the base is marked in place and the offsets are read off the
+    /// FINISHED text, where they are the only offsets that matter. These survive the
+    /// chain because they are not tags, not entities and not whitespace, and
+    /// U+E000-E002 cannot occur in real book text.
+    private static let rubyOpen: Character = "\u{E000}"
+    private static let rubyClose: Character = "\u{E001}"
+    private static let rubyGroupEnd: Character = "\u{E002}"
+
+    static func extract(_ data: Data) -> String { extractWithReadings(data).text }
+
+    /// The chapter's text, the readings its `<ruby>` markup supplied with offsets
+    /// into that text, and those readings grouped by the element they came from.
+    static func extractWithReadings(_ data: Data)
+        -> (text: String, readings: [SourceReading], groups: [RubyGroup]) {
+        let (marked, readings) = strip(data, markingRuby: true)
+        return unmarkRuby(marked, readings: readings)
+    }
+
+    /// Pull the sentinels back out, recording where each base landed. Offsets are
+    /// into the string being built, so they are correct by construction.
+    private static func unmarkRuby(_ s: String, readings: [String])
+        -> (text: String, readings: [SourceReading], groups: [RubyGroup]) {
+        guard s.contains(rubyOpen) else { return (s, [], []) }
+        var out = ""
+        out.reserveCapacity(s.count)
+        var found: [SourceReading] = []
+        var groups: [RubyGroup] = []
+        var groupStart = 0
+        var baseStart: Int?
+        var base = ""
+        var next = 0
+        for ch in s {
+            switch ch {
+            case rubyOpen:
+                baseStart = out.count
+                base = ""
+            case rubyClose:
+                defer { baseStart = nil; next += 1 }
+                guard let start = baseStart, !base.isEmpty, next < readings.count else { continue }
+                found.append(SourceReading(start: start, length: base.count,
+                                           surface: base, reading: readings[next]))
+            case rubyGroupEnd:
+                if found.count > groupStart {
+                    groups.append(RubyGroup(pairs: Array(found[groupStart...])))
+                    groupStart = found.count
+                }
+            default:
+                if baseStart != nil { base.append(ch) }
+                out.append(ch)
+            }
+        }
+        return (out, found, groups)
+    }
+
+    private static func strip(_ data: Data, markingRuby: Bool) -> (String, [String]) {
         // EPUB content is UTF-8/UTF-16 per spec; sniff (BOM-aware) and skip a file
         // we genuinely can't decode rather than emitting Latin-1 mojibake.
-        guard var s = JapaneseTextDecoder.decode(data) else { return "" }
+        guard var s = JapaneseTextDecoder.decode(data) else { return ("", []) }
 
         // Isolate the body so head/title metadata never bleeds into the text.
         if let body = s.range(of: "(?is)<body[^>]*>.*</body>", options: .regularExpression) {
@@ -449,6 +605,8 @@ private enum HTMLText {
         // Drop script/style blocks (case-insensitive).
         s = s.replacingOccurrences(of: "(?is)<(script|style)[^>]*>.*?</\\1>", with: " ",
                                    options: .regularExpression)
+        var readings: [String] = []
+        if markingRuby { (s, readings) = markRuby(s) }
         // Drop ruby readings: <rt>/<rp> CONTENT, not just the tags. Keeping the tag
         // strip alone would inline the furigana into the body (<ruby>漢字<rt>かんじ</rt>
         // → 漢字かんじ), so TTS speaks every annotated word twice, MeCab tokenizes the
@@ -466,7 +624,102 @@ private enum HTMLText {
         s = s.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
         s = s.replacingOccurrences(of: " *\\n *", with: "\n", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
-        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (s.trimmingCharacters(in: .whitespacesAndNewlines), readings)
+    }
+
+    /// Rewrite every `<ruby>` element to its bare base wrapped in sentinels, and
+    /// return the readings in document order.
+    ///
+    /// Handles both shapes real EPUBs use: explicit `<rb>base</rb><rt>reading</rt>`,
+    /// repeated per annotated run (this book writes 黄前 as two such pairs), and
+    /// HTML5's implicit base, where whatever precedes the first `<rt>` is the base.
+    /// `<rp>` fallback parentheses are dropped. `<rtc>` is deliberately NOT collected:
+    /// it is a second annotation layer that may be a gloss rather than a
+    /// pronunciation, and concatenating it would produce a reading no one wrote.
+    ///
+    /// Pairing is preserved rather than flattened, because that granularity is what
+    /// makes the readings usable: 黄→おう and 前→まえ each line up with a MeCab token,
+    /// where a single 黄前→おうまえ would span two and match neither.
+    private static func markRuby(_ input: String) -> (String, [String]) {
+        guard input.range(of: "(?i)<ruby[\\s>]", options: .regularExpression) != nil else {
+            return (input, [])
+        }
+        var readings: [String] = []
+        var out = ""
+        var rest = Substring(input)
+
+        func plain(_ s: Substring) -> String {
+            var t = String(s).replacingOccurrences(of: "(?is)<[^>]+>", with: "",
+                                                   options: .regularExpression)
+            t = decodeEntities(t)
+            return t.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        while let open = rest.range(of: "(?i)<ruby[^>]*>", options: .regularExpression) {
+            guard let close = rest.range(of: "(?i)</ruby\\s*>", options: .regularExpression,
+                                         range: open.upperBound..<rest.endIndex) else { break }
+            out += rest[rest.startIndex..<open.lowerBound]
+            let inner = rest[open.upperBound..<close.lowerBound]
+            rest = rest[close.upperBound...]
+
+            // Strip the fallback parentheses before anything else reads the content.
+            let body = String(inner).replacingOccurrences(
+                of: "(?is)<rp[^>]*>.*?</rp\\s*>", with: "", options: .regularExpression)
+
+            let pairs = capturePairs("(?is)<rb[^>]*>(.*?)</rb\\s*>\\s*<rt[^>]*>(.*?)</rt\\s*>", in: body)
+            if !pairs.isEmpty {
+                var wrote = false
+                for (base, reading) in pairs {
+                    let b = plain(Substring(base)), r = plain(Substring(reading))
+                    guard !b.isEmpty, !r.isEmpty else { out += b; continue }
+                    out.append(rubyOpen); out += b; out.append(rubyClose)
+                    readings.append(r)
+                    wrote = true
+                }
+                if wrote { out.append(rubyGroupEnd) }
+                continue
+            }
+            // HTML5 implicit base: the text before each <rt> is that <rt>'s base.
+            // EVERY pair is taken, not just the first — mono-ruby without <rb> writes
+            // 漢字 as <ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>, and stopping at the first
+            // pair would emit 漢 and drop 字 from the chapter's text for good.
+            var scan = Substring(body)
+            var sawPair = false
+            var wrote = false
+            while let rt = scan.range(of: "(?i)<rt[^>]*>", options: .regularExpression),
+                  let rtEnd = scan.range(of: "(?i)</rt\\s*>", options: .regularExpression,
+                                         range: rt.upperBound..<scan.endIndex) {
+                sawPair = true
+                let b = plain(scan[scan.startIndex..<rt.lowerBound])
+                let r = plain(scan[rt.upperBound..<rtEnd.lowerBound])
+                scan = scan[rtEnd.upperBound...]
+                guard !b.isEmpty, !r.isEmpty else { out += b; continue }
+                out.append(rubyOpen); out += b; out.append(rubyClose)
+                readings.append(r)
+                wrote = true
+            }
+            if sawPair {
+                if wrote { out.append(rubyGroupEnd) }
+                // Whatever trails the last annotation is still the element's text.
+                out += plain(scan)
+                continue
+            }
+            out += plain(Substring(body))
+        }
+        out += rest
+        return (out, readings)
+    }
+
+    /// All (group 1, group 2) captures of `pattern` in `s`, in order.
+    private static func capturePairs(_ pattern: String, in s: String) -> [(String, String)] {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = s as NSString
+        return re.matches(in: s, range: NSRange(location: 0, length: ns.length)).compactMap { m in
+            guard m.numberOfRanges >= 3,
+                  m.range(at: 1).location != NSNotFound,
+                  m.range(at: 2).location != NSNotFound else { return nil }
+            return (ns.substring(with: m.range(at: 1)), ns.substring(with: m.range(at: 2)))
+        }
     }
 
     /// Image references inside `<img>` and SVG `<image>` tags, in document order — the

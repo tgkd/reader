@@ -94,6 +94,145 @@ final class EPUBImporterTests: XCTestCase {
         XCTAssertFalse(text.contains("かんじ"), text)
     }
 
+    /// The base still stands alone in the text — but the reading is no longer thrown
+    /// away. IPADic does not know proper nouns, which is exactly where a publisher
+    /// annotates: this book reads 黄前 as おうまえ where MeCab infers きぜん.
+    func testKeepsRubyReadingsAsSourceAnnotations() async throws {
+        let body = "<p><ruby><rb>黄</rb><rt>おう</rt><rb>前</rb><rt>まえ</rt></ruby>久美子</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "黄前久美子", "the reading must not be inlined")
+        // Pairing is preserved, not flattened: 黄→おう and 前→まえ each line up with a
+        // MeCab token, where a single 黄前→おうまえ would span two and match neither.
+        XCTAssertEqual(chapter.sourceReadings.map(\.surface), ["黄", "前"])
+        XCTAssertEqual(chapter.sourceReadings.map(\.reading), ["おう", "まえ"])
+        // Offsets index the emitted text, so they must survive the whole strip chain.
+        for r in chapter.sourceReadings {
+            let chars = Array(chapter.text)
+            XCTAssertEqual(String(chars[r.start..<r.end]), r.surface)
+        }
+    }
+
+    /// HTML5's implicit base — no `<rb>` — is the other shape real EPUBs use.
+    func testKeepsRubyWithAnImplicitBase() async throws {
+        let body = "<p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby>は難しい</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "漢字は難しい")
+        XCTAssertEqual(chapter.sourceReadings.count, 1)
+        XCTAssertEqual(chapter.sourceReadings.first?.surface, "漢字")
+        XCTAssertEqual(chapter.sourceReadings.first?.reading, "かんじ")
+        XCTAssertEqual(chapter.sourceReadings.first?.start, 0)
+    }
+
+    /// Mono-ruby without `<rb>`: one element, one implicit pair per character. Every
+    /// pair has to be read — taking only the first would emit 漢 and silently delete
+    /// 字 from the chapter, which no later stage could ever recover.
+    func testKeepsEveryPairOfAMultiSegmentImplicitRuby() async throws {
+        let body = "<p><ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>を読む</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "漢字を読む", "a base was dropped from the text")
+        XCTAssertEqual(chapter.sourceReadings.map(\.surface), ["漢", "字"])
+        XCTAssertEqual(chapter.sourceReadings.map(\.reading), ["かん", "じ"])
+        let chars = Array(chapter.text)
+        for r in chapter.sourceReadings {
+            XCTAssertEqual(String(chars[r.start..<r.end]), r.surface)
+        }
+    }
+
+    /// Text trailing the last annotation inside the same element is still text.
+    func testKeepsUnannotatedTailOfAnImplicitRuby() async throws {
+        let body = "<p><ruby>黄<rt>おう</rt>前久美子</ruby></p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "黄前久美子")
+        XCTAssertEqual(chapter.sourceReadings.map(\.surface), ["黄"])
+    }
+
+    /// Offsets are read off the FINISHED text, so everything the strip chain does
+    /// afterwards — entity decoding, tag removal, whitespace collapsing, trimming —
+    /// has to leave them correct.
+    /// A book annotates a name once and then uses it hundreds of times, so a reading
+    /// is only worth having if it reaches the unannotated occurrences — including in
+    /// chapters that carry no ruby of their own, which is where the character-list
+    /// page lives.
+    func testMultiCharacterReadingsPropagateAcrossTheBook() async throws {
+        let annotated = "<p><ruby><rb>黄</rb><rt>おう</rt><rb>前</rb><rt>まえ</rt></ruby>が来た</p>"
+        let bare = "<p>黄前久美子</p>"
+        let url = try Fixture.epub(
+            manifest: [
+                Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: annotated)),
+                Fixture.EPUBItem(id: "c1", href: "c1.xhtml", content: Fixture.xhtml(body: bare)),
+            ],
+            spine: [Fixture.SpineRef("c0"), Fixture.SpineRef("c1")])
+        let all = try await chapters(url)
+
+        let second = all[1]
+        XCTAssertEqual(second.text, "黄前久美子")
+        XCTAssertEqual(second.sourceReadings.map(\.surface), ["黄", "前"],
+                       "the reading must reach a chapter that has no ruby at all")
+        XCTAssertEqual(second.sourceReadings.map(\.reading), ["おう", "まえ"])
+    }
+
+    /// Uniqueness among annotations does not make a reading context-free, and for one
+    /// kanji it almost never is — a publisher rubies a lone kanji exactly where its
+    /// reading is unusual. Propagating it would state a wrong reading with the book's
+    /// authority: 長 ruby'd once as た (長ける) would then claim 部長 reads ぶた.
+    func testSingleCharacterReadingsDoNotPropagate() async throws {
+        let annotated = "<p><ruby><rb>長</rb><rt>た</rt></ruby>けている</p>"
+        let elsewhere = "<p>部長は背が長い</p>"
+        let url = try Fixture.epub(
+            manifest: [
+                Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: annotated)),
+                Fixture.EPUBItem(id: "c1", href: "c1.xhtml", content: Fixture.xhtml(body: elsewhere)),
+            ],
+            spine: [Fixture.SpineRef("c0"), Fixture.SpineRef("c1")])
+        let all = try await chapters(url)
+
+        // Its own site still keeps the reading the markup actually placed there.
+        XCTAssertEqual(all[0].sourceReadings.map(\.reading), ["た"])
+        // Everywhere else is left to the tokenizer.
+        XCTAssertEqual(all[1].text, "部長は背が長い")
+        XCTAssertEqual(all[1].sourceReadings, [],
+                       "a one-kanji reading must not be asserted over other contexts")
+    }
+
+    func testRubyOffsetsSurviveTheRestOfTheStrip() async throws {
+        let body = "<p>  &#x3042;&nbsp;&#x3044;   <b>x</b>\n<ruby><rb>黄</rb><rt>おう</rt></ruby>end</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        let r = try XCTUnwrap(chapter.sourceReadings.first)
+        let chars = Array(chapter.text)
+        XCTAssertEqual(String(chars[r.start..<r.end]), "黄",
+                       "offset drifted; text was \(chapter.text.debugDescription)")
+    }
+
+    /// A book with no ruby must be untouched — every other format relies on that.
+    func testChaptersWithoutRubyCarryNoAnnotations() async throws {
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml",
+                                        content: Fixture.xhtml(body: "<p>ふつうの文</p>"))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+        XCTAssertEqual(chapter.sourceReadings, [])
+    }
+
     func testEmptyBodyItemsAreSkipped() async throws {
         let manifest = [
             Fixture.EPUBItem(id: "a", href: "a.xhtml", content: Fixture.xhtml(body: "<p>REAL</p>")),
