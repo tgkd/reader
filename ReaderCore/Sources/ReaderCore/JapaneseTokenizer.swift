@@ -22,7 +22,7 @@ public final class MeCabTokenizer: JapaneseTokenizer {
                 tokens.append(Token(surface: String(normalized[cursor..<a.range.lowerBound]),
                                     reading: nil, dictionaryForm: nil))
             }
-            let reading = a.reading.isEmpty ? nil : Self.hiragana(a.reading)
+            let reading = Self.usableReading(a.reading)
             let lemma = (a.dictionaryForm.isEmpty || a.dictionaryForm == "*") ? nil : a.dictionaryForm
             tokens.append(Token(surface: a.base, reading: reading, dictionaryForm: lemma))
             cursor = a.range.upperBound
@@ -31,6 +31,12 @@ public final class MeCabTokenizer: JapaneseTokenizer {
             tokens.append(Token(surface: String(normalized[cursor...]), reading: nil, dictionaryForm: nil))
         }
         return tokens
+    }
+
+    static func usableReading(_ raw: String) -> String? {
+        guard !raw.isEmpty, raw != "*",
+              !raw.unicodeScalars.contains(where: Furigana.isIdeograph) else { return nil }
+        return hiragana(raw)
     }
 
     static func hiragana(_ s: String) -> String {

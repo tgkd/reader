@@ -49,6 +49,31 @@ final class FuriganaTests: XCTestCase {
         XCTAssertEqual(p.reading, "生")
     }
 
+    func testSupplementaryPlaneKanjiCountsAsKanji() {
+        XCTAssertTrue(Furigana.isKanji("𠮷"), "extension B ideographs are kanji")
+        XCTAssertTrue(Furigana.isKanji("﨑"), "compatibility ideographs are kanji")
+        XCTAssertEqual(place("𠮷野", "よしの").map { [$0.0, $0.1] }, ["𠮷野", "よしの"])
+        XCTAssertEqual(place("𠮷", "よし").map { [$0.0, $0.1] }, ["𠮷", "よし"])
+    }
+
+    func testIdeographBlockBoundaries() throws {
+        let inside: [UInt32] = [0x3400, 0x4DBF, 0x4E00, 0x9FFF, 0xF900, 0xFAFF,
+                                0x20000, 0x2EBEF, 0x2EBF0, 0x2EE5D,
+                                0x2F800, 0x2FA1F, 0x30000, 0x323AF]
+        let outside: [UInt32] = [0x33FF, 0x4DC0, 0xA000, 0xF8FF, 0xFB00,
+                                 0x1FFFF, 0x2EE5E, 0x2F7FF, 0x2FA20, 0x2FFFF, 0x323B0,
+                                 0x3042, 0x30A2]
+        for v in inside {
+            let scalar = try XCTUnwrap(Unicode.Scalar(v))
+            XCTAssertTrue(Furigana.isIdeograph(scalar), String(format: "U+%04X", v))
+        }
+        for v in outside {
+            let scalar = try XCTUnwrap(Unicode.Scalar(v))
+            XCTAssertFalse(Furigana.isIdeograph(scalar), String(format: "U+%04X", v))
+        }
+        XCTAssertTrue(Furigana.isKanji("\u{2EBF0}"), "extension I ideographs are kanji")
+    }
+
     func testRangeIsAlwaysAValidNonEmptySlice() {
         let cases = [("生れ", "うまれ"), ("いた事", "いたこと"), ("見当", "けんとう"),
                      ("取り消し", "とりけし"), ("大きい", "おおきい"), ("一つ", "ひとつ"),

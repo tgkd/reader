@@ -13,7 +13,10 @@ public struct SourceReading: Codable, Equatable, Sendable {
         self.reading = reading
     }
 
-    public var end: Int { start + length }
+    public var end: Int {
+        let (sum, overflowed) = start.addingReportingOverflow(length)
+        return overflowed ? Int.max : sum
+    }
 }
 
 public extension Array where Element == SourceReading {

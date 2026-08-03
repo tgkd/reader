@@ -51,6 +51,23 @@ final class SourceReadingTests: XCTestCase {
         XCTAssertEqual([good, moved, past].validated(against: text), [good])
     }
 
+    func testACorruptedOffsetIsRejectedInsteadOfOverflowing() {
+        let poison = SourceReading(start: .max, length: 5, surface: "黄", reading: "おう")
+        XCTAssertEqual(poison.end, .max, "the end must saturate rather than trap")
+        XCTAssertEqual([poison].validated(against: "黄前"), [])
+    }
+
+    func testDecodesAChapterWhoseStoredOffsetWouldOverflow() throws {
+        let corrupt = """
+        {"id":"3F2504E0-4F89-11D3-9A0C-0305E82C3301","text":"黄前",
+         "sourceReadings":[{"start":9223372036854775807,"length":5,"surface":"黄","reading":"おう"}]}
+        """
+        let chapter = try JSONDecoder().decode(Chapter.self, from: Data(corrupt.utf8))
+        XCTAssertEqual(chapter.text, "黄前")
+        XCTAssertEqual(chapter.sourceReadings.validated(against: chapter.text), [])
+        XCTAssertEqual(chapter.splitToRenderable(maxChars: 1).map(\.text).joined(), "黄前")
+    }
+
     func testSplitRebasesReadingsOntoEachPart() {
         let para = String(repeating: "あ", count: 2_000) + "。\n\n"
         let text = para + "黄前" + para

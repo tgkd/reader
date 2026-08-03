@@ -58,6 +58,28 @@ final class MeCabTokenizerTests: XCTestCase {
         XCTAssertTrue(rebuilt.contains("\n\n"), "paragraph break must be preserved")
     }
 
+    func testOutOfVocabularyKanjiCarriesNoReadingRatherThanItself() throws {
+        let tok = try makeTokenizer()
+        let tokens = tok.tokenize("彁だ")
+        let oov = try XCTUnwrap(tokens.first { $0.surface.contains("彁") },
+                                "expected a token containing 彁; got \(tokens.map(\.surface))")
+        XCTAssertNil(oov.reading,
+                     "IPADic has no reading for 彁, so MeCab-Swift hands back the surface")
+        XCTAssertNil(Furigana.place(surface: oov.surface, reading: oov.reading),
+                     "kanji must never be rendered as its own furigana")
+    }
+
+    func testNoReadingIsKanjiOrAnAsterisk() throws {
+        let tok = try makeTokenizer()
+        let input = "吾輩は猫である。彁という字は辞書に無い。ABC 123 「引用」"
+        for token in tok.tokenize(input) {
+            guard let reading = token.reading else { continue }
+            XCTAssertNotEqual(reading, "*", "\(token.surface) got MeCab's empty-feature marker")
+            XCTAssertFalse(reading.unicodeScalars.contains(where: Furigana.isIdeograph),
+                           "\(token.surface) → \(reading) is a surface fallback, not a reading")
+        }
+    }
+
     func testMeCabIntoMapperCleanAlignment() throws {
         let tok = try makeTokenizer()
         let input = "私は本を読みます"
