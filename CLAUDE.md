@@ -316,6 +316,10 @@ reader/
 │   │   └── Services/                #   AppServices wiring, TTS stack, Disk*Store, dictionary, importers, OCR
 │   └── ReaderTests/                 # app-target importer + OCR tests (runtime-generated fixtures)
 ├── docs/                            # char-token-sync.md (the algorithm), testflight.md, design-prompt.md
+│                                    #   2026-08-03-findings.md — why narration left eleven_v3, why
+│                                    #   OCR left gemini-2.5-flash, and how publisher ruby is read.
+│                                    #   Read it BEFORE re-opening any of those; it records what was
+│                                    #   measured, what was ruled out, and what is still unexplained.
 └── scripts/                         # build-compact-dict.sh, capture-alignment.mjs
     └── uitest/                      #   idb-driven simulator smoke tests (see its README)
 ```
