@@ -77,7 +77,8 @@ final class WorkerTTSService: TTSService {
               alignment.endTimes.count == alignment.characters.count else {
             throw WorkerError.badResponse
         }
-        guard alignment.characters == text.map(String.init) else {
+        guard alignment.characters.joined() == text,
+              alignment.characters.allSatisfy({ $0.count == 1 }) else {
             throw WorkerError.misalignedStream
         }
         let audioSeconds = Double(audio.count) / Self.mp3BytesPerSecond

@@ -168,6 +168,48 @@ final class WorkerTTSServiceTests: XCTestCase {
         }
     }
 
+    func testRejectsAnAlignmentPaddedWithAnEmptyElement() async {
+        let body = """
+        {"audio_base64":"\(Data(repeating: 0x55, count: 160_000).base64EncodedString())",\
+        "alignment":{"characters":["あ",""],\
+        "character_start_times_seconds":[0.0,0.5],\
+        "character_end_times_seconds":[0.5,10.0]}}
+
+        """
+        MockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200,
+                             httpVersion: nil, headerFields: nil)!, Data(body.utf8))
+        }
+        do {
+            _ = try await makeService().synthesize(SynthesisRequest(text: "あ", voice: .shizuka))
+            XCTFail("Expected an empty alignment element to throw")
+        } catch {
+            XCTAssertEqual(error as? WorkerTTSService.WorkerError, .misalignedStream,
+                           "an empty element would let its end time describe unspoken audio")
+        }
+    }
+
+    func testAcceptsAnAlignmentThatSplitsAVariationSequence() async throws {
+        let text = "葛\u{E0100}城"
+        let body = """
+        {"audio_base64":"\(Data(repeating: 0x55, count: 16_000).base64EncodedString())",\
+        "alignment":{"characters":["葛","\u{E0100}","城"],\
+        "character_start_times_seconds":[0.0,0.5,0.5],\
+        "character_end_times_seconds":[0.5,0.5,1.0]}}
+
+        """
+        MockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200,
+                             httpVersion: nil, headerFields: nil)!, Data(body.utf8))
+        }
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: text, voice: .shizuka))
+
+        XCTAssertEqual(out.alignment.characters.count, 3,
+                       "a scalar-split grapheme still describes the submitted text")
+        XCTAssertEqual(out.alignment.characters.joined(), text)
+    }
+
     func testAcceptsAStreamWhoseCharactersReproduceTheText() async throws {
         MockURLProtocol.handler = alignedResponse("吾輩は猫")
         let out = try await makeService().synthesize(

@@ -340,6 +340,8 @@ final class ReaderModel {
         }
 
         var alignedTime: Double { endTimes.last ?? 0 }
+
+        var describedChars: Int { characters.joined().count }
     }
 
     private static let charsPerSecondOfSpeech = 3.5
@@ -405,9 +407,8 @@ final class ReaderModel {
         p.startTimes.append(contentsOf: alignment.startTimes)
         p.endTimes.append(contentsOf: alignment.endTimes)
         generatedTime = Double(p.source.byteCount) / Self.mp3BytesPerSecond
-        let totalChars = currentChapter?.text.count ?? 0
-        if totalChars > 0 {
-            synthesisProgress = min(1, Double(p.characters.count) / Double(totalChars))
+        if p.totalChars > 0 {
+            synthesisProgress = min(1, Double(p.describedChars) / Double(p.totalChars))
         }
 
         if !p.isPlaying {
@@ -424,7 +425,7 @@ final class ReaderModel {
     }
 
     private func estimatedTotal(_ p: Progressive) -> Double {
-        let generatedChars = p.characters.count
+        let generatedChars = p.describedChars
         guard generatedChars > 0, p.totalChars > 0, p.alignedTime > 0 else { return duration }
         return p.alignedTime * Double(p.totalChars) / Double(generatedChars)
     }
@@ -747,7 +748,7 @@ final class ReaderModel {
             let v = sc.value
             return (0x3041...0x3096).contains(v)
                 || (0x30A1...0x30FA).contains(v)
-                || (0x4E00...0x9FFF).contains(v)
+                || Furigana.isIdeograph(sc)
                 || (0x0030...0x0039).contains(v)
                 || (0x0041...0x005A).contains(v) || (0x0061...0x007A).contains(v)
         }
