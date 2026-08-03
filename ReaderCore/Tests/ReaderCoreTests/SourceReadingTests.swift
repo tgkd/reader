@@ -121,6 +121,37 @@ final class SourceReadingTests: XCTestCase {
         XCTAssertEqual(out.map(\.dictionaryForm), tokens.map(\.dictionaryForm))
     }
 
+    /// Ruby finer than the tokenizer's segmentation: the book writes 秀一 as two pairs
+    /// (秀/しゅう, 一/いち) while MeCab keeps 秀一 whole and reads it ひでかず. The run
+    /// tiles the token exactly, so the concatenated reading wins — otherwise per-character
+    /// ruby loses against any coarser token and a character's name is read wrong.
+    func testConcatenatesAnnotationsThatTileOneToken() throws {
+        let text = "秀一"
+        let tokens = try MeCabTokenizer().tokenize(text)
+        try XCTSkipUnless(tokens.count == 1 && tokens[0].surface == "秀一",
+                          "this test describes the case where MeCab keeps 秀一 whole")
+        let out = SourceReadingOverlay.apply([
+            SourceReading(start: 0, length: 1, surface: "秀", reading: "しゅう"),
+            SourceReading(start: 1, length: 1, surface: "一", reading: "いち"),
+        ], to: tokens, text: text)
+
+        XCTAssertEqual(out.map(\.surface), tokens.map(\.surface), "segmentation must not change")
+        XCTAssertEqual(out.first?.reading, "しゅういち")
+        XCTAssertEqual(out.map(\.dictionaryForm), tokens.map(\.dictionaryForm))
+    }
+
+    /// A run that only covers PART of a token must not be applied — a partial reading is
+    /// worse than the tokenizer's whole one.
+    func testDoesNotApplyARunThatUnderfillsAToken() throws {
+        let text = "秀一"
+        let tokens = try MeCabTokenizer().tokenize(text)
+        try XCTSkipUnless(tokens.count == 1, "this test describes the single-token case")
+        let out = SourceReadingOverlay.apply(
+            [SourceReading(start: 0, length: 1, surface: "秀", reading: "しゅう")],
+            to: tokens, text: text)
+        XCTAssertEqual(out, tokens)
+    }
+
     /// An annotation whose base spans several tokens is carried but not applied:
     /// putting サファイア on 緑 alone would leave 輝 bare, and giving both tokens the
     /// same interval makes `SpanTimeline.index(at:)` — a rightmost search — skip the

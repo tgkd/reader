@@ -31,7 +31,7 @@ struct EPUBImporter: DocumentImporter {
 
     func chapters() async throws -> [Chapter] {
         guard let archive = Archive(url: url, accessMode: .read) else { throw ImportError.unreadable }
-        let slots = try classify(archive)
+        let slots = repairFlattenedKana(in: try classify(archive))
 
         // OCR every image-only spine item's images, in order — but only when a
         // recognizer is present. Non-subscribers skip them, so an image-only book
@@ -117,6 +117,40 @@ struct EPUBImporter: DocumentImporter {
     /// was for (久美子, 希美, 黄前, 北宇治, 緑輝) — are kept: a multi-kanji proper noun
     /// does not change reading with context, which is exactly why the publisher only
     /// bothered to annotate it once.
+    /// Undo a source-side flattening of small kana, across the WHOLE book.
+    ///
+    /// The decision needs every reading at once — one chapter's worth cannot tell a
+    /// flattened file from a passage that happens to contain no 小書き kana — so it
+    /// happens here, before the readings are indexed or propagated.
+    ///
+    /// Only fires on `KanaRepair.looksFlattened`, and even then the tokenizer overrules
+    /// the result on any word it knows (`SourceReadingOverlay.preferred`), so a bad
+    /// restoration on ordinary vocabulary does not reach the page.
+    private func repairFlattenedKana(in slots: [Slot]) -> [Slot] {
+        let all = slots.flatMap { slot -> [String] in
+            if case .text(_, _, let readings, _) = slot { return readings.map(\.reading) }
+            return []
+        }
+        guard KanaRepair.looksFlattened(all) else { return slots }
+
+        return slots.map { slot in
+            guard case .text(let title, let text, let readings, let groups) = slot else { return slot }
+            return .text(
+                title: title,
+                text: text,
+                readings: readings.map {
+                    SourceReading(start: $0.start, length: $0.length, surface: $0.surface,
+                                  reading: KanaRepair.restoreSmallKana($0.reading))
+                },
+                groups: groups.map { g in
+                    HTMLText.RubyGroup(pairs: g.pairs.map {
+                        SourceReading(start: $0.start, length: $0.length, surface: $0.surface,
+                                      reading: KanaRepair.restoreSmallKana($0.reading))
+                    })
+                })
+        }
+    }
+
     private func readingIndex(of slots: [Slot]) -> [String: [SourceReading]] {
         var byWord: [String: Set<String>] = [:]
         var split: [String: [SourceReading]] = [:]

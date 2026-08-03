@@ -63,16 +63,25 @@ public extension Array where Element == SourceReading {
 /// belong.
 public enum SourceReadingOverlay {
 
-    /// Replace `reading` on every token an annotation covers EXACTLY.
+    /// Replace `reading` on every token the annotations cover EXACTLY.
     ///
-    /// Deliberately exact-match only. An annotation that spans several tokens
-    /// (`緑輝` is one ruby base but two MeCab tokens) is left alone here: putting its
-    /// reading on the first token would render サファイア over 緑 and leave 輝 bare,
-    /// and spreading one interval across several tokens gives them all the same
-    /// start — which `SpanTimeline.index(at:)`, a rightmost search, resolves to the
-    /// last of them, so the earlier ones would never highlight. Rendering a ruby base
-    /// that spans tokens needs the renderer to take ranges rather than tokens; until
-    /// then those annotations are carried but not applied.
+    /// A token is rewritten only when one or more consecutive annotations TILE it with
+    /// no gap and no overhang. That covers the two shapes real markup produces:
+    ///
+    ///   • one annotation per token — 黄/おう then 前/まえ, which MeCab also splits;
+    ///   • several annotations inside one token — the book writes 秀一 as 秀/しゆう plus
+    ///     一/いち while MeCab keeps 秀一 whole and reads it ひでかず. Concatenating the
+    ///     run gives しゅういち. Before this, per-character ruby simply lost against any
+    ///     token coarser than itself, and a character's name was read wrong.
+    ///
+    /// The reverse — ONE annotation spanning SEVERAL tokens, as with 緑輝 (one ruby base,
+    /// two MeCab tokens, read サファイア) — is still not applied. Putting the reading on
+    /// the first token would render サファイア over 緑 and leave 輝 bare, and spreading
+    /// one interval across several tokens gives them all the same start, which
+    /// `SpanTimeline.index(at:)` — a rightmost search — resolves to the last of them, so
+    /// the earlier ones would never highlight. That case needs the renderer to take
+    /// ranges rather than tokens; until then those annotations are carried, not applied.
+    /// Tiling has no such problem: it writes ONE token's reading and changes no spans.
     ///
     /// `dictionaryForm` is untouched: the lemma stays MeCab's, so tap-to-define keeps
     /// looking up 黄前 rather than おうまえ.
@@ -83,31 +92,63 @@ public enum SourceReadingOverlay {
         guard !valid.isEmpty else { return tokens }
 
         // Raw offset → normalized offset. NFKC is applied to the whole string
-        // downstream, so a prefix's normalized length is where that prefix ends in
-        // the tokens' coordinate system.
+        // downstream, so a prefix's normalized length is where that prefix ends in the
+        // tokens' coordinate system. Memoized because adjacent annotations share an
+        // endpoint, and the prefix scan is the expensive part of opening a chapter.
         let raw = Array(text)
-        var normalizedStart: [Int: Int] = [:]
-        for r in valid {
-            normalizedStart[r.start] = Normalize.nfkc(String(raw[0..<r.start])).count
+        var normalizedCache: [Int: Int] = [:]
+        func normalized(_ rawOffset: Int) -> Int {
+            if let hit = normalizedCache[rawOffset] { return hit }
+            let n = Normalize.nfkc(String(raw[0..<rawOffset])).count
+            normalizedCache[rawOffset] = n
+            return n
         }
 
-        // Token index by normalized start offset.
-        var offset = 0
-        var startOfToken: [Int: Int] = [:]
-        for (i, t) in tokens.enumerated() {
-            startOfToken[offset] = i
-            offset += t.surface.count
-        }
+        // Annotations keyed by where they begin in the tokens' coordinate system.
+        var startingAt: [Int: (end: Int, reading: SourceReading)] = [:]
+        for r in valid { startingAt[normalized(r.start)] = (normalized(r.end), r) }
 
         var out = tokens
-        for r in valid {
-            guard let nStart = normalizedStart[r.start],
-                  let ti = startOfToken[nStart],
-                  out[ti].surface == Normalize.nfkc(r.surface) else { continue }
-            out[ti] = Token(surface: out[ti].surface,
-                            reading: r.reading,
-                            dictionaryForm: out[ti].dictionaryForm)
+        var offset = 0
+        for (i, token) in tokens.enumerated() {
+            let start = offset
+            let end = offset + token.surface.count
+            offset = end
+
+            // Walk annotations forward from the token's start. They must land exactly on
+            // its end — a run that overshoots belongs to a coarser span than this token.
+            var position = start
+            var parts: [SourceReading] = []
+            while position < end, let hit = startingAt[position], hit.end <= end {
+                parts.append(hit.reading)
+                position = hit.end
+            }
+            guard position == end, !parts.isEmpty,
+                  Normalize.nfkc(parts.map(\.surface).joined()) == token.surface else { continue }
+
+            out[i] = Token(surface: token.surface,
+                           reading: preferred(book: parts.map(\.reading).joined(),
+                                              tokenizer: token.reading),
+                           dictionaryForm: token.dictionaryForm)
         }
         return out
+    }
+
+    /// Which of the two readings to trust when both describe the same token.
+    ///
+    /// The book wins by default — that is the whole point of reading its ruby. But when
+    /// the two agree apart from small kana they are the SAME reading of the same word,
+    /// and then the tokenizer's spelling is authoritative: a book from a flattened
+    /// source writes 饒舌 as じようぜつ where MeCab has じょうぜつ, and taking the book's
+    /// there replaces a correct reading with a broken one.
+    ///
+    /// This also bounds `KanaRepair.restoreSmallKana`. Restoring is a judgement — しよう
+    /// is しょう for 少 but しよう for 使用 — and on any word the tokenizer knows, this
+    /// comparison silently corrects a wrong restoration, in either direction, because it
+    /// compares in the flattened space where both spellings look the same.
+    static func preferred(book: String, tokenizer: String?) -> String {
+        guard let tokenizer, !tokenizer.isEmpty,
+              KanaRepair.flattened(tokenizer) == KanaRepair.flattened(book) else { return book }
+        return tokenizer
     }
 }
