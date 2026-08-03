@@ -810,16 +810,36 @@ final class ReaderModel {
     /// silence after the narration ended. Cached chapters never showed it because
     /// `buildPlayback` passes the exact byte count.
     ///
-    /// A boundary observer rather than the display link: the link is a foreground-only
-    /// clock, and a chapter has to end correctly while backgrounded.
+    /// A PERIODIC observer, not a boundary one, and not the display link.
+    ///
+    /// Not the display link: it is a foreground-only clock and a chapter has to end
+    /// correctly while backgrounded.
+    ///
+    /// Not a boundary observer — this was the first attempt and it cannot work here. A
+    /// boundary fires only when the playhead CROSSES it, and the only time worth
+    /// watching is the end of the real audio, which is exactly where `AVPlayer` runs out
+    /// of bytes and stops advancing. The playhead arrives at the boundary and never
+    /// passes it, so the observer never fires and the player sits in silence for the
+    /// whole phantom tail. Measured on a 1,197-character chapter: 427 s advertised
+    /// against 300 s of real audio, so it sat there for over two minutes.
+    ///
+    /// A periodic observer has no such dependency — it reports wherever the playhead is,
+    /// including when it has stopped, so reaching the end is detected whether `AVPlayer`
+    /// stalls there or plays past it into silence.
     private func endPlaybackAtRealEnd(_ seconds: Double) {
         guard let player, seconds > 0 else { return }
         if let endOfAudioObserver { player.removeTimeObserver(endOfAudioObserver) }
-        let end = NSValue(time: CMTime(seconds: seconds, preferredTimescale: 600))
-        endOfAudioObserver = player.addBoundaryTimeObserver(
-            forTimes: [end], queue: .main
-        ) { [weak self] in
-            MainActor.assumeIsolated { self?.handlePlaybackFinished(successfully: true) }
+        endOfAudioObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
+        ) { [weak self] time in
+            MainActor.assumeIsolated {
+                guard let self, self.isPlaying else { return }
+                // A small margin: the last sample can land fractionally short of the
+                // computed duration, and waiting for exact equality is the same trap
+                // as the boundary observer.
+                guard time.seconds >= seconds - 0.1 else { return }
+                self.handlePlaybackFinished(successfully: true)
+            }
         }
     }
 
@@ -1169,6 +1189,12 @@ final class ReaderModel {
             deactivateSession()
             return
         }
+        // Stop the engine, not just the UI. A progressively generated chapter is
+        // advertised longer than it is (see `endPlaybackAtRealEnd`), so an unpaused
+        // player keeps running through the phantom tail after the reader has called the
+        // chapter finished — and would eventually fire `didPlayToEndTime` for a second,
+        // spurious finish.
+        player?.pause()
         currentTime = duration
         activeIndex = highlightIndex(at: duration)
         persistProgress(completed: true)
