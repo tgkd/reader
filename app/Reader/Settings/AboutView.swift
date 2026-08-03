@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// The About screen: app mark + version, product links (website / terms /
-/// privacy / contact), and the attributions the bundled data requires
-/// (JMdict via EDRDG, MeCab + IPADic), plus the AI-accuracy note. Presented
-/// as a sheet from Settings.
 struct AboutView: View {
     @Environment(\.theme) private var theme
 
@@ -13,7 +9,6 @@ struct AboutView: View {
     private static let contact = URL(string: "mailto:jisho_ai@proton.me")!
     private static let jmdict = URL(string: "https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project")!
 
-    /// Marketing version + build from the bundle (never hardcoded).
     private var version: String {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
         let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
@@ -44,8 +39,6 @@ struct AboutView: View {
         }
     }
 
-    /// App mark + name + bundle version, centered — the identity block the
-    /// reference About screens leave out.
     private var header: some View {
         VStack(spacing: 8) {
             HStack(spacing: 9) {

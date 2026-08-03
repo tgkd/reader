@@ -3,21 +3,11 @@ import CoreText
 import UIKit
 @testable import Reader
 
-/// CoreText drops a `CTRubyAnnotation` whose base is split across a line break, so
-/// a word that lands at a line end silently loses its furigana — and regains it at
-/// a different font size or orientation. `RubyContentView.wordJoined` forbids the
-/// break instead. This is invisible in a screenshot of any single layout, so it is
-/// pinned here against the real typesetter rather than by eye.
 final class RubyLineBreakTests: XCTestCase {
-
     private static let base = "無い"
-    /// `無い` is preceded by enough text that sweeping the width slides the break
-    /// through it.
     private static let lead = "名前はまだ"
     private static let tail = "。どこで"
 
-    /// Lays out `lead + base + tail` at `width` and reports whether a line boundary
-    /// falls strictly inside the `base` range.
     private func splitsBase(width: CGFloat, joinBase: Bool) -> Bool {
         let font = UIFont(name: "HiraMinProN-W3", size: 34) ?? .systemFont(ofSize: 34)
         let rubyFont = UIFont(name: "HiraMinProN-W3", size: 17) ?? .systemFont(ofSize: 17)
@@ -49,14 +39,11 @@ final class RubyLineBreakTests: XCTestCase {
 
     private var widths: [CGFloat] { stride(from: 180.0, through: 320.0, by: 10.0).map { $0 } }
 
-    /// The control: without joining, some width DOES break inside the ruby base.
-    /// If this ever fails, CoreText's behaviour changed and the workaround can go.
     func testUnjoinedBaseSplitsAtSomeWidth() {
         XCTAssertTrue(widths.contains { splitsBase(width: $0, joinBase: false) },
                       "Expected CoreText to break inside the ruby base at some width")
     }
 
-    /// The fix: with WORD JOINER, no width breaks inside it.
     func testJoinedBaseNeverSplits() {
         for width in widths {
             XCTAssertFalse(splitsBase(width: width, joinBase: true),
@@ -64,8 +51,6 @@ final class RubyLineBreakTests: XCTestCase {
         }
     }
 
-    /// The joiner must be invisible to text, not just to layout: stripping it
-    /// returns the original, and single-character tokens are left untouched.
     func testJoinerIsPurelyAdditive() {
         let joined = RubyContentView.wordJoined("見当")
         XCTAssertEqual(joined.replacingOccurrences(of: "\u{2060}", with: ""), "見当")

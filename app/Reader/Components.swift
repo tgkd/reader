@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// A right-pointing play triangle (transport + dictionary "play word").
 struct PlayTriangle: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
@@ -11,4 +10,3 @@ struct PlayTriangle: Shape {
         return p
     }
 }
-

@@ -1,12 +1,5 @@
 import SwiftUI
 
-/// Reading preferences exposed in Settings. The face applies to the reader body,
-/// the Japanese content titles (library rows, reader title), AND the dictionary
-/// card; the size applies to the reader body only. The wordmark and UI labels keep Mincho.
-
-/// Reading typeface. Each maps to a system Japanese font's PostScript name;
-/// `UIFont(name:)` falls back to the system font if a face is unavailable.
-/// Display names are localized (chrome).
 enum ReadingFont: String, CaseIterable, Codable, Identifiable {
     case mincho, gothic, rounded
 
@@ -14,14 +7,12 @@ enum ReadingFont: String, CaseIterable, Codable, Identifiable {
 
     var psName: String {
         switch self {
-        case .mincho:  return "HiraMinProN-W3"   // serif (the original default)
-        case .gothic:  return "HiraKakuProN-W3"  // sans
-        case .rounded: return "HiraMaruProN-W4"  // rounded sans
+        case .mincho:  return "HiraMinProN-W3"
+        case .gothic:  return "HiraKakuProN-W3"
+        case .rounded: return "HiraMaruProN-W4"
         }
     }
 
-    /// The face as a SwiftUI `Font` at `size` — for content titles drawn outside
-    /// the CoreText reader (library rows, the reader's title bar).
     func font(_ size: CGFloat) -> Font { .custom(psName, size: size) }
 
     var displayName: String {
@@ -33,8 +24,6 @@ enum ReadingFont: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-/// Reading text size — a multiplier on the reader's base point size
-/// (`RubyTextView.fontSize`).
 enum ReadingSize: String, CaseIterable, Codable, Identifiable {
     case small, medium, large
 
@@ -57,9 +46,6 @@ enum ReadingSize: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-/// Reader writing direction — vertical (縦書き) or horizontal (横書き). A global
-/// preference persisted in `AppModel`; the reader's quick-toggle and the Settings
-/// picker both drive it. `tate` (vertical) is the default for Japanese prose.
 enum Orientation: String, CaseIterable, Codable, Identifiable {
     case tate, yoko
 

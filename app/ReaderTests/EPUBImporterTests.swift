@@ -2,15 +2,12 @@ import XCTest
 import ReaderCore
 @testable import Reader
 
-/// Exercises the real `EPUBImporter` over generated EPUBs: spine ordering,
-/// `linear="no"` skipping, `<head>` isolation, entity decoding, and error cases.
 final class EPUBImporterTests: XCTestCase {
     private func chapters(_ url: URL) async throws -> [Chapter] {
         try await EPUBImporter(url: url).chapters()
     }
 
     func testSpineDeterminesReadingOrderNotManifestOrder() async throws {
-        // Manifest declares b, a, c; spine asks for a, b, c — chapters must follow spine.
         let manifest = [
             Fixture.EPUBItem(id: "b", href: "b.xhtml", content: Fixture.xhtml(body: "<p>BRAVO</p>")),
             Fixture.EPUBItem(id: "a", href: "a.xhtml", content: Fixture.xhtml(body: "<p>ALPHA</p>")),
@@ -35,7 +32,6 @@ final class EPUBImporterTests: XCTestCase {
     }
 
     func testLinearNoItemsAreSkipped() async throws {
-        // Cover/footnotes marked linear="no" are auxiliary — not narrated chapters.
         let manifest = [
             Fixture.EPUBItem(id: "cover", href: "cover.xhtml", content: Fixture.xhtml(body: "<p>COVER</p>")),
             Fixture.EPUBItem(id: "ch1", href: "ch1.xhtml", content: Fixture.xhtml(body: "<p>BODY1</p>")),
@@ -51,7 +47,6 @@ final class EPUBImporterTests: XCTestCase {
     }
 
     func testHeadMetadataDoesNotLeakIntoChapter() async throws {
-        // <head><title> must never appear in the extracted body text.
         let url = try Fixture.simpleEPUB(["本文だけ"])
         let result = try await chapters(url)
         XCTAssertEqual(result.count, 1)
@@ -67,9 +62,9 @@ final class EPUBImporterTests: XCTestCase {
         let text = try await chapters(url)[0].text
         XCTAssertTrue(text.contains("A&B"), text)
         XCTAssertTrue(text.contains("<tag>"), text)
-        XCTAssertTrue(text.contains("あ"), text)      // &#x3042;
-        XCTAssertTrue(text.contains("x y"), text)     // &nbsp; → space
-        XCTAssertFalse(text.contains("&amp;"), text)  // no double-encoding left behind
+        XCTAssertTrue(text.contains("あ"), text)
+        XCTAssertTrue(text.contains("x y"), text)
+        XCTAssertFalse(text.contains("&amp;"), text)
     }
 
     func testBlockTagsBecomeLineBreaks() async throws {
@@ -82,9 +77,6 @@ final class EPUBImporterTests: XCTestCase {
     }
 
     func testRubyReadingsAreNotInlined() async throws {
-        // <rt>/<rp> hold the furigana reading; keeping their CONTENT would inline it
-        // into the body (漢字かんじ), doubling TTS/tokenization. Only the base survives;
-        // the reader draws its own furigana from MeCab.
         let body = "<p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby>は難しい</p>"
         let url = try Fixture.epub(
             manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
@@ -94,9 +86,6 @@ final class EPUBImporterTests: XCTestCase {
         XCTAssertFalse(text.contains("かんじ"), text)
     }
 
-    /// The base still stands alone in the text — but the reading is no longer thrown
-    /// away. IPADic does not know proper nouns, which is exactly where a publisher
-    /// annotates: this book reads 黄前 as おうまえ where MeCab infers きぜん.
     func testKeepsRubyReadingsAsSourceAnnotations() async throws {
         let body = "<p><ruby><rb>黄</rb><rt>おう</rt><rb>前</rb><rt>まえ</rt></ruby>久美子</p>"
         let url = try Fixture.epub(
@@ -105,18 +94,14 @@ final class EPUBImporterTests: XCTestCase {
         let chapter = try await chapters(url)[0]
 
         XCTAssertEqual(chapter.text, "黄前久美子", "the reading must not be inlined")
-        // Pairing is preserved, not flattened: 黄→おう and 前→まえ each line up with a
-        // MeCab token, where a single 黄前→おうまえ would span two and match neither.
         XCTAssertEqual(chapter.sourceReadings.map(\.surface), ["黄", "前"])
         XCTAssertEqual(chapter.sourceReadings.map(\.reading), ["おう", "まえ"])
-        // Offsets index the emitted text, so they must survive the whole strip chain.
         for r in chapter.sourceReadings {
             let chars = Array(chapter.text)
             XCTAssertEqual(String(chars[r.start..<r.end]), r.surface)
         }
     }
 
-    /// HTML5's implicit base — no `<rb>` — is the other shape real EPUBs use.
     func testKeepsRubyWithAnImplicitBase() async throws {
         let body = "<p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby>は難しい</p>"
         let url = try Fixture.epub(
@@ -131,9 +116,6 @@ final class EPUBImporterTests: XCTestCase {
         XCTAssertEqual(chapter.sourceReadings.first?.start, 0)
     }
 
-    /// Mono-ruby without `<rb>`: one element, one implicit pair per character. Every
-    /// pair has to be read — taking only the first would emit 漢 and silently delete
-    /// 字 from the chapter, which no later stage could ever recover.
     func testKeepsEveryPairOfAMultiSegmentImplicitRuby() async throws {
         let body = "<p><ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>を読む</p>"
         let url = try Fixture.epub(
@@ -150,7 +132,6 @@ final class EPUBImporterTests: XCTestCase {
         }
     }
 
-    /// Text trailing the last annotation inside the same element is still text.
     func testKeepsUnannotatedTailOfAnImplicitRuby() async throws {
         let body = "<p><ruby>黄<rt>おう</rt>前久美子</ruby></p>"
         let url = try Fixture.epub(
@@ -162,13 +143,6 @@ final class EPUBImporterTests: XCTestCase {
         XCTAssertEqual(chapter.sourceReadings.map(\.surface), ["黄"])
     }
 
-    /// Offsets are read off the FINISHED text, so everything the strip chain does
-    /// afterwards — entity decoding, tag removal, whitespace collapsing, trimming —
-    /// has to leave them correct.
-    /// A book annotates a name once and then uses it hundreds of times, so a reading
-    /// is only worth having if it reaches the unannotated occurrences — including in
-    /// chapters that carry no ruby of their own, which is where the character-list
-    /// page lives.
     func testMultiCharacterReadingsPropagateAcrossTheBook() async throws {
         let annotated = "<p><ruby><rb>黄</rb><rt>おう</rt><rb>前</rb><rt>まえ</rt></ruby>が来た</p>"
         let bare = "<p>黄前久美子</p>"
@@ -187,10 +161,6 @@ final class EPUBImporterTests: XCTestCase {
         XCTAssertEqual(second.sourceReadings.map(\.reading), ["おう", "まえ"])
     }
 
-    /// Uniqueness among annotations does not make a reading context-free, and for one
-    /// kanji it almost never is — a publisher rubies a lone kanji exactly where its
-    /// reading is unusual. Propagating it would state a wrong reading with the book's
-    /// authority: 長 ruby'd once as た (長ける) would then claim 部長 reads ぶた.
     func testSingleCharacterReadingsDoNotPropagate() async throws {
         let annotated = "<p><ruby><rb>長</rb><rt>た</rt></ruby>けている</p>"
         let elsewhere = "<p>部長は背が長い</p>"
@@ -202,9 +172,7 @@ final class EPUBImporterTests: XCTestCase {
             spine: [Fixture.SpineRef("c0"), Fixture.SpineRef("c1")])
         let all = try await chapters(url)
 
-        // Its own site still keeps the reading the markup actually placed there.
         XCTAssertEqual(all[0].sourceReadings.map(\.reading), ["た"])
-        // Everywhere else is left to the tokenizer.
         XCTAssertEqual(all[1].text, "部長は背が長い")
         XCTAssertEqual(all[1].sourceReadings, [],
                        "a one-kanji reading must not be asserted over other contexts")
@@ -223,7 +191,6 @@ final class EPUBImporterTests: XCTestCase {
                        "offset drifted; text was \(chapter.text.debugDescription)")
     }
 
-    /// A book with no ruby must be untouched — every other format relies on that.
     func testChaptersWithoutRubyCarryNoAnnotations() async throws {
         let url = try Fixture.epub(
             manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml",
@@ -245,7 +212,6 @@ final class EPUBImporterTests: XCTestCase {
     }
 
     func testNestedAndPercentEncodedHrefResolves() async throws {
-        // href in a subdir with a percent-encoded space — the importer decodes it.
         let manifest = [Fixture.EPUBItem(id: "c0", href: "text/ch%201.xhtml",
                                          content: Fixture.xhtml(body: "<p>NESTED</p>"))]
         let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")])
@@ -265,7 +231,7 @@ final class EPUBImporterTests: XCTestCase {
 
     func testEmptySpineThrowsEmpty() async throws {
         let manifest = [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: "<p>X</p>"))]
-        let url = try Fixture.epub(manifest: manifest, spine: [])   // declared but no itemrefs
+        let url = try Fixture.epub(manifest: manifest, spine: [])
         do {
             _ = try await chapters(url)
             XCTFail("expected empty")
@@ -273,8 +239,6 @@ final class EPUBImporterTests: XCTestCase {
             XCTAssertEqual(error as? ImportError, .empty)
         }
     }
-
-    // MARK: - TOC chapter titles (EPUB3 nav / EPUB2 NCX)
 
     func testNavTOCTitlesMapToSpineChapters() async throws {
         let manifest = [
@@ -322,7 +286,6 @@ final class EPUBImporterTests: XCTestCase {
     }
 
     func testTOCFragmentHrefsMapToFileFirstWins() async throws {
-        // Two anchors into one file: the chapter takes the FIRST (chapter-opening) title.
         let manifest = [
             Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: "<p>ONE</p>")),
             Fixture.EPUBItem(id: "nav", href: "nav.xhtml",
@@ -336,7 +299,6 @@ final class EPUBImporterTests: XCTestCase {
     }
 
     func testTOCHrefsResolveRelativeToTOCDirectory() async throws {
-        // Nav doc in a subdirectory: its hrefs are relative to ITS directory, not the OPF's.
         let manifest = [
             Fixture.EPUBItem(id: "c0", href: "text/c0.xhtml", content: Fixture.xhtml(body: "<p>ONE</p>")),
             Fixture.EPUBItem(id: "nav", href: "nav/toc.xhtml",
@@ -363,7 +325,6 @@ final class EPUBImporterTests: XCTestCase {
     }
 
     func testMissingTOCYieldsNilTitles() async throws {
-        // No nav doc, no NCX — every chapter stays untitled (regression guard).
         let result = try await chapters(try Fixture.simpleEPUB(["ONE", "TWO"]))
         XCTAssertEqual(result.map(\.title), [nil, nil])
     }
@@ -380,10 +341,6 @@ final class EPUBImporterTests: XCTestCase {
         XCTAssertEqual(result.map(\.title), ["第一章&序"])
     }
 
-    // MARK: - OCR fallback (image-only spine items)
-
-    /// A spine item whose text is baked into an `<img>` is OCR'd; recovered text becomes
-    /// the chapter, in spine order. The referenced image is pulled from the archive.
     func testImageOnlySpineItemsAreOCRdInOrder() async throws {
         let url = try Fixture.imageEPUB(pages: 2)
         let stub = StubRecognizer(perImage: ["認識A", "認識B"])
@@ -392,9 +349,6 @@ final class EPUBImporterTests: XCTestCase {
         XCTAssertEqual(stub.imageCount, 2)
     }
 
-    /// Non-subscriber (no recognizer): an image-only book recovers no text and throws
-    /// `.ocrUnavailable` — the Membership prompt (mirrors PDFImporter), not the
-    /// misleading "file is empty". A genuinely empty book still throws `.empty`.
     func testImageOnlyEPUBWithNoRecognizerThrowsOCRUnavailable() async throws {
         let url = try Fixture.imageEPUB(pages: 2)
         do {
@@ -405,8 +359,6 @@ final class EPUBImporterTests: XCTestCase {
         }
     }
 
-    /// Text pages extract locally; image pages OCR — interleaved, in spine order. Only
-    /// the image page invokes the recognizer.
     func testMixedTextAndImagePagesInterleaveInOrder() async throws {
         let manifest = [
             Fixture.EPUBItem(id: "t0", href: "t0.xhtml", content: Fixture.xhtml(body: "<p>テキスト頁</p>")),
@@ -419,10 +371,9 @@ final class EPUBImporterTests: XCTestCase {
         let stub = StubRecognizer(perImage: ["画像頁"])
         let result = try await EPUBImporter(url: url, recognizer: stub).chapters()
         XCTAssertEqual(result.map(\.text), ["テキスト頁", "画像頁", "最終頁"])
-        XCTAssertEqual(stub.imageCount, 1)   // only the image page hit OCR
+        XCTAssertEqual(stub.imageCount, 1)
     }
 
-    /// OCR recovering nothing from the image pages throws `.ocrFailed` (mirrors PDF).
     func testImageEPUBOCRYieldingNothingThrowsOCRFailed() async throws {
         let url = try Fixture.imageEPUB(pages: 2)
         let stub = StubRecognizer(perImage: ["", "   "])
@@ -434,19 +385,16 @@ final class EPUBImporterTests: XCTestCase {
         }
     }
 
-    /// The probe counts image pages without OCR; text pages don't count.
     func testOCRCandidateCountCountsImagePagesOnly() async throws {
         XCTAssertEqual(EPUBImporter(url: try Fixture.imageEPUB(pages: 3)).ocrCandidateCount(), 3)
         XCTAssertEqual(EPUBImporter(url: try Fixture.simpleEPUB(["本文"])).ocrCandidateCount(), 0)
     }
 
-    /// More image pages than the OCR window → multiple recognize passes; recovered text
-    /// stays in global page order across windows (bounded-memory windowing).
     func testEPUBOCRWindowingPreservesOrderAcrossWindows() async throws {
         let url = try Fixture.imageEPUB(pages: 10)
         let counter = OCRCounter()
         let result = try await EPUBImporter(url: url, recognizer: counter).chapters()
         XCTAssertEqual(result.map(\.text), (0..<10).map { "P\($0)" })
-        XCTAssertGreaterThanOrEqual(counter.calls, 2)   // processed in >1 window
+        XCTAssertGreaterThanOrEqual(counter.calls, 2)
     }
 }

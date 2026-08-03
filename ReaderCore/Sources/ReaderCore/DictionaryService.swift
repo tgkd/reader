@@ -1,12 +1,9 @@
 import Foundation
 
-/// One dictionary entry for tap-to-define, shaped from jisho-seed.db
-/// (`words` + `meanings` + optional `examples`). The reader resolves a token's
-/// `dictionary_form` to one of these.
 public struct DictionaryEntry: Identifiable, Equatable {
-    public let id: Int          // words.id (or a stable id for seeded mock entries)
-    public let word: String     // headword — kanji form if any, else kana
-    public let reading: String  // display reading (katakana for loanwords — never reading_hiragana)
+    public let id: Int
+    public let word: String
+    public let reading: String
     public let priorityRank: Int
     public let senses: [Sense]
     public let example: Example?
@@ -22,9 +19,6 @@ public struct DictionaryEntry: Identifiable, Equatable {
     }
 }
 
-/// One JMdict sense: a set of glosses sharing a part-of-speech. (In the DB each
-/// `meanings` row is one sense; glosses are joined by "; ", POS by ", ", and POS
-/// is empty on continuation senses — carry the previous one forward.)
 public struct Sense: Equatable {
     public let glosses: [String]
     public let partsOfSpeech: [String]
@@ -39,7 +33,6 @@ public struct Sense: Equatable {
     }
 }
 
-/// An example sentence; sparse in the data (~5% of entries), so always optional.
 public struct Example: Equatable {
     public let japanese: String
     public let english: String
@@ -52,10 +45,6 @@ public struct Example: Equatable {
     }
 }
 
-/// Resolves a MeCab `dictionary_form` (+ the reading from the SAME tokenize pass,
-/// to disambiguate homographs) to a dictionary entry. Base UI uses an in-memory
-/// mock; production swaps in a read-only SQLite impl over the bundled
-/// jisho-seed.db (Phase 5) — same protocol, no UI change.
 public protocol DictionaryService {
     func lookup(dictionaryForm: String, reading: String?) -> DictionaryEntry?
 }

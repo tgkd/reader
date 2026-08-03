@@ -1,11 +1,7 @@
 import XCTest
 @testable import ReaderCore
 
-/// Phase 3 of the sync spike: proves the char→token mapper on REAL ElevenLabs
-/// alignment data. Auto-skips until a fixture exists. Capture one with:
-///   ELEVENLABS_KEY=sk_... node scripts/capture-alignment.mjs "…" sample
 final class AlignmentFixtureTests: XCTestCase {
-
     private struct Fixture: Decodable {
         let text: String
         let alignment: Alignment

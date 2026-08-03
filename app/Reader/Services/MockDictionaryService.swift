@@ -1,11 +1,6 @@
 import Foundation
 import ReaderCore
 
-/// In-memory dictionary for base UI, seeded from the Yomi design's sample
-/// entries and keyed by `dictionary_form` (so tapping an inflected surface —
-/// 生まれた, つかぬ — resolves to its lemma 生まれる / つく). Production swaps in a
-/// read-only SQLite impl over jisho-seed.db behind the same `DictionaryService`
-/// protocol; the headword/reading/senses shape already matches that schema.
 final class MockDictionaryService: DictionaryService {
     private let entries: [String: DictionaryEntry]
 

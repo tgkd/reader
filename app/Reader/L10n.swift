@@ -1,31 +1,19 @@
 import Foundation
 
-/// Central, typed access to the UI-chrome localization tables
-/// (`Localization/{en,ja}.lproj/Localizable.strings`). Keeps call sites free of
-/// stringly-typed keys and gives one place to see every translatable label.
-///
-/// Scope note: only CHROME is localized. Reader content (the Japanese text,
-/// furigana, dictionary headwords/readings) is always Japanese — those are the
-/// material being read, not UI. Compact toggle glyphs (縦/横, 紙/茶/夜) stay
-/// iconic in both languages.
 enum L10n {
     static var wordmark: String { String(localized: "brand.wordmark") }
 
     static var commonOK: String { String(localized: "common.ok") }
     static var commonCancel: String { String(localized: "common.cancel") }
 
-    // Library — swipe-to-delete a text + its cached audio.
     static var libraryDelete: String { String(localized: "library.delete") }
     static var libraryDeleteTitle: String { String(localized: "library.delete.title") }
-    /// Confirmation body; %@ is the text's title.
     static func libraryDeleteBody(_ title: String) -> String {
         String(format: String(localized: "library.delete.body.format"), title)
     }
-    /// The shelf file couldn't be rewritten, so the deletion won't survive a relaunch.
     static var libraryDeleteFailedTitle: String { String(localized: "library.delete.failed.title") }
     static var libraryDeleteFailedBody: String { String(localized: "library.delete.failed.body") }
 
-    // Settings — reading preferences (font + size)
     static var settings: String { String(localized: "settings.title") }
     static var settingsFont: String { String(localized: "settings.section.font") }
     static var settingsSize: String { String(localized: "settings.section.size") }
@@ -44,16 +32,12 @@ enum L10n {
     static var settingsTheme: String { String(localized: "settings.section.theme") }
     static var settingsVoice: String { String(localized: "settings.section.voice") }
     static var settingsVoiceNote: String { String(localized: "settings.voice.note") }
-    /// Shown wherever narration is sold or configured. Furigana is dictionary-derived
-    /// and authoritative; the narration is a model and occasionally disagrees with it.
     static var narrationDisclaimer: String { String(localized: "narration.disclaimer") }
 
-    // Settings — membership status/management.
     static var settingsMembership: String { String(localized: "settings.section.membership") }
     static var membershipActive: String { String(localized: "membership.active") }
     static var membershipManage: String { String(localized: "membership.manage") }
 
-    // About — version, product links, data-source attributions.
     static var settingsAbout: String { String(localized: "settings.about") }
     static var aboutVersion: String { String(localized: "about.version") }
     static var aboutDescription: String { String(localized: "about.description") }
@@ -65,7 +49,6 @@ enum L10n {
     static var aboutSources: String { String(localized: "about.section.sources") }
     static var aboutSourcesNote: String { String(localized: "about.sources.note") }
     static var aboutAINote: String { String(localized: "about.ai.note") }
-    // Settings — storage: clear the on-disk narration cache.
     static var settingsStorage: String { String(localized: "settings.section.storage") }
     static var storageClear: String { String(localized: "settings.storage.clear") }
     static var storageClearTitle: String { String(localized: "settings.storage.clear.title") }
@@ -75,7 +58,6 @@ enum L10n {
     static var themeSepia: String { String(localized: "theme.sepia") }
     static var themeNight: String { String(localized: "theme.night") }
 
-    // Library — the + menu and the paste-text import sheet.
     static var libraryAddImportFile: String { String(localized: "library.add.importFile") }
     static var libraryAddPasteText: String { String(localized: "library.add.pasteText") }
     static var pasteTitleField: String { String(localized: "paste.titleField") }
@@ -109,10 +91,7 @@ enum L10n {
     static var membershipSubscribe: String { String(localized: "membership.subscribe") }
     static var membershipRestore: String { String(localized: "membership.restore") }
     static var membershipRestoreNone: String { String(localized: "membership.restore.none") }
-    /// A paywall purchase completed but `reader Pro` still isn't active (an
-    /// offering/entitlement misconfiguration) — never dismiss silently on that.
     static var membershipPurchaseIncomplete: String { String(localized: "membership.purchase.incomplete") }
-    /// Subscription-details sheet; the renews/expires lines take a formatted date.
     static func membershipRenews(_ date: String) -> String {
         String(format: String(localized: "membership.details.renews.format"), date)
     }
@@ -122,17 +101,12 @@ enum L10n {
     static var membershipTestPurchase: String { String(localized: "membership.details.testPurchase") }
     static var membershipManageAppStore: String { String(localized: "membership.details.manage") }
     static var chapters: String { String(localized: "reader.chapters") }
-    /// Fallback navigation label for an imported chapter with no title of its own
-    /// (chrome — localizes, unlike the real title, which is reader content).
     static func chapterNumber(_ n: Int) -> String {
         String(format: String(localized: "reader.chapterNumber.format"), n)
     }
-    /// The idle player's one line: what Play will do, and roughly how long the
-    /// resulting narration runs. %d is whole minutes.
     static func readerIdleEstimate(_ minutes: Int) -> String {
         String(format: String(localized: "reader.idle.estimate.format"), minutes)
     }
-    /// Header subtitle for an untitled chapter; %1$d current, %2$d total.
     static func chapterOfCount(_ n: Int, _ count: Int) -> String {
         String(format: String(localized: "reader.chapterOfCount.format"), n, count)
     }
@@ -158,38 +132,27 @@ enum L10n {
     static var importAwaitingOCR: String { String(localized: "import.awaitingOCR") }
     static var importSaving: String { String(localized: "import.saving") }
     static var importCompleted: String { String(localized: "import.completed") }
-    /// Determinate OCR progress while importing a scanned PDF; %1$d / %2$d.
     static func importRecognizing(_ done: Int, _ total: Int) -> String {
         String(format: String(localized: "import.recognizing.format"), done, total)
     }
 
     static var importPartialTitle: String { String(localized: "import.partial.title") }
-    /// Body for the "imported, but %d scanned page(s) were left out" notice — a
-    /// non-subscriber's mixed text+scanned book; the alert offers Membership.
     static func importPartialBody(_ pages: Int) -> String {
         String(format: String(localized: "import.partial.body.format"), pages)
     }
-    /// Same notice for a subscriber whose approved OCR pass failed: the text pages
-    /// were kept, the scanned ones weren't. Nothing to buy — just retry.
     static func importPartialOCRFailed(_ pages: Int) -> String {
         String(format: String(localized: "import.partial.ocrFailed.format"), pages)
     }
-    /// The library file couldn't be written (disk full) — the imported book won't
-    /// survive relaunch, so say so instead of reporting a successful import.
     static var importSaveFailed: String { String(localized: "import.saveFailed") }
 
     static var importOCRConfirmTitle: String { String(localized: "import.ocr.confirm.title") }
     static var importOCRConfirmAction: String { String(localized: "import.ocr.confirm.action") }
-    /// Body for the "this book is image-only — read it with AI?" confirm; %d = page
-    /// count. Above a soft threshold it appends a cost/time caution so a huge scan
-    /// can't run away on Membership credits silently.
     static func importOCRConfirmBody(_ pages: Int) -> String {
         var message = String(format: String(localized: "import.ocr.confirm.body.format"), pages)
         if pages > 100 { message += " " + String(localized: "import.ocr.confirm.large") }
         return message
     }
 
-    // VoiceOver labels for icon-only / custom-drawn controls.
     static var a11yBack: String { String(localized: "a11y.back") }
     static var a11yPlay: String { String(localized: "a11y.play") }
     static var a11yPause: String { String(localized: "a11y.pause") }

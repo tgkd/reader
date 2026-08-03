@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// Persistent Library chrome for one import job. It mirrors the reader's
-/// synthesizing capsule but uses honest phase-local progress: a spinner for work
-/// without a measurable total, and a determinate bar for pages/spine items.
 struct ImportProgressView: View {
     let activity: ImportActivity
     let cancel: () -> Void

@@ -2,10 +2,7 @@ import XCTest
 import ReaderCore
 @testable import Reader
 
-/// Exercises `Importer` — the extension→importer routing and `document(from:)`
-/// assembly (title from filename, chapter order, unsupported/empty errors).
 final class ImporterRoutingTests: XCTestCase {
-
     func testExtensionRouting() {
         func importer(_ name: String) -> DocumentImporter? {
             Importer.importer(for: URL(fileURLWithPath: "/tmp/\(name)"))
@@ -14,10 +11,9 @@ final class ImporterRoutingTests: XCTestCase {
         XCTAssertTrue(importer("book.pdf") is PDFImporter)
         XCTAssertTrue(importer("book.txt") is TextImporter)
         XCTAssertTrue(importer("book.text") is TextImporter)
-        XCTAssertTrue(importer("README") is TextImporter)        // no extension → text
-        XCTAssertTrue(importer("BOOK.EPUB") is EPUBImporter)     // case-insensitive
-        XCTAssertNil(importer("book.docx"))                       // unsupported
-        // Markdown routes to the text importer WITH the syntax strip enabled.
+        XCTAssertTrue(importer("README") is TextImporter)
+        XCTAssertTrue(importer("BOOK.EPUB") is EPUBImporter)
+        XCTAssertNil(importer("book.docx"))
         XCTAssertEqual((importer("notes.md") as? TextImporter)?.stripMarkdown, true)
         XCTAssertEqual((importer("notes.markdown") as? TextImporter)?.stripMarkdown, true)
         XCTAssertEqual((importer("book.txt") as? TextImporter)?.stripMarkdown, false)

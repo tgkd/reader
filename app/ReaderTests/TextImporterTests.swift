@@ -2,14 +2,12 @@ import XCTest
 import ReaderCore
 @testable import Reader
 
-/// Exercises the real `TextImporter` (whole file → one chapter) across the
-/// encodings `JapaneseTextDecoder` sniffs, plus the empty-input error case.
 final class TextImporterTests: XCTestCase {
     private let sample = "吾輩は猫である。\n名前はまだ無い。"
 
     private func text(_ url: URL) async throws -> String {
         let chapters = try await TextImporter(url: url).chapters()
-        XCTAssertEqual(chapters.count, 1)   // the whole file is a single chapter
+        XCTAssertEqual(chapters.count, 1)
         return chapters[0].text
     }
 
@@ -35,7 +33,7 @@ final class TextImporterTests: XCTestCase {
         let url = Fixture.textFile(sample, encoding: .utf8, bom: [0xEF, 0xBB, 0xBF])
         let decoded = try await text(url)
         XCTAssertEqual(decoded, sample)
-        XCTAssertFalse(decoded.unicodeScalars.contains("\u{FEFF}"))   // BOM gone
+        XCTAssertFalse(decoded.unicodeScalars.contains("\u{FEFF}"))
     }
 
     func testTextExtensionAlsoWorks() async throws {
@@ -64,10 +62,6 @@ final class TextImporterTests: XCTestCase {
         }
     }
 
-    // MARK: - Markdown (.md routes here with stripMarkdown)
-
-    /// End-to-end: a .md file imports through `Importer` with syntax stripped
-    /// and prose (incl. Japanese) intact.
     func testMarkdownFileImportsStripped() async throws {
         let md = """
         # 第一章
@@ -99,12 +93,9 @@ final class TextImporterTests: XCTestCase {
         XCTAssertEqual(MarkdownStrip.plainText("![挿絵](img.png)を見る"), "挿絵を見る")
         XCTAssertEqual(MarkdownStrip.plainText("```\nlet x = 1\n```\n本文"), "let x = 1\n本文")
         XCTAssertEqual(MarkdownStrip.plainText("上\n---\n下"), "上\n下")
-        // Plain prose — including 3.14-style numbers mid-line — passes through.
         XCTAssertEqual(MarkdownStrip.plainText("価格は3.14ドルです。"), "価格は3.14ドルです。")
     }
 
-    /// A markdown file that is ONLY syntax (fences/rules) strips to nothing →
-    /// the standard unreadable error, not an empty book.
     func testMarkdownOnlySyntaxThrowsUnreadable() async {
         let url = Fixture.textFile("```\n```\n---\n", encoding: .utf8, ext: "md")
         do {
@@ -116,8 +107,6 @@ final class TextImporterTests: XCTestCase {
     }
 }
 
-/// Title derivation for the paste-text import (the only paste logic that isn't
-/// UI glue): first non-empty line, trimmed, capped.
 final class PasteTitleTests: XCTestCase {
     @MainActor func testFirstLineBecomesTitle() {
         XCTAssertEqual(AppModel.defaultPasteTitle(from: "吾輩は猫である\n名前はまだ無い"), "吾輩は猫である")

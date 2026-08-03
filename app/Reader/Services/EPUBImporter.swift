@@ -4,38 +4,18 @@ import UIKit
 import ZIPFoundation
 import ReaderCore
 
-/// Imports an EPUB. EPUB is a ZIP of XHTML documents; reading order comes from the
-/// OPF `<spine>` — never the `<manifest>`, which is an unordered id→href map. The
-/// flow: unzip → read `META-INF/container.xml` for the OPF path → parse the OPF
-/// manifest + spine → for each spine item, strip its XHTML to plain text → one
-/// chapter per non-empty spine document. Tags/entities are stripped tolerantly
-/// (real EPUB XHTML isn't strict XML — `&nbsp;` etc.), so body text uses a
-/// regex strip while the strict container/OPF use `XMLParser`.
 struct EPUBImporter: DocumentImporter {
     let url: URL
-    /// OCR engine for image-only spine items — fixed-layout / scanned EPUBs whose
-    /// page text is baked into an image (`<img>` / SVG `<image>`), where tag-stripping
-    /// recovers nothing. `nil` for non-subscribers: such a book then yields no chapters
-    /// and throws `.empty`, exactly as before (OCR is a Membership feature). Mirrors
-    /// `PDFImporter`; reuses the same `WorkerOCRService` (the Worker's `/pdf/ocr`).
     var recognizer: PDFTextRecognizer? = nil
-    /// Reports OCR image completion (`completed`, `total`) for a determinate banner.
     var onProgress: ImportProgressHandler? = nil
-    /// Reports local XHTML extraction one spine item at a time.
     var onParsingProgress: ImportProgressHandler? = nil
 
-    /// How many page images to decode + recognize at once. Fixed-layout EPUB images
-    /// can be large, so a whole image-only book is never decoded at once — windows
-    /// bound peak memory (mirrors `PDFImporter.ocrWindow`).
     private static let ocrWindow = 8
 
     func chapters() async throws -> [Chapter] {
         guard let archive = Archive(url: url, accessMode: .read) else { throw ImportError.unreadable }
         let slots = repairFlattenedKana(in: try classify(archive))
 
-        // OCR every image-only spine item's images, in order — but only when a
-        // recognizer is present. Non-subscribers skip them, so an image-only book
-        // stays chapter-less and falls through to `.empty` below (unchanged behavior).
         let imagePaths: [String] = recognizer == nil ? [] : slots.flatMap { slot -> [String] in
             if case .images(_, let p) = slot { return p }
             return []
@@ -45,14 +25,6 @@ struct EPUBImporter: DocumentImporter {
             recognized = try await recognize(imagePaths, in: archive, using: recognizer)
         }
 
-        // A Japanese book annotates a name ONCE, where it first appears, and never
-        // again: in this volume 希美 is ruby'd once and occurs 236 times, 緑輝 once
-        // and occurs 99. Applying a reading only where the markup sits would take
-        // about a percent of what the book actually tells us — and would leave the
-        // character-list page, which carries no ruby at all, reading きぜん for 黄前.
-        // So the readings are indexed across the whole book and materialised at every
-        // occurrence, here at import, which keeps `Chapter.sourceReadings` the single
-        // thing anything downstream has to understand.
         let index = readingIndex(of: slots)
 
         var chapters: [Chapter] = []
@@ -63,7 +35,7 @@ struct EPUBImporter: DocumentImporter {
                 chapters.append(Chapter(title: title, text: text,
                                         sourceReadings: propagate(index, into: text, given: readings)))
             case .images(let title, let images):
-                guard recognizer != nil else { continue }   // non-subscriber: no OCR
+                guard recognizer != nil else { continue }
                 let text = recognized[ocrCursor..<ocrCursor + images.count]
                     .joined(separator: "\n")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -73,9 +45,6 @@ struct EPUBImporter: DocumentImporter {
         }
 
         guard !chapters.isEmpty else {
-            // OCR ran but recovered nothing → ocrFailed. A non-subscriber (no recognizer)
-            // opening an image-only book → the Membership prompt (mirrors PDFImporter),
-            // NOT the misleading "file is empty". Otherwise a genuinely empty file.
             let hasImageSlots = slots.contains { if case .images = $0 { return true }; return false }
             if recognizer != nil && !imagePaths.isEmpty { throw ImportError.ocrFailed }
             if recognizer == nil && hasImageSlots { throw ImportError.ocrUnavailable }
@@ -84,9 +53,6 @@ struct EPUBImporter: DocumentImporter {
         return chapters
     }
 
-    /// Number of page images an OCR pass would send for this EPUB (0 if every spine
-    /// item already has extractable text). Cheap: classifies the spine without decoding
-    /// images or hitting the network. Drives the import confirm prompt.
     func ocrCandidateCount() -> Int {
         guard let archive = Archive(url: url, accessMode: .read),
               let slots = try? classify(archive) else { return 0 }
@@ -95,37 +61,6 @@ struct EPUBImporter: DocumentImporter {
         }
     }
 
-    // MARK: - Reading propagation
-
-    /// Word → its per-character split, for every ruby word safe to carry book-wide.
-    ///
-    /// Two exclusions, both because a wrong reading stated with the book's own
-    /// authority is worse than leaving the word to the tokenizer:
-    ///
-    /// 1. A word the book itself reads two ways (labelled 労 both いたわ and ねぎら) —
-    ///    one word of 207 in this volume.
-    /// 2. A SINGLE-character base. Uniqueness among the annotations does not mean the
-    ///    reading is context-free, and for one kanji it almost never is: publishers
-    ///    ruby a lone kanji exactly where the reading is unusual for it. Measured on
-    ///    響け！ユーフォニアム 2, the single-char entries are 長→た (63 occurrences —
-    ///    the reading of 長ける, propagated over 部長 and 長い), 初→しよ (37, over
-    ///    初めて), 端→ぱな (44, the rendaku'd 端から), 微→かす, 呆→あき, 傾→かし. Those
-    ///    64 entries account for 1,071 of the propagated occurrences and are wrong far
-    ///    more often than right.
-    ///
-    /// The 142 multi-character entries — 2,494 occurrences, and every name the exercise
-    /// was for (久美子, 希美, 黄前, 北宇治, 緑輝) — are kept: a multi-kanji proper noun
-    /// does not change reading with context, which is exactly why the publisher only
-    /// bothered to annotate it once.
-    /// Undo a source-side flattening of small kana, across the WHOLE book.
-    ///
-    /// The decision needs every reading at once — one chapter's worth cannot tell a
-    /// flattened file from a passage that happens to contain no 小書き kana — so it
-    /// happens here, before the readings are indexed or propagated.
-    ///
-    /// Only fires on `KanaRepair.looksFlattened`, and even then the tokenizer overrules
-    /// the result on any word it knows (`SourceReadingOverlay.preferred`), so a bad
-    /// restoration on ordinary vocabulary does not reach the page.
     private func repairFlattenedKana(in slots: [Slot]) -> [Slot] {
         let all = slots.flatMap { slot -> [String] in
             if case .text(_, _, let readings, _) = slot { return readings.map(\.reading) }
@@ -157,7 +92,6 @@ struct EPUBImporter: DocumentImporter {
         for case .text(_, _, _, let groups) in slots {
             for g in groups where !g.surface.isEmpty && !g.reading.isEmpty {
                 byWord[g.surface, default: []].insert(g.reading)
-                // Offsets relative to the word, so they can be rebased onto any occurrence.
                 let base = g.pairs.first?.start ?? 0
                 split[g.surface] = g.pairs.map {
                     SourceReading(start: $0.start - base, length: $0.length,
@@ -168,8 +102,6 @@ struct EPUBImporter: DocumentImporter {
         return split.filter { byWord[$0.key]?.count == 1 && $0.key.count > 1 }
     }
 
-    /// Every occurrence of an indexed word in `text`, as annotations — keeping the
-    /// ones the markup already placed and never overlapping them.
     private func propagate(_ index: [String: [SourceReading]],
                            into text: String,
                            given existing: [SourceReading]) -> [SourceReading] {
@@ -198,18 +130,11 @@ struct EPUBImporter: DocumentImporter {
         return out.sorted { $0.start < $1.start }
     }
 
-    // MARK: - Classification
-
-    /// A spine item's content: its extracted text, or the archive paths of the images
-    /// that stand in for its (image-only) text — plus its TOC title, when one exists.
     private enum Slot {
         case text(title: String?, text: String, readings: [SourceReading], groups: [HTMLText.RubyGroup])
         case images(title: String?, paths: [String])
     }
 
-    /// Walk the spine once: each item becomes `.text` (extractable text) or, when it has
-    /// none but references images, `.images` (archive paths to OCR). Items with neither
-    /// are dropped — matching the prior empty-body skip.
     private func classify(_ archive: Archive) throws -> [Slot] {
         let opfPath = try locateOPF(in: archive)
         let opf = try OPF.parse(data(at: opfPath, in: archive))
@@ -219,8 +144,6 @@ struct EPUBImporter: DocumentImporter {
         var slots: [Slot] = []
         onParsingProgress?(0, opf.spine.count)
         for (index, idref) in opf.spine.enumerated() {
-            // Local XHTML extraction is unbilled, so it is safe to abandon on cancel
-            // (the OCR window pass below deliberately has no such check).
             try Task.checkCancellation()
             defer { onParsingProgress?(index + 1, opf.spine.count) }
             guard let href = opf.manifest[idref] else { continue }
@@ -233,8 +156,6 @@ struct EPUBImporter: DocumentImporter {
                                    readings: extracted.readings, groups: extracted.groups))
                 continue
             }
-            // No text — fold in any referenced images that actually exist in the archive,
-            // resolved against THIS document's directory (not the OPF's).
             let itemDir = (path as NSString).deletingLastPathComponent
             let images = HTMLText.imageRefs(xhtml)
                 .map { resolve($0, relativeTo: itemDir) }
@@ -244,13 +165,6 @@ struct EPUBImporter: DocumentImporter {
         return slots
     }
 
-    // MARK: - Table of contents (chapter titles)
-
-    /// TOC title per resolved archive path, keys lowercased (mirrors the tolerant
-    /// `entry(for:in:)` lookup). EPUB3 nav document preferred, EPUB2 NCX fallback;
-    /// hrefs resolve relative to the TOC document's own directory with fragments
-    /// stripped, and the FIRST entry per file wins (the chapter-opening anchor).
-    /// A missing or unparsable TOC degrades to `[:]` — chapters stay untitled.
     private func tocTitles(in archive: Archive, opf: OPF, opfDir: String) -> [String: String] {
         var entries: [(href: String, title: String)] = []
         var tocDir = ""
@@ -270,7 +184,6 @@ struct EPUBImporter: DocumentImporter {
         }
         var titles: [String: String] = [:]
         for (href, title) in entries {
-            // Anchors into a file title the file's chapter — strip the fragment.
             guard let file = href.split(separator: "#", maxSplits: 1).first.map(String.init),
                   !file.isEmpty else { continue }
             let key = resolve(file, relativeTo: tocDir).lowercased()
@@ -279,12 +192,6 @@ struct EPUBImporter: DocumentImporter {
         return titles
     }
 
-    // MARK: - OCR
-
-    /// Recognize `imagePaths` (archive entries) through `recognizer` in bounded windows,
-    /// one string per path IN ORDER. Each window decodes its images, hands the batch to
-    /// the recognizer, then releases them before the next (bounded memory); progress is
-    /// reported cumulatively across windows.
     private func recognize(_ imagePaths: [String], in archive: Archive,
                            using recognizer: PDFTextRecognizer) async throws -> [String] {
         let total = imagePaths.count
@@ -303,17 +210,8 @@ struct EPUBImporter: DocumentImporter {
         return out
     }
 
-    /// Longest edge (px) an EPUB page image is decoded to. The archive's images are
-    /// untrusted: `UIImage(data:)` decodes at whatever dimensions the file declares,
-    /// so one 12000×16000 scan (or a decompression bomb well under the 256 MB
-    /// compressed-entry cap) allocates ~750 MB — times a whole `ocrWindow`. An
-    /// ImageIO thumbnail bounds the DECODE itself; 3000 px still OCRs cleanly.
     private static let maxImagePixelSize = 3000
 
-    /// Decode image bytes to a `CGImage` no larger than `maxImagePixelSize` on its
-    /// longest edge, or a 1×1 white pixel for missing/undecodable data — so results
-    /// stay 1:1 with the image list (a dropped image would misalign every later
-    /// chapter).
     private static func decode(_ data: Data?) -> CGImage {
         guard let data, let source = CGImageSourceCreateWithData(data as CFData, nil) else { return blankPixel }
         let options: [CFString: Any] = [
@@ -333,17 +231,10 @@ struct EPUBImporter: DocumentImporter {
         }.cgImage!
     }()
 
-    // MARK: - Archive access
-
-    /// Upper bound on a single decompressed entry. Generous for a fixed-layout page
-    /// image, but small enough that a zip bomb (tiny compressed, gigabytes claimed)
-    /// can't exhaust memory during import.
     private static let maxEntryBytes = 256 * 1024 * 1024
 
     private func data(at path: String, in archive: Archive) throws -> Data {
         guard let entry = entry(for: path, in: archive) else { throw ImportError.unreadable }
-        // Reject a declared-huge entry before decompressing, and cap the running total
-        // in case the header lies — either way import fails cleanly instead of OOM-ing.
         guard entry.uncompressedSize <= UInt64(Self.maxEntryBytes) else { throw ImportError.unreadable }
         var out = Data()
         _ = try archive.extract(entry) { chunk in
@@ -353,7 +244,6 @@ struct EPUBImporter: DocumentImporter {
         return out
     }
 
-    /// Resolve an entry by path, tolerating percent-encoding and case differences.
     private func entry(for path: String, in archive: Archive) -> Entry? {
         if let e = archive[path] { return e }
         let decoded = path.removingPercentEncoding ?? path
@@ -367,7 +257,6 @@ struct EPUBImporter: DocumentImporter {
         return path
     }
 
-    /// Resolve a manifest href (relative to the OPF's directory), collapsing `..`.
     private func resolve(_ href: String, relativeTo dir: String) -> String {
         let decoded = href.removingPercentEncoding ?? href
         let base = dir.isEmpty ? decoded : "\(dir)/\(decoded)"
@@ -381,10 +270,6 @@ struct EPUBImporter: DocumentImporter {
     }
 }
 
-// MARK: - container.xml
-
-/// Pulls the first `<rootfile full-path="…">` (the OPF location) out of
-/// `META-INF/container.xml`. Strict XML, so `XMLParser` is exact here.
 private final class ContainerParser: NSObject, XMLParserDelegate {
     private var path: String?
 
@@ -403,13 +288,11 @@ private final class ContainerParser: NSObject, XMLParserDelegate {
     }
 }
 
-// MARK: - OPF (manifest + spine)
-
 private struct OPF {
-    let manifest: [String: String]   // id → href
-    let spine: [String]              // idrefs, in reading order
-    let navHref: String?             // EPUB3 nav document (manifest item flagged properties~="nav")
-    let ncxHref: String?             // EPUB2 NCX (spine toc="…" idref → manifest)
+    let manifest: [String: String]
+    let spine: [String]
+    let navHref: String?
+    let ncxHref: String?
 
     static func parse(_ data: Data) throws -> OPF {
         let p = OPFParser()
@@ -434,15 +317,12 @@ private final class OPFParser: NSObject, XMLParserDelegate {
         case "item":
             if let id = attributes["id"], let href = attributes["href"] {
                 manifest[id] = href
-                // The EPUB3 TOC document carries the space-separated property "nav".
                 if navHref == nil,
                    attributes["properties"]?.lowercased().split(separator: " ").contains("nav") == true {
                     navHref = href
                 }
             }
         case "itemref":
-            // Skip linear="no" auxiliary content (footnotes, cover, copyright) —
-            // not part of the primary flow a sequential reader narrates.
             if let idref = attributes["idref"], attributes["linear"]?.lowercased() != "no" {
                 spine.append(idref)
             }
@@ -454,16 +334,9 @@ private final class OPFParser: NSObject, XMLParserDelegate {
     }
 }
 
-// MARK: - TOC parsers (EPUB3 nav document / EPUB2 NCX)
-
-/// TOC entries from an EPUB3 nav document: (href, title) in document order.
-/// Regex-based like `HTMLText` — nav.xhtml is tag soup often enough in the wild
-/// that strict XML (reserved for container/OPF) would drop whole TOCs.
 private enum NavTOC {
     static func entries(_ data: Data) -> [(href: String, title: String)] {
         guard let s = JapaneseTextDecoder.decode(data) else { return [] }
-        // Isolate the toc nav; fall back to the first <nav> (some books drop the
-        // epub:type attribute — the spec requires exactly one toc nav anyway).
         let block = s.range(of: "(?is)<nav\\b[^>]*epub:type\\s*=\\s*[\"'][^\"']*\\btoc\\b[^\"']*[\"'][^>]*>.*?</nav>",
                             options: .regularExpression)
             ?? s.range(of: "(?is)<nav\\b[^>]*>.*?</nav>", options: .regularExpression)
@@ -481,7 +354,6 @@ private enum NavTOC {
                     .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
                 .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            // A fragment-only href points inside the nav doc itself, not a chapter.
             guard !title.isEmpty, !href.isEmpty, !href.hasPrefix("#") else { return }
             out.append((href, title))
         }
@@ -489,9 +361,6 @@ private enum NavTOC {
     }
 }
 
-/// navMap/navPoint entries from an EPUB2 NCX: (src, title) in document order
-/// (nested navPoints flatten depth-first). NCX is real XML, so `XMLParser` is
-/// exact here — mirrors `ContainerParser`. Parse failure → `[]`.
 private final class NCXParser: NSObject, XMLParserDelegate {
     private var found: [(href: String, title: String)] = []
     private var inNavMap = false
@@ -513,11 +382,8 @@ private final class NCXParser: NSObject, XMLParserDelegate {
         case "navmap":
             inNavMap = true
         case "navlabel":
-            // Gate on navMap so <docTitle><text> never becomes a chapter title.
             if inNavMap { inNavLabel = true; labelText = "" }
         case "content":
-            // navLabel precedes content within a navPoint, so pairing sequentially
-            // preserves document order even across nested navPoints.
             if inNavMap, let src = attributes["src"], !src.isEmpty, let title = pendingTitle {
                 found.append((src, title))
                 pendingTitle = nil
@@ -547,52 +413,28 @@ private final class NCXParser: NSObject, XMLParserDelegate {
 }
 
 private extension String {
-    /// Local name of a possibly-namespaced XML element (`opf:item` → `item`).
     var localName: String { String(split(separator: ":").last ?? Substring(self)).lowercased() }
 }
 
-// MARK: - XHTML → plain text
-
-/// Strips XHTML to readable plain text: isolates `<body>` (so `<head>/<title>`
-/// never leaks into the chapter), block-level tags become newlines, all other
-/// tags are removed, and HTML entities are decoded in one left-to-right pass.
-/// Regex-based so it tolerates the not-quite-XML XHTML found in real EPUBs.
 private enum HTMLText {
-    /// One `<ruby>` element's pairs. They form a WORD — 黄/おう followed by 前/まえ is
-    /// one annotation of 黄前 — and that boundary is what makes a reading safe to
-    /// reuse elsewhere in the book, so it is recorded rather than inferred from
-    /// adjacency.
     struct RubyGroup {
         let pairs: [SourceReading]
         var surface: String { pairs.map(\.surface).joined() }
         var reading: String { pairs.map(\.reading).joined() }
     }
 
-    /// Sentinels wrapping a ruby base while the rest of the extraction runs.
-    ///
-    /// The extraction is a chain of whole-string rewrites — entity decoding, tag
-    /// removal, whitespace collapsing, trimming — so a character offset computed
-    /// before it means nothing after it. Rather than thread an offset map through
-    /// every step, the base is marked in place and the offsets are read off the
-    /// FINISHED text, where they are the only offsets that matter. These survive the
-    /// chain because they are not tags, not entities and not whitespace, and
-    /// U+E000-E002 cannot occur in real book text.
     private static let rubyOpen: Character = "\u{E000}"
     private static let rubyClose: Character = "\u{E001}"
     private static let rubyGroupEnd: Character = "\u{E002}"
 
     static func extract(_ data: Data) -> String { extractWithReadings(data).text }
 
-    /// The chapter's text, the readings its `<ruby>` markup supplied with offsets
-    /// into that text, and those readings grouped by the element they came from.
     static func extractWithReadings(_ data: Data)
         -> (text: String, readings: [SourceReading], groups: [RubyGroup]) {
         let (marked, readings) = strip(data, markingRuby: true)
         return unmarkRuby(marked, readings: readings)
     }
 
-    /// Pull the sentinels back out, recording where each base landed. Offsets are
-    /// into the string being built, so they are correct by construction.
     private static func unmarkRuby(_ s: String, readings: [String])
         -> (text: String, readings: [SourceReading], groups: [RubyGroup]) {
         guard s.contains(rubyOpen) else { return (s, [], []) }
@@ -628,52 +470,27 @@ private enum HTMLText {
     }
 
     private static func strip(_ data: Data, markingRuby: Bool) -> (String, [String]) {
-        // EPUB content is UTF-8/UTF-16 per spec; sniff (BOM-aware) and skip a file
-        // we genuinely can't decode rather than emitting Latin-1 mojibake.
         guard var s = JapaneseTextDecoder.decode(data) else { return ("", []) }
 
-        // Isolate the body so head/title metadata never bleeds into the text.
         if let body = s.range(of: "(?is)<body[^>]*>.*</body>", options: .regularExpression) {
             s = String(s[body])
         }
-        // Drop script/style blocks (case-insensitive).
         s = s.replacingOccurrences(of: "(?is)<(script|style)[^>]*>.*?</\\1>", with: " ",
                                    options: .regularExpression)
         var readings: [String] = []
         if markingRuby { (s, readings) = markRuby(s) }
-        // Drop ruby readings: <rt>/<rp> CONTENT, not just the tags. Keeping the tag
-        // strip alone would inline the furigana into the body (<ruby>漢字<rt>かんじ</rt>
-        // → 漢字かんじ), so TTS speaks every annotated word twice, MeCab tokenizes the
-        // ghost kana, and tap-to-define breaks. The reader renders its own furigana
-        // from MeCab, so the source readings aren't needed here.
         s = s.replacingOccurrences(of: "(?is)<(rt|rp)[^>]*>.*?</\\1>", with: "",
                                    options: .regularExpression)
-        // Block-level boundaries → newline.
         s = s.replacingOccurrences(of: "(?i)<\\s*(br|/p|/div|/h[1-6]|/li|/tr)\\s*/?>", with: "\n",
                                    options: .regularExpression)
-        // Remaining tags → removed.
         s = s.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
         s = decodeEntities(s)
-        // Tidy whitespace: collapse spaces, cap blank-line runs.
         s = s.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
         s = s.replacingOccurrences(of: " *\\n *", with: "\n", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
         return (s.trimmingCharacters(in: .whitespacesAndNewlines), readings)
     }
 
-    /// Rewrite every `<ruby>` element to its bare base wrapped in sentinels, and
-    /// return the readings in document order.
-    ///
-    /// Handles both shapes real EPUBs use: explicit `<rb>base</rb><rt>reading</rt>`,
-    /// repeated per annotated run (this book writes 黄前 as two such pairs), and
-    /// HTML5's implicit base, where whatever precedes the first `<rt>` is the base.
-    /// `<rp>` fallback parentheses are dropped. `<rtc>` is deliberately NOT collected:
-    /// it is a second annotation layer that may be a gloss rather than a
-    /// pronunciation, and concatenating it would produce a reading no one wrote.
-    ///
-    /// Pairing is preserved rather than flattened, because that granularity is what
-    /// makes the readings usable: 黄→おう and 前→まえ each line up with a MeCab token,
-    /// where a single 黄前→おうまえ would span two and match neither.
     private static func markRuby(_ input: String) -> (String, [String]) {
         guard input.range(of: "(?i)<ruby[\\s>]", options: .regularExpression) != nil else {
             return (input, [])
@@ -696,7 +513,6 @@ private enum HTMLText {
             let inner = rest[open.upperBound..<close.lowerBound]
             rest = rest[close.upperBound...]
 
-            // Strip the fallback parentheses before anything else reads the content.
             let body = String(inner).replacingOccurrences(
                 of: "(?is)<rp[^>]*>.*?</rp\\s*>", with: "", options: .regularExpression)
 
@@ -713,10 +529,6 @@ private enum HTMLText {
                 if wrote { out.append(rubyGroupEnd) }
                 continue
             }
-            // HTML5 implicit base: the text before each <rt> is that <rt>'s base.
-            // EVERY pair is taken, not just the first — mono-ruby without <rb> writes
-            // 漢字 as <ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>, and stopping at the first
-            // pair would emit 漢 and drop 字 from the chapter's text for good.
             var scan = Substring(body)
             var sawPair = false
             var wrote = false
@@ -734,7 +546,6 @@ private enum HTMLText {
             }
             if sawPair {
                 if wrote { out.append(rubyGroupEnd) }
-                // Whatever trails the last annotation is still the element's text.
                 out += plain(scan)
                 continue
             }
@@ -744,7 +555,6 @@ private enum HTMLText {
         return (out, readings)
     }
 
-    /// All (group 1, group 2) captures of `pattern` in `s`, in order.
     private static func capturePairs(_ pattern: String, in s: String) -> [(String, String)] {
         guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
         let ns = s as NSString
@@ -756,10 +566,6 @@ private enum HTMLText {
         }
     }
 
-    /// Image references inside `<img>` and SVG `<image>` tags, in document order — the
-    /// `src` / `xlink:href` / `href` URL of each. Used by the OCR fallback to recover an
-    /// image-only (fixed-layout / scanned) spine item. Inline `data:` URIs are skipped
-    /// (they aren't archive entries); each tag yields its first URL-bearing attribute.
     static func imageRefs(_ data: Data) -> [String] {
         guard let s = JapaneseTextDecoder.decode(data),
               let tagRE = try? NSRegularExpression(pattern: "(?is)<(?:img|image)\\b[^>]*>"),
@@ -780,9 +586,6 @@ private enum HTMLText {
         return refs
     }
 
-    /// Decode numeric (`&#38;` / `&#x26;`) and named entities in a single pass, so
-    /// a decoded `&` is never rescanned (no `&amp;amp;` / `&#38;amp;` double-decode).
-    /// Non-private: `NavTOC` reuses it for TOC labels.
     static func decodeEntities(_ s: String) -> String {
         guard s.contains("&"),
               let re = try? NSRegularExpression(pattern: "&(#x[0-9A-Fa-f]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*);") else {
@@ -795,7 +598,7 @@ private enum HTMLText {
             guard let m else { return }
             result += ns.substring(with: NSRange(location: last, length: m.range.location - last))
             let token = ns.substring(with: m.range(at: 1))
-            result += decodeToken(token) ?? ns.substring(with: m.range)  // leave unknown entities intact
+            result += decodeToken(token) ?? ns.substring(with: m.range)
             last = m.range.location + m.range.length
         }
         result += ns.substring(from: last)

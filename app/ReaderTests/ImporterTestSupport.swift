@@ -9,7 +9,6 @@ struct ImportProgressSample: Equatable {
     let total: Int
 }
 
-/// Sendable, lock-protected callback recorder used by importer progress tests.
 final class ImportProgressRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var samples: [ImportProgressSample] = []
@@ -27,21 +26,13 @@ final class ImportProgressRecorder: @unchecked Sendable {
     }
 }
 
-/// Runtime fixture generators for the importer tests. Nothing is committed as a
-/// binary: EPUBs are zipped on the fly (so spine/manifest/linear variations are
-/// trivial to express), PDFs are rendered with real selectable text, and text
-/// files are written in the encoding under test.
 enum Fixture {
-
-    // MARK: - Temp files
-
     private static func uniqueURL(ext: String) -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("ReaderTests-\(UUID().uuidString)")
             .appendingPathExtension(ext)
     }
 
-    /// Write raw bytes to a unique temp file with `ext`; returns the URL.
     @discardableResult
     static func write(_ data: Data, ext: String) -> URL {
         let url = uniqueURL(ext: ext)
@@ -49,9 +40,6 @@ enum Fixture {
         return url
     }
 
-    /// Copy `url` to a file named exactly `name` (to exercise filename-derived
-    /// titles). The unique token goes in a parent directory so the filename — and
-    /// thus the derived title — is precisely `name`.
     static func renamed(_ url: URL, to name: String) -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ReaderTests-\(UUID().uuidString)")
@@ -61,9 +49,6 @@ enum Fixture {
         return dest
     }
 
-    // MARK: - Text
-
-    /// A text file in `encoding`, optionally prefixed with a byte-order mark.
     static func textFile(_ string: String, encoding: String.Encoding,
                          ext: String = "txt", bom: [UInt8] = []) -> URL {
         var data = Data(bom)
@@ -71,10 +56,6 @@ enum Fixture {
         return write(data, ext: ext)
     }
 
-    // MARK: - PDF
-
-    /// A PDF with one page per entry in `pages` (empty string → a genuinely blank
-    /// page). Text is drawn as real glyphs so `PDFPage.string` extracts it.
     static func pdf(pages: [String]) -> URL {
         let url = uniqueURL(ext: "pdf")
         let bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
@@ -91,10 +72,6 @@ enum Fixture {
         return url
     }
 
-    /// A PDF whose pages have NO text layer: each string is rasterized to an image
-    /// and drawn as an image XObject, so `PDFPage.string` is empty — simulating a
-    /// scanned / image-only PDF. Exercises the OCR fallback path. The rasterized
-    /// text is legible (black on white, large) so a real recognizer can read it.
     static func imagePDF(_ pages: [String]) -> URL {
         let url = uniqueURL(ext: "pdf")
         let bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
@@ -109,8 +86,6 @@ enum Fixture {
         return url
     }
 
-    /// An encrypted (password-protected) PDF: a text PDF re-written with user +
-    /// owner passwords, so `PDFDocument(url:).isLocked` is true on open.
     static func lockedPDF() -> URL {
         let plain = PDFDocument(url: pdf(pages: ["Locked content"]))!
         let url = uniqueURL(ext: "pdf")
@@ -119,7 +94,6 @@ enum Fixture {
         return url
     }
 
-    /// Rasterize `text` onto a white image (drawn into a PDF → no text layer).
     private static func textImage(_ text: String, size: CGSize) -> UIImage {
         UIGraphicsImageRenderer(size: size).image { _ in
             UIColor.white.setFill()
@@ -130,14 +104,12 @@ enum Fixture {
         }
     }
 
-    // MARK: - EPUB
-
     struct EPUBItem {
         let id: String
-        let href: String      // relative to the OPF directory
-        let content: String   // full XHTML document
-        var properties: String? = nil                       // e.g. "nav" (EPUB3 TOC)
-        var mediaType: String = "application/xhtml+xml"     // e.g. NCX
+        let href: String
+        let content: String
+        var properties: String? = nil
+        var mediaType: String = "application/xhtml+xml"
     }
 
     struct SpineRef {
@@ -146,8 +118,6 @@ enum Fixture {
         init(_ idref: String, linear: Bool = true) { self.idref = idref; self.linear = linear }
     }
 
-    /// Wrap body markup in a minimal XHTML document with a `<head><title>` (so tests
-    /// can assert head metadata never leaks into the extracted chapter).
     static func xhtml(body: String, title: String = "HEAD_TITLE_DO_NOT_LEAK") -> String {
         """
         <?xml version="1.0" encoding="utf-8"?>
@@ -156,10 +126,6 @@ enum Fixture {
         """
     }
 
-    /// Build a valid EPUB (a ZIP) from a manifest + an explicit spine. The spine
-    /// order is independent of manifest order, so reading-order tests are exact.
-    /// `extraFiles` (href relative to the OPF dir → bytes) drops non-XHTML resources
-    /// — e.g. the images an image-only spine item references — into the archive.
     static func epub(manifest: [EPUBItem], spine: [SpineRef],
                      opfDir: String = "OEBPS", containerXML: String? = nil,
                      spineTOC: String? = nil,
@@ -168,7 +134,6 @@ enum Fixture {
             .appendingPathComponent("ReaderTests-epub-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        // EPUB OCF: mimetype + META-INF/container.xml → OPF.
         try "application/epub+zip".write(to: root.appendingPathComponent("mimetype"),
                                          atomically: true, encoding: .utf8)
         let metaInf = root.appendingPathComponent("META-INF")
@@ -184,7 +149,6 @@ enum Fixture {
         try container.write(to: metaInf.appendingPathComponent("container.xml"),
                             atomically: true, encoding: .utf8)
 
-        // OPF: manifest (id→href) + spine (ordered idrefs, optional linear="no").
         let manifestXML = manifest.map {
             let props = $0.properties.map { " properties=\"\($0)\"" } ?? ""
             return "<item id=\"\($0.id)\" href=\"\($0.href)\" media-type=\"\($0.mediaType)\"\(props)/>"
@@ -204,7 +168,6 @@ enum Fixture {
                                                 withIntermediateDirectories: true)
         try opf.write(to: opfURL, atomically: true, encoding: .utf8)
 
-        // Item documents, stored at the (percent-decoded) path the importer resolves.
         for item in manifest {
             let rel = opfDir.isEmpty ? item.href : "\(opfDir)/\(item.href)"
             let decoded = rel.removingPercentEncoding ?? rel
@@ -214,7 +177,6 @@ enum Fixture {
             try item.content.write(to: fileURL, atomically: true, encoding: .utf8)
         }
 
-        // Extra (binary) resources — images an image-only page points at.
         for (href, bytes) in extraFiles {
             let rel = opfDir.isEmpty ? href : "\(opfDir)/\(href)"
             let fileURL = root.appendingPathComponent(rel)
@@ -228,8 +190,6 @@ enum Fixture {
         return epubURL
     }
 
-    /// An EPUB3 nav document (`<nav epub:type="toc">`) listing (href, title) entries.
-    /// Titles are inserted raw, so tests can embed markup/entities in a label.
     static func navDoc(_ entries: [(href: String, title: String)]) -> String {
         let items = entries.map { "<li><a href=\"\($0.href)\">\($0.title)</a></li>" }.joined()
         return """
@@ -240,7 +200,6 @@ enum Fixture {
         """
     }
 
-    /// An EPUB2 NCX whose navMap lists (src, title) entries in order.
     static func ncx(_ entries: [(src: String, title: String)]) -> String {
         let points = entries.enumerated().map { i, e in
             """
@@ -257,7 +216,6 @@ enum Fixture {
         """
     }
 
-    /// Convenience: chapters c0…cN in declared order, spine matching, plain `<p>` bodies.
     static func simpleEPUB(_ bodies: [String]) throws -> URL {
         let items = bodies.enumerated().map {
             EPUBItem(id: "c\($0.offset)", href: "c\($0.offset).xhtml",
@@ -266,9 +224,6 @@ enum Fixture {
         return try epub(manifest: items, spine: items.map { SpineRef($0.id) })
     }
 
-    /// An EPUB whose spine pages have NO extractable text: each is a single `<img>`
-    /// referencing a real JPEG stored in the archive (a fixed-layout / scanned book).
-    /// Exercises the EPUB image→OCR fallback.
     static func imageEPUB(pages count: Int) throws -> URL {
         var manifest: [EPUBItem] = []
         var images: [String: Data] = [:]
@@ -281,17 +236,11 @@ enum Fixture {
         return try epub(manifest: manifest, spine: manifest.map { SpineRef($0.id) }, extraFiles: images)
     }
 
-    /// A small, genuinely decodable JPEG (so `UIImage(data:)` succeeds). The pixels are
-    /// irrelevant to the stub recognizers, which ignore image content.
     static func jpeg(_ label: String) -> Data {
         textImage(label, size: CGSize(width: 320, height: 480)).jpegData(compressionQuality: 0.8)!
     }
 }
 
-// MARK: - Shared OCR stubs
-
-/// Canned recognizer for the importer tests: returns `perImage` text in order and
-/// records how it was called.
 final class StubRecognizer: PDFTextRecognizer, @unchecked Sendable {
     private let perImage: [String]
     private(set) var callCount = 0
@@ -307,8 +256,6 @@ final class StubRecognizer: PDFTextRecognizer, @unchecked Sendable {
     }
 }
 
-/// Returns globally-incrementing "P{n}" per image and counts how many batched calls it
-/// received — proves windowed processing preserves order across passes.
 final class OCRCounter: PDFTextRecognizer, @unchecked Sendable {
     private let lock = NSLock()
     private(set) var calls = 0

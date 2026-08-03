@@ -1,10 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import ReaderCore
-import struct ReaderCore.Document   // disambiguate from SwiftUI.Document
+import struct ReaderCore.Document
 
-/// The Library / home screen: the 読み wordmark, theme + add controls, and a
-/// quiet list of texts with author, cached marker, status, and progress bar.
 struct LibraryView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.theme) private var theme
@@ -12,13 +10,8 @@ struct LibraryView: View {
     @State private var importing = false
     @State private var showingPaste = false
     @State private var showingSettings = false
-    /// Row the user swiped to delete, pending the confirmation alert.
     @State private var pendingDelete: LibraryModel.Item?
-    /// A confirmed deletion that couldn't be committed to `library.json`.
     @State private var deleteFailed = false
-    /// Hides the membership (paywall) button once subscribed — it's purely an
-    /// upsell entry; a lapsed or reinstalled user sees it again (and Restore
-    /// lives on the paywall it opens).
     @State private var isSubscribed = false
 
     var body: some View {
@@ -27,14 +20,8 @@ struct LibraryView: View {
             if model.items.isEmpty {
                 emptyState
             } else {
-                // A plain List with its native row chrome (insets, separators,
-                // swipe-to-delete); the destructive action routes through a
-                // confirmation alert rather than deleting on the swipe.
                 List {
                     ForEach(model.items) { item in
-                        // Clear, not theme.bg: RootView already paints the themed
-                        // background, and an opaque row slices the glass header's
-                        // soft shadow with a hard edge where the list begins.
                         row(item)
                             .listRowBackground(Color.clear)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -46,13 +33,7 @@ struct LibraryView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                // The list still scrolls beneath the floating glass capsule (so
-                // there is content to blur), but its final row can clear the chrome.
                 .contentMargins(.bottom, app.importActivity == nil ? 0 : 94, for: .scrollContent)
-                // Claim the remaining height explicitly. Without this the List sizes to
-                // its content inside the VStack and overflows the screen without
-                // scrolling once there are more rows than fit (was latent when the
-                // shelf fit on one screen).
                 .frame(maxHeight: .infinity)
             }
         }
@@ -62,17 +43,11 @@ struct LibraryView: View {
         }
         .task {
             isSubscribed = await app.services.isSubscribed()
-            // Then FOLLOW RevenueCat: an expiry, refund or cross-device purchase
-            // never reaches `entitlementTick`, and this screen would keep the
-            // membership entry point hidden from a user who has just lapsed.
             for await active in app.services.entitlementUpdates() { isSubscribed = active }
         }
-        // A purchase/restore just completed — drop the upsell button live.
         .onChange(of: app.entitlementTick) { _, _ in
             Task { isSubscribed = await app.services.isSubscribed() }
         }
-        // The shelf changed (an import finished, possibly while the user was in the
-        // reader) — reload so the new book appears without waiting for the next appear.
         .onChange(of: app.libraryRevision) { _, _ in model.load(app.services) }
         .fileImporter(isPresented: $importing,
                       allowedContentTypes: [.epub, .pdf, .plainText, .text],
@@ -81,15 +56,11 @@ struct LibraryView: View {
             case .success(let urls):
                 if let url = urls.first { app.importFile(url) }
             case .failure(let error):
-                // Picker-level failure (file provider, undownloaded iCloud item):
-                // route through the import-failed alert instead of silence.
                 app.importErrorNeedsMembership = false
                 app.importError = error.localizedDescription
             }
         }
         .alert(L10n.importFailedTitle, isPresented: showImportError) {
-            // A Membership-gated failure (scanned import, no subscription) offers
-            // the way in — the message names Membership, so OK alone is a dead end.
             if app.importErrorNeedsMembership {
                 Button(L10n.readerSubscribeCTA) { app.showPaywall = true }
             }
@@ -97,9 +68,6 @@ struct LibraryView: View {
         } message: {
             Text(app.importError ?? "")
         }
-        // Mixed book imported without its scanned pages — an explicit notice, never
-        // a silent omission. Membership is offered only when the gate is what left
-        // them out; a subscriber whose OCR pass failed has nothing to buy.
         .alert(L10n.importPartialTitle, isPresented: showImportNotice) {
             if app.importNoticeNeedsMembership {
                 Button(L10n.readerSubscribeCTA) { app.showPaywall = true }
@@ -116,8 +84,6 @@ struct LibraryView: View {
         } message: { item in
             Text(L10n.libraryDeleteBody(item.document.title))
         }
-        // The shelf file couldn't be rewritten — the row is gone from this session
-        // but the book will be back on the next launch, so say so.
         .alert(L10n.libraryDeleteFailedTitle, isPresented: $deleteFailed) {
             Button(L10n.commonOK, role: .cancel) {}
         } message: {
@@ -162,16 +128,10 @@ struct LibraryView: View {
         Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
     }
 
-    /// Both alert buttons already call the matching handler, and an `.alert` has no
-    /// other way out — so the setter only clears the flag. Calling `cancelImportOCR`
-    /// here too made SwiftUI's `isPresented` write race the button action, which
-    /// could save the fallback AND the OCR'd text as two separate books.
     private var showOCRConfirm: Binding<Bool> {
         Binding(get: { app.pendingImportOCR != nil }, set: { if !$0 { app.pendingImportOCR = nil } })
     }
 
-    /// Shown when no books have been imported yet (the default on a fresh install,
-    /// now that the sample shelf is dev-only). Keeps first run from looking broken.
     private var emptyState: some View {
         ContentUnavailableView {
             Label(L10n.libraryEmptyTitle, systemImage: "books.vertical")
@@ -181,8 +141,6 @@ struct LibraryView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Native large-title header with floating glass controls — a capsule cluster
-    /// (membership + settings) and a circular add button, the Apple Music idiom.
     private var header: some View {
         HStack(alignment: .center) {
             Text(L10n.wordmark)
@@ -197,10 +155,6 @@ struct LibraryView: View {
                 }
                 .glassEffect(.regular, in: Capsule())
                 Menu {
-                    // Only the file route is single-flight. Pasting never touches the
-                    // import pipeline, so it stays reachable — and disabling the whole
-                    // menu left the glass + looking identical to its enabled state,
-                    // reading as broken rather than busy.
                     Button { importing = true } label: {
                         Label(L10n.libraryAddImportFile, systemImage: "folder")
                     }
@@ -225,8 +179,6 @@ struct LibraryView: View {
         .padding(.bottom, 10)
     }
 
-    /// One icon in the header's glass cluster (plain button; the shared capsule
-    /// provides the glass).
     private func chromeIcon(_ systemImage: String, label: String,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {

@@ -2,13 +2,6 @@ import SwiftUI
 import RevenueCat
 import RevenueCatUI
 
-/// The one membership screen, presented as a sheet from the Library star, the
-/// reader's locked pill, and Settings. Always leads with what Membership adds;
-/// the pinned bottom block adapts: Subscribe (the RevenueCat paywall) + Restore
-/// for non-subscribers, active status + renewal date + App Store management for
-/// members. Renders in full even when RevenueCat is unconfigured — the buttons
-/// surface the unavailable notice instead of touching `Purchases.shared`
-/// (which traps on a misconfigured build).
 struct MembershipView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.theme) private var theme
@@ -17,8 +10,6 @@ struct MembershipView: View {
 
     @State private var showingPaywall = false
     @State private var restoring = false
-    /// Inline outcome line above the buttons: restore found nothing, restore
-    /// failed, or the build has no RevenueCat key.
     @State private var notice: String?
     @State private var info: CustomerInfo?
 
@@ -27,18 +18,12 @@ struct MembershipView: View {
     }
 
     var body: some View {
-        // Subscribe swaps the paywall IN PLACE of the features list rather than
-        // stacking a second sheet on this one — a single surface, and the
-        // paywall's loading/error states are always visible. The paywall's own
-        // close button dismisses the whole membership sheet.
         Group {
             if showingPaywall {
                 PaywallView(displayCloseButton: true)
                     .onPurchaseCompleted { completed($0, otherwise: L10n.membershipPurchaseIncomplete) }
                     .onRestoreCompleted { completed($0, otherwise: L10n.membershipRestoreNone) }
             } else {
-                // Features scroll (if they must); the action buttons stay pinned
-                // at the bottom of the screen, not trailing the content.
                 VStack(spacing: 0) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
@@ -70,9 +55,6 @@ struct MembershipView: View {
         }
     }
 
-    /// Centered title block over left-aligned feature rows with a fixed icon
-    /// column — the standard iOS feature-upsell sheet layout. The subscribe
-    /// pitch line only makes sense before subscribing.
     private var header: some View {
         VStack(spacing: 8) {
             Text(L10n.readerSubscribeTitle)
@@ -137,8 +119,6 @@ struct MembershipView: View {
             .opacity(restoring ? 0.4 : 1)
             .disabled(restoring)
 
-            // Set the expectation BEFORE payment: narration is the thing being sold,
-            // and it occasionally misreads a word.
             Text(L10n.narrationDisclaimer)
                 .font(.system(size: 12)).foregroundStyle(theme.muted)
                 .multilineTextAlignment(.center)
@@ -146,10 +126,6 @@ struct MembershipView: View {
         .padding(.horizontal, 24).padding(.top, 16)
     }
 
-    /// The member's bottom block: status + renewal date (+ test-purchase note),
-    /// then App Store management — the row in Settings must always produce
-    /// visible UI, because the NATIVE management sheet silently shows nothing
-    /// for sandbox/TestFlight purchases.
     private var memberActions: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
@@ -185,13 +161,6 @@ struct MembershipView: View {
         .padding(.horizontal, 24).padding(.top, 16)
     }
 
-    /// The paywall reported a completed purchase or restore. RevenueCat documents
-    /// that the returned `CustomerInfo` does NOT imply an entitlement — restore
-    /// fires even when it finds nothing, and a purchase can complete against an
-    /// offering that isn't wired to `reader Pro`. So verify before believing it:
-    /// only an ACTIVE entitlement closes the sheet. Anything else falls back to
-    /// this screen with the reason, instead of dismissing onto a still-locked app
-    /// (possibly after payment) with no explanation. Mirrors `restore()`.
     private func completed(_ customerInfo: CustomerInfo, otherwise reason: String) {
         info = customerInfo
         guard customerInfo.entitlements[AppServices.entitlementID]?.isActive == true else {
@@ -203,8 +172,6 @@ struct MembershipView: View {
         dismiss()
     }
 
-    /// Restore outside the paywall: an entitlement coming back closes the screen;
-    /// a restore that yields none (or fails) reports inline instead.
     private func restore() {
         restoring = true
         notice = nil
@@ -224,8 +191,6 @@ struct MembershipView: View {
         }
     }
 
-    /// The native App Store management sheet when it works; the account's
-    /// management URL otherwise (sandbox purchases often have no native sheet).
     private func manageInAppStore() {
         Task {
             do { try await Purchases.shared.showManageSubscriptions() }

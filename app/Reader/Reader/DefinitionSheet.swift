@@ -1,9 +1,6 @@
 import SwiftUI
 import ReaderCore
 
-/// The tap-to-define bottom sheet: headword + reading, play control,
-/// part-of-speech, numbered senses, and an optional example. Matches the design;
-/// data comes from the `DictionaryService` (mock now, jisho-seed.db later).
 struct DefinitionSheet: View {
     let model: ReaderModel
     @Environment(\.theme) private var theme
@@ -12,8 +9,6 @@ struct DefinitionSheet: View {
     private var entry: DictionaryEntry? { model.entry }
 
     var body: some View {
-        // Hosted in a native `.sheet` (grabber, background, rounded corners, and
-        // swipe-to-dismiss come from the system); this is just the content.
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header

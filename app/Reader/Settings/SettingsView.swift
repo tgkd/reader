@@ -2,21 +2,14 @@ import SwiftUI
 import ReaderCore
 import RevenueCat
 
-/// Reading preferences, opened from the Library header gear. Currently the reading
-/// font + text size; both apply live to the reader surface and persist. Hosted in a
-/// native `.sheet` (grabber / swipe-to-dismiss / background come from the caller).
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.theme) private var theme
-    /// Bytes of cached narration on disk; refreshed on appear and after clearing.
     @State private var cacheBytes = 0
     @State private var showClearConfirm = false
-    /// Gates the narration-voice section — a paid knob, hidden on the free tier.
     @State private var isSubscribed = false
     @State private var demo = VoiceDemoPlayer()
     @State private var showingAbout = false
-    /// One membership sheet for both tiers: subscribe/restore before, status +
-    /// App Store management after.
     @State private var showingMembership = false
 
     var body: some View {
@@ -28,7 +21,6 @@ struct SettingsView: View {
 
                 sectionHeader(L10n.settingsFont)
                 ForEach(ReadingFont.allCases) { font in
-                    // Preview each option rendered in its own face.
                     optionRow(font.displayName,
                               font: .custom(font.psName, size: 19),
                               selected: app.readingFont == font) { app.readingFont = font }
@@ -36,7 +28,6 @@ struct SettingsView: View {
 
                 sectionHeader(L10n.settingsSize)
                 ForEach(ReadingSize.allCases) { size in
-                    // Preview the size in the currently-selected face.
                     optionRow(size.displayName,
                               font: .custom(app.readingFont.psName, size: 15 * size.scale),
                               selected: app.readingSize == size) { app.readingSize = size }
@@ -62,8 +53,6 @@ struct SettingsView: View {
                               selected: app.themeName == name) { app.themeName = name }
                 }
 
-                // Narration voice — synthesis is the paid feature, so the picker
-                // only exists for subscribers (mirrors the Worker's server gate).
                 if isSubscribed {
                     sectionHeader(L10n.settingsVoice)
                     ForEach(Voice.catalog) { voice in
@@ -90,10 +79,6 @@ struct SettingsView: View {
         .onAppear { cacheBytes = app.services.audioStore.totalBytes() }
         .task {
             isSubscribed = await app.services.isSubscribed()
-            // Then FOLLOW RevenueCat: an expiry, refund or cross-device purchase
-            // never reaches `entitlementTick` (only this app's own purchase/restore
-            // does), and this sheet would go on offering the subscriber-only voice
-            // picker — and claiming Membership is active — to a lapsed user.
             for await active in app.services.entitlementUpdates() { isSubscribed = active }
         }
         .onDisappear { demo.stop() }
@@ -103,15 +88,9 @@ struct SettingsView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(theme.bg)
         }
-        // The one membership screen — same sheet RootView presents. It adapts to
-        // the tier (subscribe/restore vs status + App Store management), opens
-        // the RevenueCat paywall itself, and degrades safely when RevenueCat is
-        // unconfigured.
         .sheet(isPresented: $showingMembership) {
             MembershipView()
         }
-        // A purchase/restore just completed — flip the membership block (and the
-        // voice section's gate) live.
         .onChange(of: app.entitlementTick) { _, _ in
             Task { isSubscribed = await app.services.isSubscribed() }
         }
@@ -126,8 +105,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Destructive action row: the cache size on the right, tapping it confirms a
-    /// full clear. Disabled (and muted) when nothing is cached.
     private var storageRow: some View {
         let empty = cacheBytes <= 0
         return Button { showClearConfirm = true } label: {
@@ -148,8 +125,6 @@ struct SettingsView: View {
         }
     }
 
-    /// An `optionRow`-style voice pick with a trailing sample button: spinner while
-    /// the sample synthesizes (first listen only — cached after), stop while playing.
     private func voiceRow(_ voice: Voice) -> some View {
         let selected = app.narrationVoice == voice
         return HStack(spacing: 0) {
@@ -190,9 +165,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Membership block: active status + subscription management for subscribers,
-    /// the paywall entry for everyone else (the Library upsell star hides once
-    /// subscribed, so this is the durable home for membership).
     @ViewBuilder private var membershipBlock: some View {
         if isSubscribed {
             HStack {
@@ -205,10 +177,6 @@ struct SettingsView: View {
             .overlay(alignment: .bottom) {
                 Rectangle().fill(theme.hair).frame(height: 1).padding(.horizontal, 24)
             }
-            // The membership sheet, not the native App Store management sheet
-            // directly — that sheet silently shows NOTHING for sandbox/TestFlight
-            // purchases, so the tap must always produce visible UI. App Store
-            // management is one tap deeper, inside the sheet.
             actionRow(L10n.membershipManage) { showingMembership = true }
         } else {
             actionRow(L10n.readerSubscribeCTA) { showingMembership = true }
@@ -232,7 +200,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Version, product links, and data-source attributions live one level down.
     private var aboutRow: some View {
         Button { showingAbout = true } label: {
             HStack {

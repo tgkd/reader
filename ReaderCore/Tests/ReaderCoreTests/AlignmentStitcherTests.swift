@@ -1,13 +1,7 @@
 import XCTest
 @testable import ReaderCore
 
-/// `AlignmentStitcher.stitch` glues chunked segment synthesis back into one
-/// continuous chapter. These pin the timeline math (per-segment offset by spoken
-/// length, monotonic non-decreasing across the join) and the concatenation
-/// invariants (characters/text/audio all reconstruct in order) that keep the
-/// stitched result indistinguishable from an unchunked one for the reader.
 final class AlignmentStitcherTests: XCTestCase {
-
     private func segment(chars: [String], starts: [Double], ends: [Double],
                          audio: [UInt8], text: String) -> SynthesizedAudio {
         SynthesizedAudio(audio: Data(audio),
@@ -37,7 +31,7 @@ final class AlignmentStitcherTests: XCTestCase {
 
     func testSecondSegmentTimesOffsetByFirstSpokenLength() {
         let a = segment(chars: ["A", "B"], starts: [0.0, 0.4], ends: [0.4, 0.8],
-                        audio: [0], text: "AB")      // spoken length = max end = 0.8
+                        audio: [0], text: "AB")
         let b = segment(chars: ["C", "D"], starts: [0.0, 0.5], ends: [0.5, 1.0],
                         audio: [0], text: "CD")
         let out = AlignmentStitcher.stitch([a, b])
@@ -56,7 +50,6 @@ final class AlignmentStitcherTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(out.alignment.startTimes[k], out.alignment.startTimes[k - 1],
                                         "non-monotonic start at \(k)")
         }
-        // The whole stitched timeline drives SpanTimeline cleanly.
         XCTAssertEqual(out.alignment.characters.count, 8)
     }
 }

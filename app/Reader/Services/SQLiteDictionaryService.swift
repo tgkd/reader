@@ -2,14 +2,6 @@ import Foundation
 import SQLite3
 import ReaderCore
 
-/// Read-only tap-to-define over the bundled compact dictionary DB (built by
-/// `scripts/build-compact-dict.sh` from jisho-seed.db). Opens it `immutable=1`
-/// (no -wal/-shm, no locking — correct for a shipped read-only seed) and resolves
-/// a MeCab `dictionary_form` (+ the reading from the same tokenize pass, to
-/// disambiguate homographs) to a `DictionaryEntry`.
-///
-/// Failable init: returns nil when the DB isn't bundled, so `AppServices` can
-/// fall back to the seeded mock.
 final class SQLiteDictionaryService: DictionaryService {
     private let db: OpaquePointer
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
@@ -26,11 +18,8 @@ final class SQLiteDictionaryService: DictionaryService {
     deinit { sqlite3_close(db) }
 
     func lookup(dictionaryForm: String, reading: String?) -> DictionaryEntry? {
-        let readingHira = reading ?? ""   // MeCab readings are already hiragana
+        let readingHira = reading ?? ""
 
-        // Step 1: best entry id — match the headword, tie-break to the reading
-        // (homographs like 上 うえ/かみ/じょう), then commonness. Fall back to a
-        // kana/reading match for base forms not stored as `word` (する/いる…).
         var id = firstId("""
             SELECT id FROM words WHERE word = ?1
             ORDER BY (reading_hiragana = ?2) DESC, priority_rank ASC, id ASC LIMIT 1;
@@ -43,8 +32,6 @@ final class SQLiteDictionaryService: DictionaryService {
         }
         guard let wordId = id else { return nil }
 
-        // Step 2: senses in JMdict order; POS is empty on continuation senses,
-        // so carry the last non-empty POS forward.
         let senseRows = query("""
             SELECT w.word, w.reading, w.priority_rank, m.meaning, m.part_of_speech, m.misc, m.field
             FROM words w JOIN meanings m ON m.word_id = w.id
@@ -64,7 +51,6 @@ final class SQLiteDictionaryService: DictionaryService {
         }
         guard !senses.isEmpty else { return nil }
 
-        // Step 3: one example (optional — only ~5% of entries have one).
         let example = query("SELECT japanese_text, english_text, reading FROM examples WHERE word_id = ?1 LIMIT 1;",
                             [.int(wordId)]).first.flatMap { r -> Example? in
             guard let jp = r.text("japanese_text"), let en = r.text("english_text") else { return nil }
@@ -79,8 +65,6 @@ final class SQLiteDictionaryService: DictionaryService {
             senses: senses,
             example: example)
     }
-
-    // MARK: - Tiny read-only query layer (crib of JishoCore/Database.swift)
 
     private enum Bind { case text(String); case int(Int) }
 

@@ -3,47 +3,25 @@ import PDFKit
 import UIKit
 import ReaderCore
 
-/// Imports a PDF, one chapter per page. A page's text comes from PDFKit's text
-/// layer (`PDFPage.string`) when present; pages with NO text layer (scanned /
-/// image-only PDFs) are rasterized and handed to an injected `PDFTextRecognizer`
-/// (the Worker's gated cloud OCR — see `WorkerOCRService`). Born-digital pages never
-/// touch OCR — no cost, no network. A page is one chapter so the reader can move
-/// through a long PDF without synthesizing the whole thing at once.
 struct PDFImporter: DocumentImporter {
     let url: URL
-    /// OCR engine for pages with no text layer. `nil` for non-subscribers — a scanned
-    /// PDF then throws `.ocrUnavailable` (OCR is a Membership feature).
     var recognizer: PDFTextRecognizer? = nil
-    /// Reports OCR page completion (`completed`, `total`) for a determinate banner.
     var onProgress: ImportProgressHandler? = nil
-    /// Reports local text-layer inspection one page at a time.
     var onParsingProgress: ImportProgressHandler? = nil
 
-    /// How many page bitmaps to hold + recognize at once. Full-res (200 DPI) page
-    /// bitmaps are large (~15 MB each), so a whole 200-page scan is never rasterized
-    /// at once — we render and recognize in windows to bound peak memory.
     private static let ocrWindow = 8
 
-    /// A page's source: its text-layer string, or a placeholder for an OCR page
-    /// (filled in order from the recognized results).
     private enum Slot { case text(String); case ocr }
 
     func chapters() async throws -> [Chapter] {
         guard let doc = PDFDocument(url: url) else { throw ImportError.unreadable }
-        // A password-protected PDF exposes no text and renders blank pages — it
-        // would otherwise classify as "scanned", misleading the user toward (or
-        // billing them for) OCR of locked pages. Surface the real reason instead.
         if doc.isLocked { throw ImportError.passwordProtected }
 
-        // Pass 1 (cheap, no rasterization): classify each page as text-layer or OCR.
         var slots: [Slot] = []
         var ocrPageIndices: [Int] = []
-        var sawScannedPage = false // a page with no text layer (would need OCR)
+        var sawScannedPage = false
         onParsingProgress?(0, doc.pageCount)
         for i in 0..<doc.pageCount {
-            // Pass 1 is local and unbilled, so it is safe to abandon on cancel.
-            // Pass 2 (paid OCR) deliberately has no such check — accepted requests
-            // must drain into the page cache.
             try Task.checkCancellation()
             guard let page = doc.page(at: i) else {
                 onParsingProgress?(i + 1, doc.pageCount)
@@ -56,14 +34,11 @@ struct PDFImporter: DocumentImporter {
                 slots.append(.ocr)
                 ocrPageIndices.append(i)
             } else {
-                sawScannedPage = true // no OCR engine (non-subscriber)
+                sawScannedPage = true
             }
             onParsingProgress?(i + 1, doc.pageCount)
         }
 
-        // Pass 2: OCR in bounded-memory windows. Each window is rendered, recognized,
-        // then released before the next; progress is reported cumulatively. Results
-        // stay 1:1 with `ocrPageIndices` (render never drops a page — see `render`).
         var recognized: [String] = []
         if let recognizer, !ocrPageIndices.isEmpty {
             let total = ocrPageIndices.count
@@ -96,8 +71,6 @@ struct PDFImporter: DocumentImporter {
         }
 
         guard !chapters.isEmpty else {
-            // A scanned PDF with no recognizer (non-subscriber) → Membership prompt;
-            // OCR ran but recovered nothing → ocrFailed; otherwise a genuinely blank file.
             if recognizer != nil && !ocrPageIndices.isEmpty { throw ImportError.ocrFailed }
             if recognizer == nil && sawScannedPage { throw ImportError.ocrUnavailable }
             throw ImportError.empty
@@ -105,12 +78,7 @@ struct PDFImporter: DocumentImporter {
         return chapters
     }
 
-    /// Number of pages an OCR pass would send for this PDF — those with no text layer
-    /// (scanned / image-only). Cheap: classifies without rasterizing. Drives the import
-    /// confirm prompt; mirrors `EPUBImporter.ocrCandidateCount`.
     func ocrCandidateCount() -> Int {
-        // Locked pages are not OCR candidates: 0 keeps the import flow on the
-        // passwordProtected error instead of offering a doomed (billed) OCR pass.
         guard let doc = PDFDocument(url: url), !doc.isLocked else { return 0 }
         var count = 0
         for i in 0..<doc.pageCount {
@@ -120,24 +88,12 @@ struct PDFImporter: DocumentImporter {
         return count
     }
 
-    /// Upper bound on one rasterized page, in pixels. A media box is untrusted
-    /// input (and the format allows pages up to 200×200 in): at 200 DPI a max-size
-    /// page asks for a multi-gigabyte bitmap and the app is killed before OCR even
-    /// starts. Oversized pages render at the largest scale that fits instead — 8 MP
-    /// still OCRs cleanly, and it keeps a full `ocrWindow` of pages bounded.
     private static let maxRasterPixels: CGFloat = 8_000_000
 
-    /// Rasterize a page for OCR. 200 DPI balances accuracy against memory
-    /// (US-letter → ~1700×2200 px), clamped to `maxRasterPixels`. White background
-    /// so transparent scans don't OCR as noise. PDFKit's origin is bottom-left, so
-    /// the context is flipped before drawing. Always returns an image (a 1×1 white
-    /// fallback for a nil/zero-size page) so the OCR results stay 1:1 with the page
-    /// list.
     static func render(_ page: PDFPage?, dpi: CGFloat = 200) -> CGImage {
         let bounds = page?.bounds(for: .mediaBox) ?? .zero
         guard let page, bounds.width > 0, bounds.height > 0,
               bounds.width.isFinite, bounds.height.isFinite else { return blankPixel }
-        // Downscale rather than allocate a bitmap the device can't hold.
         let scale = min(dpi / 72.0, (maxRasterPixels / (bounds.width * bounds.height)).squareRoot())
         let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
         guard size.width >= 1, size.height >= 1 else { return blankPixel }

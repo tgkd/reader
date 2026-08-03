@@ -1,10 +1,7 @@
 import SwiftUI
 import ReaderCore
-import struct ReaderCore.Document   // disambiguate from SwiftUI.Document
+import struct ReaderCore.Document
 
-/// The Reader screen: a full-bleed reading surface with fading top/bottom chrome
-/// and the tap-to-define sheet. Tapping a word opens the sheet; tapping empty
-/// space toggles the chrome.
 struct ReaderView: View {
     let document: Document
 
@@ -26,11 +23,6 @@ struct ReaderView: View {
                 }
             }
         }
-        // Native bottom sheets — the system provides the grabber, dim, rounded
-        // corners, swipe-to-dismiss, and modal VoiceOver focus. The background is
-        // pinned to the theme so the themed text always contrasts it: a native
-        // sheet otherwise follows the device appearance, not the app's forced
-        // color scheme, which leaves a light theme's dark text on a dark sheet.
         .sheet(isPresented: presented(\.sheetVisible)) {
             if let model {
                 DefinitionSheet(model: model)
@@ -48,32 +40,23 @@ struct ReaderView: View {
             }
         }
         .task(id: document.id) {
-            // Rebuild for the current document. The `id:` makes this re-run if the
-            // view is ever reused for a different document; current navigation
-            // always creates a fresh ReaderView, so in practice it runs once.
             let m = ReaderModel(document: document, services: app.services)
             model = m
             await m.load()
         }
         .onDisappear { model?.stop() }
         .onChange(of: scenePhase) { _, phase in
-            // Background audio keeps narrating with the screen locked; save the
-            // playhead (or chapter) so a kill-while-backgrounded doesn't lose progress.
             if phase == .background { model?.saveProgressOnLeave() }
         }
         .onChange(of: app.entitlementTick) { _, _ in
-            // A purchase/restore just unlocked `reader Pro` — retry the gated load.
             Task { await model?.load() }
         }
     }
 
-    /// A Bool binding into the (optional) model, for native `.sheet` presentation.
     private func presented(_ keyPath: ReferenceWritableKeyPath<ReaderModel, Bool>) -> Binding<Bool> {
         Binding(get: { model?[keyPath: keyPath] ?? false },
                 set: { model?[keyPath: keyPath] = $0 })
     }
-
-    // MARK: - Reading surface
 
     @ViewBuilder private func surface(_ model: ReaderModel, safeArea: EdgeInsets) -> some View {
         Group {
@@ -104,11 +87,6 @@ struct ReaderView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
-        // Full-bleed to the PHYSICAL screen edges (mid-scroll text runs under the
-        // status bar and home indicator), so the chrome clearance — content insets
-        // in yokogaki, the column band in tategaki — must include the safe area:
-        // at rest the first/last line still clears the floating pills, but the
-        // text scrolls under them, giving the glass something to blur.
     }
 
     private func placeholder(_ title: String, _ subtitle: String) -> some View {
@@ -123,11 +101,6 @@ struct ReaderView: View {
         .onTapGesture { model?.toggleChrome() }
     }
 
-    // MARK: - Top chrome
-
-    /// Floating Liquid Glass chrome — no bar, no hairline: a glass circle for
-    /// back, a glass title capsule (tap → chapters), and a glass capsule cluster
-    /// for the quick toggles, all riding over the full-bleed text.
     private func topBar(_ model: ReaderModel) -> some View {
         HStack(spacing: 10) {
             Button { app.backToLibrary() } label: {
@@ -159,15 +132,10 @@ struct ReaderView: View {
         .padding(.horizontal, 12)
         .opacity(model.chromeVisible ? 1 : 0)
         .allowsHitTesting(model.chromeVisible)
-        // opacity(0) alone keeps the bar in the accessibility tree; hide it so
-        // VoiceOver can't focus invisible controls once chrome is dismissed.
         .accessibilityHidden(!model.chromeVisible)
         .animation(.easeInOut(duration: 0.3), value: model.chromeVisible)
     }
 
-    /// Book title + chapter subtitle in a floating glass capsule. On multi-chapter
-    /// books the capsule IS the chapter selector — the up/down chevron (the native
-    /// picker affordance) marks it as tappable; it opens the chapters sheet.
     @ViewBuilder private func titleCluster(_ model: ReaderModel) -> some View {
         let title = VStack(spacing: 1) {
             Text(document.title)
@@ -201,8 +169,6 @@ struct ReaderView: View {
         }
     }
 
-    /// One icon in the trailing glass cluster (plain button; the shared capsule
-    /// provides the glass).
     private func chromeIcon(_ systemImage: String, label: String,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -215,8 +181,6 @@ struct ReaderView: View {
         .accessibilityLabel(label)
     }
 
-    /// Header subtitle: the chapter's real (TOC) title with a language-neutral
-    /// position count, or the localized ordinal when the chapter is untitled.
     private func chapterSubtitle(_ model: ReaderModel) -> String {
         guard model.currentChapter?.title != nil else {
             return L10n.chapterOfCount(model.chapterIndex + 1, model.chapterCount)
@@ -224,13 +188,6 @@ struct ReaderView: View {
         return "\(model.chapterTitle) · \(model.chapterIndex + 1)/\(model.chapterCount)"
     }
 
-    // MARK: - Transport
-
-    /// The bottom chrome is the collapsible player (`PlayerView`): a floating
-    /// glass circle bottom-right that morphs into a full-width capsule whose
-    /// row adapts to the audio state — paywall action, play, generation
-    /// progress, or the full transport. Speech is the only gated feature, so a
-    /// free user gets a "Listen with Membership" row instead of a dead scrubber.
     @ViewBuilder private func transport(_ model: ReaderModel, width: CGFloat) -> some View {
         PlayerView(model: model, expandedWidth: width - 32)
             .padding(.trailing, 16)
@@ -241,8 +198,6 @@ struct ReaderView: View {
             .accessibilityHidden(!model.chromeVisible)
             .animation(.easeInOut(duration: 0.3), value: model.chromeVisible)
     }
-
-    // MARK: - Chapters (multi-chapter imports)
 
     private func chaptersSheet(_ model: ReaderModel) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -259,8 +214,6 @@ struct ReaderView: View {
                                     .foregroundStyle(i == model.chapterIndex ? theme.accent : theme.ink)
                                     .lineLimit(1).truncationMode(.tail)
                                 Spacer(minLength: 12)
-                                // Which chapters are already paid for and offline —
-                                // the same mark the library row uses for a book.
                                 if model.cachedChapters.contains(i) {
                                     Image(systemName: "arrow.down.circle")
                                         .font(.system(size: 12))
@@ -284,8 +237,6 @@ struct ReaderView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Refreshed per presentation, so a chapter generated during this session
-        // shows its mark the next time the sheet is opened.
         .task { model.refreshCachedChapters() }
     }
 }

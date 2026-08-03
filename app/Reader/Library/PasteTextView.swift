@@ -1,11 +1,5 @@
 import SwiftUI
 
-/// "Paste text" import sheet: a title field, a big text area, one Add action.
-/// Pasted text takes the exact .txt pipeline downstream (one chapter, split to
-/// renderable size) — the zero-friction way in for the copy-paste-shaped texts
-/// learners actually read (web novels, articles, lyrics, messages). The
-/// clipboard is never read programmatically — the user pastes into the editor
-/// themselves, so no iOS paste-notification banner.
 struct PasteTextView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.theme) private var theme
