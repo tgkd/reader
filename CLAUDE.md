@@ -55,13 +55,14 @@ PDFKit / networking live in the `app/` target only.
   at all. Chunk timestamps are ABSOLUTE, so the client concatenates rather than stitches, and a
   short reassembly is rejected — a truncated stream is internally consistent and would
   otherwise cache as a complete chapter missing its tail) →
-  wrapped by `ChunkingTTSService` (splits chapters over `model.maxRequestChars` — per-model, since
-  the models' input limits differ 8x and v3's 5k is half multilingual_v2's; in practice chapters are
-  capped below every model's limit so the chunked path never fires,
+  wrapped by `ChunkingTTSService` (splits chapters over `SynthesisLimits.maxRequestChars` — one
+  constant, held under `eleven_v3`'s 5k since the client no longer knows which model the Worker
+  picks and the models' limits differ 8x; in practice chapters are capped below it so the chunked
+  path never fires,
   bounded concurrency ~2, exponential 429 backoff on **both** the chunked and single-request paths;
   saves the whole chapter durably **before** pruning per-segment entries; then `AlignmentStitcher`
   stitches) → cached by `DiskAudioStore`, content-addressed by
-  `ContentKey = sha256(model + voice + nfkc(text))`, so re-reads play offline for free.
+  `ContentKey = sha256(voice + nfkc(text))`, so re-reads play offline for free.
   Chapter synthesis requests are owned by **`SynthesisCoordinator`** (session-scoped, keyed by
   `ContentKey`): leaving the reader does NOT cancel a paid request — the result still lands in
   the cache — and a reopen re-attaches to the same in-flight task instead of re-billing; each
@@ -163,7 +164,12 @@ PDFKit / networking live in the `app/` target only.
   is split into ≤ `Chapter.maxRenderableChars` (~4k) sub-chapters (see the invariant below).
 
 - **OCR (cloud-only, subscriber-gated):** pages/spine items with no text layer are OCR'd via
-  `WorkerOCRService` → Worker `/pdf/ocr` → Cloudflare AI Gateway → Gemini. Both `PDFImporter`
+  `WorkerOCRService` → Worker `/pdf/ocr` → Cloudflare AI Gateway. The app posts only
+  `image_base64` — model and prompt are entirely server-side, and have been since before TTS
+  followed: the page-image path runs `openai/gpt-5.6-terra` (`OCR_MODEL`), the cheap text-cleanup
+  path `google-ai-studio/gemini-2.5-flash` (`OCR_TEXT_MODEL`); see aiwork's `OCR-MODELS.md` for why
+  gemini-2.5-flash lost the image path (it emits running headers / page numbers into the text on
+  every run). Both `PDFImporter`
   (scanned pages) and `EPUBImporter` (image-only/fixed-layout spine items) use it, in
   bounded-memory windows. `Importer.ocrPageCount` drives a "read N pages with AI?" confirm.
   A non-subscriber's scanned import yields no recognizer → `ImportError.ocrUnavailable`
@@ -211,23 +217,42 @@ PDFKit / networking live in the `app/` target only.
   natural-finish auto-advance resume only cached audio — they must NEVER trigger a paid
   synthesis (see `ReaderModel.remoteOpenChapter`). The narration
   voice picker (Settings) is subscriber-only and hidden otherwise.
+- **The app decides WHAT to read and in WHICH VOICE; the Worker decides everything else.** The
+  request body is exactly `{text, voice_id, stream}`. The model, `language_code` and the five
+  `voice_settings` live in aiwork's `src/tts.ts` (model overridable via the `TTS_MODEL` var), so
+  narration is re-modelled or retuned **without an App Store release**. `stream` stays client-sent
+  because it declares "I can consume NDJSON" — a fact about the client, not config — and the Worker
+  defaults it too. The Worker allow-lists `voice_id` against the same six ids as `Voice.catalog`;
+  adding a voice needs BOTH. An explicitly-sent `model_id` still wins server-side, for builds
+  shipped before the move — don't "clean that up" until those age out.
 - **Every `SynthesisRequest` must carry the selected narration voice** (`services.narrationVoice`,
-  mirrored from `AppModel`) — the voice is part of `ContentKey`, so a defaulted request silently
-  misses the cache and re-bills synthesis. Current sites: `ReaderModel` (eager probe + synth),
-  `AppServices.firstChapterKey` (library ↓ badge; memoized, invalidated on voice change),
-  `purgeAudio` (sweeps ALL `Voice.catalog` voices **x** ALL `SynthesisModel` cases — the model is in
-  the key too, so a sweep assuming today's default strands audio made under the previous one).
-- **Narration is Japanese-native by construction, and the request says so.** The default voice is a
-  native JA library voice (an English voice speaking Japanese inherits its phonology: English accent
-  + flattened pitch accent, unrecoverable by any parameter), and every request pins
+  mirrored from `AppModel`) — the voice is the only thing besides the text in `ContentKey`, so a
+  defaulted request silently misses the cache and re-bills synthesis. Current sites: `ReaderModel`
+  (eager probe + synth), `AppServices.firstChapterKey` (library ↓ badge; memoized, invalidated on
+  voice change), `purgeAudio` (sweeps ALL `Voice.catalog` voices **x** every key a probe can
+  resolve, i.e. `cacheKeyCandidates` — anything `loadAllowingLegacyModel` finds must be reclaimable).
+- **The model is NOT in `ContentKey`, and audio outlives model changes.** It used to be, back when
+  the app chose it; keying on something the client can't see would make its own cache unnameable,
+  and every default change silently re-billed users for chapters they'd already paid for. Builds
+  that keyed on it wrote `sha256(model + voice + text)`, so probes fall back through
+  `LegacyAudioCache.modelIDs` (`eleven_flash_v2_5`, `eleven_v3`, `eleven_multilingual_v2` — the
+  closed set of shipped defaults, **which can never grow**). Consequence, accepted deliberately: one
+  book can hold audio from two models. Replayed `eleven_v3` audio keeps that model's alignment
+  defect (timings that don't describe all of its own audio → highlight leads, then HOLDs at the
+  frontier); degraded sync on audio the user owns beats deleting it.
+- **Narration is Japanese-native by construction, and the Worker's request says so.** The default
+  voice is a native JA library voice (an English voice speaking Japanese inherits its phonology:
+  English accent + flattened pitch accent, unrecoverable by any parameter), and the Worker pins
   `language_code: "ja"` — without it the multilingual pipeline resolves kanji through *Chinese*
   (日本橋 romanizes as "Ri Ben Qiao"). `voice_settings` are sent explicitly so a shared-library
   voice's own saved settings don't decide delivery; they are deliberately NOT in `ContentKey`, so
   retuning them does not invalidate paid audio. **Never send
   `apply_language_text_normalization`** — it is an LLM pass that speaks its own reasoning aloud
   ("Wait, let me redo this properly: …"), 4x duration, one char absorbing 15 s of alignment
-  (measured 2026-07-29; `WorkerTTSServiceTests` asserts it stays off the wire). Old orthography
-  (生れ) is why the default model is `eleven_v3`: multilingual_v2 reads it なまれ, v3 うまれ, same price.
+  (measured 2026-07-29). The Worker builds the upstream body field by field so it cannot reappear;
+  `test/tts.test.ts` there and `WorkerTTSServiceTests` here both assert it stays off the wire.
+  The default model is `eleven_flash_v2_5`; `eleven_v3` must never be it (see
+  `docs/2026-08-03-findings.md`).
 - **Theme via the SwiftUI Environment, not props** — four themes (paper / white / sepia / night).
   Native controls pick up the theme accent from the root-level `.tint` in `RootView` (never
   system blue).
