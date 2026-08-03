@@ -777,7 +777,10 @@ final class ReaderModel {
     /// the player — that would restart the chapter under the listener.
     private func finishProgressivePlayback(with synth: SynthesizedAudio, gen: Int) {
         guard gen == loadGeneration, let p = progressive else { return }
-        p.source.finish()
+        // Seal against the complete audio, not against whatever the stream happened to
+        // have delivered by now — the two finish independently, and losing that race
+        // costs the last chunk of the chapter. See `finish(reconcilingWith:)`.
+        p.source.finish(reconcilingWith: synth.audio)
         refreshTimings(synth.alignment)
         // Same rule as `buildPlayback`: the audio is the authority on its own length,
         // because the alignment may stop short of it (see the note there).

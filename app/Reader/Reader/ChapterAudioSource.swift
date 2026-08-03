@@ -82,6 +82,34 @@ final class ChapterAudioSource: NSObject, AVAssetResourceLoaderDelegate {
         ready.forEach { $0() }
     }
 
+    /// Seal against the COMPLETE audio, which is the authority on its own length.
+    ///
+    /// This source is fed chunk by chunk from `SynthesisStream` while the synthesis
+    /// request is still in flight, and the request returns the whole chapter. Those two
+    /// finish independently: when the request's `await` resumes before the final stream
+    /// chunk has been delivered, sealing on the streamed bytes alone drops the tail —
+    /// permanently, because the reader clears `progressive` at the same moment and the
+    /// late chunk is discarded. The listener hears the chapter stop a few words early
+    /// while the text runs on.
+    ///
+    /// It does not reproduce in the simulator, where the request and the last chunk land
+    /// together; it needs a real network to open the gap. Appending the missing tail is
+    /// what makes the seal deterministic rather than a race.
+    ///
+    /// Done under one lock acquisition so a chunk arriving concurrently cannot land
+    /// between the reconciliation and the seal.
+    func finish(reconcilingWith complete: Data) {
+        lock.lock()
+        if complete.count > data.count {
+            data.append(complete.subdata(in: data.count..<complete.count))
+        }
+        isComplete = true
+        estimatedLength = data.count
+        let ready = drainLocked()
+        lock.unlock()
+        ready.forEach { $0() }
+    }
+
     /// Synthesis failed or was cancelled — fail the parked requests so `AVPlayer`
     /// reports an error instead of waiting forever.
     func abort() {
