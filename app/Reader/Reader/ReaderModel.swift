@@ -73,6 +73,9 @@ final class ReaderModel {
     /// than delegate, but the requirement is unchanged: these fire even while
     /// backgrounded, where the display-link clock is dead.
     private var endObservers: [NSObjectProtocol] = []
+    /// Boundary observer that ends a progressively-generated chapter at its REAL end.
+    /// Held separately because it is removed through `AVPlayer`, not NotificationCenter.
+    private var endOfAudioObserver: Any?
     /// Tokens for the audio-session interruption, route-change and media-reset
     /// observers, removed on deinit. `nonisolated(unsafe)`: written once in `init`,
     /// read once in the nonisolated `deinit` — no concurrent access.
@@ -520,6 +523,10 @@ final class ReaderModel {
         p.automaticallyWaitsToMinimizeStalling = false
 
         endObservers.forEach(NotificationCenter.default.removeObserver)
+        // Belongs to the player being replaced, and a boundary observer outlives its
+        // usefulness silently — it would end the NEXT chapter at the previous one's length.
+        if let endOfAudioObserver { player?.removeTimeObserver(endOfAudioObserver) }
+        endOfAudioObserver = nil
         endObservers = [
             NotificationCenter.default.addObserver(
                 forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
@@ -777,9 +784,40 @@ final class ReaderModel {
         duration = max(timeline.duration,
                        Double(synth.audio.count) / Self.mp3BytesPerSecond)
         generatedTime = duration
+        endPlaybackAtRealEnd(duration)
         recordMeasuredRate()
         progressive = nil
         audioState = .ready
+    }
+
+    /// Stop at the chapter's real end rather than at the one `AVPlayer` was told about.
+    ///
+    /// `AVAssetResourceLoader` asks for the asset's length exactly ONCE, when the item
+    /// is attached — which for a progressively generated chapter is long before the
+    /// length is known. `ChapterAudioSource` therefore answers with an estimate that
+    /// deliberately runs LONG, because advertising short truncates playback outright.
+    /// `finish()` corrects the stored value, but nothing re-asks, so the item keeps a
+    /// duration derived from the estimate.
+    ///
+    /// The consequence is audible: past the last real byte `AVPlayer` plays silence
+    /// while its clock — and so the highlight and the timer — keep running, and
+    /// `didPlayToEndTime` does not fire until that phantom tail elapses. Measured on
+    /// the front-matter chapter of 響け！ユーфォニアム 2: 80 characters advertise
+    /// 457 KB (28.6 s) against 278 KB of real audio (17.4 s) — eleven seconds of
+    /// silence after the narration ended. Cached chapters never showed it because
+    /// `buildPlayback` passes the exact byte count.
+    ///
+    /// A boundary observer rather than the display link: the link is a foreground-only
+    /// clock, and a chapter has to end correctly while backgrounded.
+    private func endPlaybackAtRealEnd(_ seconds: Double) {
+        guard let player, seconds > 0 else { return }
+        if let endOfAudioObserver { player.removeTimeObserver(endOfAudioObserver) }
+        let end = NSValue(time: CMTime(seconds: seconds, preferredTimescale: 600))
+        endOfAudioObserver = player.addBoundaryTimeObserver(
+            forTimes: [end], queue: .main
+        ) { [weak self] in
+            MainActor.assumeIsolated { self?.handlePlaybackFinished(successfully: true) }
+        }
     }
 
     /// Generation failed after playback began. The audio on the device is a partial
@@ -816,6 +854,8 @@ final class ReaderModel {
         player?.pause()
         endObservers.forEach(NotificationCenter.default.removeObserver)
         endObservers = []
+        if let endOfAudioObserver { player?.removeTimeObserver(endOfAudioObserver) }
+        endOfAudioObserver = nil
         audioSource?.abort()
         audioSource = nil
         player = nil
