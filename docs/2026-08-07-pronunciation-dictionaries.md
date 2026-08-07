@@ -169,11 +169,19 @@ GET {gateway}/elevenlabs/v1/pronunciation-dictionaries   (cf-aig-authorization o
 GET {gateway}/elevenlabs/v1/models                       (same auth)                  -> 200
 ```
 
-The gateway forwards management endpoints too, so **no second credential is needed** — the
-read path is proven. **Only `GET` was tested.** Phase 2 needs `POST` (create) and `PATCH`
-(archive) through the gateway, and neither has been: every probe dictionary in this
-investigation was created out-of-band with the raw key. Phase 1 does not need them — its
-locator is created by hand once — so this blocks Phase 2 only.
+The gateway forwards management endpoints too, so **no second credential is needed**.
+
+`POST` was the one that mattered and it was verified before deploying, on the gateway
+credential alone:
+
+```
+POST {gateway}/elevenlabs/v1/pronunciation-dictionaries/add-from-rules  -> 200, dictionary created
+```
+
+So the Worker can create a book's dictionary itself, and the soft-failure path it has for the
+opposite case is a safety net rather than the expected outcome. `PATCH` (archive) is still
+untested through the gateway, which only matters if reclamation is ever automated — and §10
+argues it should not be.
 
 ## 4. `eleven_v3` is disqualified twice, not once — decided 2026-08-07
 
