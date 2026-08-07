@@ -155,4 +155,47 @@ final class PronunciationLexiconTests: XCTestCase {
         let lex = PronunciationLexicon.build(text: "本文。", readings: [])
         XCTAssertEqual(lex, Lexicon(rules: [], rejected: []))
     }
+
+    func testRefusesSurfaceLeftBareInAnotherChapter() {
+        let annotated = Chapter(text: "希美さん。",
+                                sourceReadings: [reading(0, "希美", "のぞみ")])
+        let bare = Chapter(text: "希美子さんも来た。")
+
+        XCTAssertEqual(PronunciationLexicon.build(chapters: [annotated]).rules.count, 1,
+                       "on its own chapter the name looks safe")
+        XCTAssertTrue(PronunciationLexicon.build(chapters: [annotated, bare]).rules.isEmpty,
+                      "希美 sits unvouched inside 希美子 one chapter later")
+    }
+
+    func testCountsOccurrencesAcrossEveryChapter() {
+        let one = Chapter(text: "黄前さん。", sourceReadings: [reading(0, "黄前", "おうまえ")])
+        let two = Chapter(text: "また黄前さん。", sourceReadings: [reading(2, "黄前", "おうまえ")])
+        let lex = PronunciationLexicon.build(chapters: [one, two])
+
+        XCTAssertEqual(lex.rules, [PronunciationRule(surface: "黄前", reading: "おうまえ")])
+        XCTAssertTrue(lex.rejected.isEmpty)
+    }
+
+    func testAmbiguityIsJudgedOverTheWholeBookNotOneChapter() {
+        let one = Chapter(text: "明日ね。", sourceReadings: [reading(0, "明日", "あした")])
+        let two = Chapter(text: "明日は雨。", sourceReadings: [reading(0, "明日", "あす")])
+
+        XCTAssertTrue(PronunciationLexicon.build(chapters: [one, two]).rules.isEmpty)
+        XCTAssertEqual(PronunciationLexicon.build(chapters: [one, two]).rejected.first?.rejection,
+                       .ambiguousInBook(["あした", "あす"]))
+    }
+
+    func testOneFlattenedChapterMakesTheWholeBookFlattened() {
+        let clean = Chapter(text: "黄前さん。", sourceReadings: [reading(0, "黄前", "おうまえ")])
+        let broken = Chapter(text: "饒舌な人。",
+                             sourceReadings: [repaired(0, "饒舌",
+                                                       raw: "じようぜつ", restored: "じょうぜつ")],
+                             isFlattenedSource: true)
+        let lex = PronunciationLexicon.build(chapters: [clean, broken])
+
+        XCTAssertEqual(lex.rules, [PronunciationRule(surface: "黄前", reading: "おうまえ")],
+                       "the untouched name survives")
+        XCTAssertEqual(lex.rejected.first?.rejection, .unconfirmedRepair,
+                       "the repaired one needs corroboration even though its chapter carried the flag")
+    }
 }

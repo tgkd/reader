@@ -33,16 +33,32 @@ public struct Lexicon: Equatable, Sendable {
 }
 
 public enum PronunciationLexicon {
+    public static func build(chapters: [Chapter],
+                             corroborate: (String) -> String? = { _ in nil }) -> Lexicon {
+        build(texts: chapters.map { ($0.text, $0.sourceReadings) },
+              isFlattened: chapters.contains { $0.isFlattenedSource },
+              corroborate: corroborate)
+    }
+
     public static func build(text: String,
                              readings: [SourceReading],
                              isFlattened: Bool = false,
                              corroborate: (String) -> String? = { _ in nil }) -> Lexicon {
-        let valid = readings.validated(against: text)
-        guard !valid.isEmpty else { return Lexicon(rules: [], rejected: []) }
+        build(texts: [(text, readings)], isFlattened: isFlattened, corroborate: corroborate)
+    }
 
-        let normalizedText = Normalize.nfkc(text)
-        let spans = normalizedSpans(valid, in: text)
-        let repairedSurfaces = Set(valid.filter(\.wasRepaired).map { Normalize.nfkc($0.surface) })
+    private static func build(texts: [(text: String, readings: [SourceReading])],
+                              isFlattened: Bool,
+                              corroborate: (String) -> String? ) -> Lexicon {
+        let parts = texts.map { part -> (normalized: String, spans: [Span], valid: [SourceReading]) in
+            let valid = part.readings.validated(against: part.text)
+            return (Normalize.nfkc(part.text), normalizedSpans(valid, in: part.text), valid)
+        }
+        let spans = parts.flatMap(\.spans)
+        guard !spans.isEmpty else { return Lexicon(rules: [], rejected: []) }
+
+        let repairedSurfaces = Set(parts.flatMap(\.valid).filter(\.wasRepaired)
+            .map { Normalize.nfkc($0.surface) })
 
         var bySurface: [String: [String: Int]] = [:]
         for span in spans {
@@ -73,11 +89,13 @@ public enum PronunciationLexicon {
             guard isKana(reading) else { reject(.readingNotKana); continue }
             guard reading != surface else { reject(.readingMatchesSurface); continue }
 
-            let annotated = Set(spans.filter { $0.surface == surface }.map(\.start))
-            let unvouched = occurrencesOf(surface, in: normalizedText)
-                .filter { !annotated.contains($0) }
-            guard unvouched.isEmpty else {
-                reject(.unannotatedOccurrence(count: unvouched.count)); continue
+            let unvouched = parts.reduce(0) { total, part in
+                let annotated = Set(part.spans.filter { $0.surface == surface }.map(\.start))
+                return total + occurrencesOf(surface, in: part.normalized)
+                    .filter { !annotated.contains($0) }.count
+            }
+            guard unvouched == 0 else {
+                reject(.unannotatedOccurrence(count: unvouched)); continue
             }
 
             if let host = spans.first(where: {
