@@ -351,6 +351,28 @@ section said. Those classes are heavily reading-ambiguous in Japanese and contra
 admission rule; a global entry has to be a surface whose reading does not depend on context,
 which most two-kanji names are not.
 
+**The delivery mechanism is forced, not chosen.** ElevenLabs accepts only a *locator* on a
+synthesis request — rules cannot be inlined — so a book's dictionary must exist server-side
+before its first chapter is narrated. That collapses the apparent fork: there is no design in
+which the client keeps sending only text and voice. The only real questions are when the rules
+are uploaded and how the Worker recognises a set it has already seen.
+
+The shape that follows: the client sends the book's rule set on reader requests; the Worker
+canonicalises and hashes it, looks the hash up in KV, creates the dictionary once if absent,
+stores `{id, version}` against the hash, and attaches that locator. Stateless on the client,
+idempotent under concurrent first chapters, and identical across devices because the same book
+yields the same hash. A 122-rule set is a few KB against a 4,000-character chapter.
+
+It also puts client-supplied text on a route that spends against our own ElevenLabs account,
+which is the reason `voice_id` is allow-listed. The same discipline applies: cap the rule
+count and the lengths, require kana-only aliases, and require that each surface actually occurs
+in the submitted text — a rule that cannot fire has no business being uploaded.
+
+**This breaks a stated invariant** — CLAUDE.md says the request body is exactly
+`{text, voice_id, stream}` and that the Worker decides everything else. That was written to
+stop generation *parameters* drifting back to the client, and a book's own readings are not a
+generation parameter; but the line has to be amended deliberately rather than quietly widened.
+
 **Phase 2 — book-scoped readings, needs a wire field.**
 The candidate set exists, but **not where this document previously claimed**.
 `readingIndex` (`EPUBImporter.swift:89-102`) computes the useful set — unique, multi-char
@@ -755,6 +777,16 @@ two clips is the lexicon the app built by itself.
 122 rules went into a single dictionary, and duration moved 0.97 s over 199 s, because a name
 and its kana take about the same time to say. Audio for both, plus a 168-character excerpt, is
 in `~/Downloads/yomi-tts-findings/e2e/`.
+
+**Confirmed by listening, 2026-08-07: the aliased narration reads well.** That closes the last
+unknown in the chain — the app derives a lexicon from a book's own ruby with no human choosing
+any entry, and the result is audibly right on the names. Everything measured before this
+established that the mechanism was *safe*; this establishes that it is *worth doing*.
+
+What it does not establish: prosody over a whole chapter with 122 rules firing thousands of
+times (§7 found redundant aliases add small pauses, and nothing has measured them in
+aggregate), or how the gates behave on a book with different markup conventions. Two books
+have been through this — one group-ruby, one monoruby — and they behaved very differently.
 
 The 20 `unconfirmedRepair` refusals are audible in the result: 緑輝 is still read wrong,
 because this book's small kana was flattened and MeCab cannot vouch for サファイア. The gate is
