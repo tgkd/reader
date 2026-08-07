@@ -642,6 +642,45 @@ Two smaller constraints that belong with the above:
   `SynthesisLimits.maxRequestChars`; chapters are capped well below it so this path is not
   exercised today, but it is a silent no-op if that ever changes.
 
+## 8a. First run on a real book
+
+`PronunciationLexicon` against こころ (Sōseki, the bundled sample), 113 chapters after
+splitting, 5,347 persisted readings. Reproduce with
+`TEST_RUNNER_YOMI_EPUB=<path> xcodebuild test -only-testing:ReaderTests/RealBookLexiconProbe`
+— note the `TEST_RUNNER_` prefix, without which the environment never reaches the test process
+and the probe silently skips.
+
+| | |
+|---|---|
+| rules admitted | **1,026**, covering 2,340 occurrences (44 % of all readings) |
+| rejected | 739 |
+| — `singleCharacterBase` | 663 |
+| — `unannotatedOccurrence` | 47 |
+| — `ambiguousInBook` | 29 |
+| flattened source | no; 0 repaired readings |
+
+The admitted set is the right shape — gikun no tokenizer derives: 身体→からだ ×34,
+機会→はずみ ×28, 目的→あて ×19, 往来→ゆきき ×17, 小供→こども ×19 (pre-war spelling of
+子供), 従妹→いとこ ×11, 雑司ヶ谷→ぞうしがや ×11.
+
+**`三日 → さんち` ×17 is the finding worth keeping.** Standalone 三日 is みっか; さんち only
+arises inside 二三日 (にさんち), which is where the ruby came from. In *this* book the rule is
+safe and the occurrence gate proved it — all 17 occurrences are annotated, and no bare 三日
+appears anywhere in the text. Asserted **globally it would be plainly wrong.** This is the
+concrete case the book-scoped decision exists for, produced without being looked for.
+
+Two costs to weigh:
+
+- **The single-character gate is 90 % of all rejections, and some are real losses.**
+  室→へや ×37 and 凝→じっ ×20 are exactly the Sōseki gikun the feature is for. The same gate
+  correctly kills 眺→なが, 坐→すわ, 廻→まわ — verb stems that would rewrite every inflection
+  they appear in. The gate is blunt but errs in the safe direction, and nothing cheaper
+  separates the two groups.
+- **The occurrence gate is all-or-nothing.** 時分→じぶん was refused over a *single* unvouched
+  occurrence out of 26. Conservative is right when the remedy is unfixable cached audio, but
+  25 useful firings were lost to one. If coverage ever matters more than it does now, this is
+  the knob — not the single-character gate.
+
 ## 9. Review, 2026-08-07 — what blocks shipping
 
 This document was reviewed after it was written, by a second model and an independent
