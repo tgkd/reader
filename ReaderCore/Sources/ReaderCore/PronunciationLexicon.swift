@@ -1,0 +1,148 @@
+import Foundation
+
+public struct PronunciationRule: Equatable, Sendable, Hashable {
+    public let surface: String
+    public let reading: String
+
+    public init(surface: String, reading: String) {
+        self.surface = surface
+        self.reading = reading
+    }
+}
+
+public enum LexiconRejection: Equatable, Sendable {
+    case singleCharacterBase
+    case readingNotKana
+    case ambiguousInBook([String])
+    case readingMatchesSurface
+    case unannotatedOccurrence(count: Int)
+    case insideLongerReading(String)
+    case unconfirmedRepair
+}
+
+public struct LexiconCandidate: Equatable, Sendable {
+    public let surface: String
+    public let reading: String
+    public let occurrences: Int
+    public let rejection: LexiconRejection?
+}
+
+public struct Lexicon: Equatable, Sendable {
+    public let rules: [PronunciationRule]
+    public let rejected: [LexiconCandidate]
+}
+
+public enum PronunciationLexicon {
+    public static func build(text: String,
+                             readings: [SourceReading],
+                             isFlattened: Bool = false,
+                             corroborate: (String) -> String? = { _ in nil }) -> Lexicon {
+        let valid = readings.validated(against: text)
+        guard !valid.isEmpty else { return Lexicon(rules: [], rejected: []) }
+
+        let normalizedText = Normalize.nfkc(text)
+        let spans = normalizedSpans(valid, in: text)
+        let repairedSurfaces = Set(valid.filter(\.wasRepaired).map { Normalize.nfkc($0.surface) })
+
+        var bySurface: [String: [String: Int]] = [:]
+        for span in spans {
+            bySurface[span.surface, default: [:]][span.reading, default: 0] += 1
+        }
+
+        let ordered = bySurface.keys.sorted { ($0.count, $0) > ($1.count, $1) }
+
+        var rules: [PronunciationRule] = []
+        var rejected: [LexiconCandidate] = []
+
+        for surface in ordered {
+            let variants = bySurface[surface]!
+            let occurrences = variants.values.reduce(0, +)
+            let reading = variants.count == 1 ? variants.keys.first! : ""
+
+            func reject(_ why: LexiconRejection) {
+                rejected.append(LexiconCandidate(surface: surface,
+                                                 reading: reading,
+                                                 occurrences: occurrences,
+                                                 rejection: why))
+            }
+
+            guard surface.count > 1 else { reject(.singleCharacterBase); continue }
+            guard variants.count == 1 else {
+                reject(.ambiguousInBook(variants.keys.sorted())); continue
+            }
+            guard isKana(reading) else { reject(.readingNotKana); continue }
+            guard reading != surface else { reject(.readingMatchesSurface); continue }
+
+            let annotated = Set(spans.filter { $0.surface == surface }.map(\.start))
+            let unvouched = occurrencesOf(surface, in: normalizedText)
+                .filter { !annotated.contains($0) }
+            guard unvouched.isEmpty else {
+                reject(.unannotatedOccurrence(count: unvouched.count)); continue
+            }
+
+            if let host = spans.first(where: {
+                $0.surface != surface
+                    && $0.surface.contains(surface)
+                    && !$0.reading.contains(reading)
+            }) {
+                reject(.insideLongerReading(host.surface)); continue
+            }
+
+            if isFlattened, repairedSurfaces.contains(surface) {
+                guard let tokenizer = corroborate(surface),
+                      KanaRepair.flattened(tokenizer) == KanaRepair.flattened(reading) else {
+                    reject(.unconfirmedRepair); continue
+                }
+                rules.append(PronunciationRule(surface: surface, reading: tokenizer))
+                continue
+            }
+
+            rules.append(PronunciationRule(surface: surface, reading: reading))
+        }
+
+        return Lexicon(
+            rules: rules.sorted { ($0.surface.count, $0.surface) > ($1.surface.count, $1.surface) },
+            rejected: rejected.sorted { $0.surface < $1.surface })
+    }
+
+    private struct Span {
+        let start: Int
+        let surface: String
+        let reading: String
+    }
+
+    private static func normalizedSpans(_ readings: [SourceReading], in text: String) -> [Span] {
+        let raw = Array(text)
+        var cache: [Int: Int] = [:]
+        func normalizedOffset(_ rawOffset: Int) -> Int {
+            if let hit = cache[rawOffset] { return hit }
+            let n = Normalize.nfkc(String(raw[0..<rawOffset])).count
+            cache[rawOffset] = n
+            return n
+        }
+        return readings.map {
+            Span(start: normalizedOffset($0.start),
+                 surface: Normalize.nfkc($0.surface),
+                 reading: Normalize.nfkc($0.reading))
+        }
+    }
+
+    private static func occurrencesOf(_ needle: String, in haystack: String) -> [Int] {
+        let n = Array(needle), h = Array(haystack)
+        guard !n.isEmpty, h.count >= n.count else { return [] }
+        var hits: [Int] = []
+        for i in 0...(h.count - n.count) where Array(h[i..<(i + n.count)]) == n {
+            hits.append(i)
+        }
+        return hits
+    }
+
+    private static func isKana(_ s: String) -> Bool {
+        !s.isEmpty && s.unicodeScalars.allSatisfy {
+            (0x3041...0x3096).contains($0.value)
+                || (0x30A1...0x30FA).contains($0.value)
+                || $0.value == 0x30FC
+                || $0.value == 0x309B || $0.value == 0x309C
+        }
+    }
+}
