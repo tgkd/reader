@@ -738,6 +738,34 @@ The corollary is a real limitation, not a defect: **this feature is EPUB-only.**
 plain-text edition of the same novel yields no rules at all, because the readings simply are
 not in the file.
 
+## 8c. End to end, on the real book
+
+The whole chain, with nothing hand-written: the app imports 響け！ユーフォニアム 2, turns its
+publisher ruby into 122 rules with no human choosing any of them, uploads them as one real
+ElevenLabs dictionary, and narrates the chapter-5 character list — 851 characters that are
+almost entirely names. Production configuration throughout, so the only difference between the
+two clips is the lexicon the app built by itself.
+
+| | audio | undescribed | joinOK | chars |
+|---|---|---|---|---|
+| no dictionary | 198.77 s | 0.052 s | true | 851/851 |
+| 122 generated rules | 199.74 s | 0.044 s | true | 851/851 |
+
+**The alignment contract survives a whole book lexicon exactly as it survived one rule.** All
+122 rules went into a single dictionary, and duration moved 0.97 s over 199 s, because a name
+and its kana take about the same time to say. Audio for both, plus a 168-character excerpt, is
+in `~/Downloads/yomi-tts-findings/e2e/`.
+
+The 20 `unconfirmedRepair` refusals are audible in the result: 緑輝 is still read wrong,
+because this book's small kana was flattened and MeCab cannot vouch for サファイア. The gate is
+working as designed, and it is refusing the single most valuable name in the book.
+
+**And the 404 reproduced itself.** The first attempt at the excerpt returned 404 with no audio,
+because the version id had been mistyped by one character — `vv6f…` for `v6f…`, copied out of a
+log line's own formatting. Ten minutes after the Worker retry was written, against a dictionary
+created and used successfully minutes earlier. §10 is not a theoretical concern; a locator is a
+long opaque string that a human will eventually get wrong, and the failure is total.
+
 ## 9. Review, 2026-08-07 — what blocks shipping
 
 This document was reviewed after it was written, by a second model and an independent

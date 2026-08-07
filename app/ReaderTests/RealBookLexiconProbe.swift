@@ -53,6 +53,12 @@ final class RealBookLexiconProbe: XCTestCase {
             print("LEX   \(r.surface)\t→ \(r.reading)\t×\(occurrences(r.surface))")
         }
 
+        let payload = lex.rules.map { ["string_to_replace": $0.surface, "alias": $0.reading] }
+        if let data = try? JSONSerialization.data(withJSONObject: payload),
+           let json = String(data: data, encoding: .utf8) {
+            print("LEXJSON \(json)")
+        }
+
         print("LEX ---- refused, most frequent first ----")
         for c in lex.rejected.sorted(by: { $0.occurrences > $1.occurrences }).prefix(25) {
             print("LEX   \(c.surface)\t→ \(c.reading)\t×\(c.occurrences)\t\(c.rejection.map(String.init(describing:)) ?? "-")")
