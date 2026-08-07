@@ -57,11 +57,17 @@ final class WorkerTTSService: TTSService {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let userId = userId(), !userId.isEmpty { req.setValue(userId, forHTTPHeaderField: "X-User-ID") }
-        req.httpBody = try JSONSerialization.data(withJSONObject: [
+        var payload: [String: Any] = [
             "text": text,
             "voice_id": request.voice.id,
             "stream": true,
-        ])
+        ]
+        if !request.pronunciation.isEmpty {
+            payload["pronunciation_rules"] = request.pronunciation.map {
+                ["surface": $0.surface, "reading": $0.reading]
+            }
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (bytes, response) = try await session.bytes(for: req)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {

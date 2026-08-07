@@ -144,6 +144,16 @@ final class ReaderModel {
         }
     }
 
+    private var bookLexicon: [PronunciationRule]?
+
+    private func pronunciationRules() async -> [PronunciationRule] {
+        if let bookLexicon { return bookLexicon }
+        let rules = await DocumentLexicon.build(for: document,
+                                                using: services.tokenizerWorker).rules
+        bookLexicon = rules
+        return rules
+    }
+
     private func tokenizeWithSourceReadings(_ text: String) async -> [Token]? {
         guard let tokens = await services.tokenizerWorker.tokenize(text) else { return nil }
         guard let chapter = currentChapter, !chapter.sourceReadings.isEmpty,
@@ -188,7 +198,8 @@ final class ReaderModel {
         if player != nil { audioState = .ready; return true }
         let gen = loadGeneration
         let request = SynthesisRequest(text: currentChapter?.text ?? "",
-                                       voice: services.narrationVoice)
+                                       voice: services.narrationVoice,
+                                       pronunciation: await pronunciationRules())
         let key = request.cacheKey
 
         let synth: SynthesizedAudio
