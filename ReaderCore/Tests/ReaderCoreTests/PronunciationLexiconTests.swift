@@ -198,4 +198,57 @@ final class PronunciationLexiconTests: XCTestCase {
         XCTAssertEqual(lex.rejected.first?.rejection, .unconfirmedRepair,
                        "the repaired one needs corroboration even though its chapter carried the flag")
     }
+
+    private func pair(_ start: Int, _ surface: String, _ reading: String,
+                      group: Int) -> SourceReading {
+        SourceReading(start: start, length: surface.count, surface: surface,
+                      reading: reading, groupLength: group)
+    }
+
+    func testReassemblesAMonorubyNameIntoOneRule() {
+        let lex = PronunciationLexicon.build(text: "久美子です。", readings: [
+            pair(0, "久", "く", group: 3),
+            pair(1, "美", "み", group: 3),
+            pair(2, "子", "こ", group: 3),
+        ])
+
+        XCTAssertEqual(lex.rules, [PronunciationRule(surface: "久美子", reading: "くみこ")])
+        XCTAssertTrue(lex.rejected.isEmpty)
+    }
+
+    func testUngroupedSingleCharactersStayRefused() {
+        let lex = PronunciationLexicon.build(text: "久美子です。", readings: [
+            reading(0, "久", "く"),
+            reading(1, "美", "み"),
+            reading(2, "子", "こ"),
+        ])
+
+        XCTAssertTrue(lex.rules.isEmpty)
+        XCTAssertEqual(lex.rejected.count, 3)
+    }
+
+    func testAGroupTruncatedByAChapterSplitIsNotAssembled() {
+        let lex = PronunciationLexicon.build(text: "子です。", readings: [
+            pair(0, "子", "こ", group: 3),
+        ])
+
+        XCTAssertTrue(lex.rules.isEmpty, "a group missing its head must not become a rule")
+        XCTAssertEqual(lex.rejected.first?.rejection, .singleCharacterBase)
+    }
+
+    func testAssembledGroupInheritsRepairFromAnyPart() {
+        let lex = PronunciationLexicon.build(
+            text: "緑輝です。",
+            readings: [
+                SourceReading(start: 0, length: 1, surface: "緑", reading: "サファ",
+                              rawReading: "サフア", groupLength: 2),
+                pair(1, "輝", "イア", group: 2),
+            ],
+            isFlattened: true,
+            corroborate: { _ in nil })
+
+        XCTAssertTrue(lex.rules.isEmpty)
+        XCTAssertEqual(lex.rejected.first?.rejection, .unconfirmedRepair,
+                       "one repaired part taints the whole assembled name")
+    }
 }

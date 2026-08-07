@@ -73,7 +73,8 @@ struct EPUBImporter: DocumentImporter {
             let restored = KanaRepair.restoreSmallKana(r.reading)
             return SourceReading(start: r.start, length: r.length, surface: r.surface,
                                  reading: restored,
-                                 rawReading: restored == r.reading ? nil : r.reading)
+                                 rawReading: restored == r.reading ? nil : r.reading,
+                                 groupLength: r.groupLength)
         }
 
         let out = slots.map { slot -> Slot in
@@ -97,7 +98,7 @@ struct EPUBImporter: DocumentImporter {
                 split[g.surface] = g.pairs.map {
                     SourceReading(start: $0.start - base, length: $0.length,
                                   surface: $0.surface, reading: $0.reading,
-                                  rawReading: $0.rawReading)
+                                  rawReading: $0.rawReading, groupLength: $0.groupLength)
                 }
             }
         }
@@ -129,7 +130,8 @@ struct EPUBImporter: DocumentImporter {
                           String(chars[s..<(s + p.length)]) == p.surface else { continue }
                     out.append(SourceReading(start: s, length: p.length,
                                              surface: p.surface, reading: p.reading,
-                                             rawReading: p.rawReading))
+                                             rawReading: p.rawReading,
+                                             groupLength: p.groupLength))
                 }
             }
         }
@@ -464,6 +466,15 @@ private enum HTMLText {
                                            surface: base, reading: readings[next]))
             case rubyGroupEnd:
                 if found.count > groupStart {
+                    if found.count - groupStart > 1 {
+                        let total = found[groupStart...].reduce(0) { $0 + $1.length }
+                        for k in groupStart..<found.count {
+                            found[k] = SourceReading(start: found[k].start, length: found[k].length,
+                                                     surface: found[k].surface,
+                                                     reading: found[k].reading,
+                                                     groupLength: total)
+                        }
+                    }
                     groups.append(RubyGroup(pairs: Array(found[groupStart...])))
                     groupStart = found.count
                 }

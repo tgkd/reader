@@ -51,7 +51,7 @@ public enum PronunciationLexicon {
                               isFlattened: Bool,
                               corroborate: (String) -> String? ) -> Lexicon {
         let parts = texts.map { part -> (normalized: String, spans: [Span], valid: [SourceReading]) in
-            let valid = part.readings.validated(against: part.text)
+            let valid = regrouped(part.readings.validated(against: part.text))
             return (Normalize.nfkc(part.text), normalizedSpans(valid, in: part.text), valid)
         }
         let spans = parts.flatMap(\.spans)
@@ -127,6 +127,41 @@ public enum PronunciationLexicon {
         let start: Int
         let surface: String
         let reading: String
+    }
+
+    private static func regrouped(_ readings: [SourceReading]) -> [SourceReading] {
+        var out: [SourceReading] = []
+        var i = 0
+        while i < readings.count {
+            let head = readings[i]
+            guard let span = head.groupLength, span > head.length else {
+                out.append(head)
+                i += 1
+                continue
+            }
+            var parts = [head]
+            var covered = head.length
+            var j = i + 1
+            while covered < span, j < readings.count, readings[j].start == parts[parts.count - 1].end {
+                covered += readings[j].length
+                parts.append(readings[j])
+                j += 1
+            }
+            guard covered == span else {
+                out.append(head)
+                i += 1
+                continue
+            }
+            let repaired = parts.contains(where: \.wasRepaired)
+            out.append(SourceReading(
+                start: head.start,
+                length: covered,
+                surface: parts.map(\.surface).joined(),
+                reading: parts.map(\.reading).joined(),
+                rawReading: repaired ? parts.map { $0.rawReading ?? $0.reading }.joined() : nil))
+            i = j
+        }
+        return out
     }
 
     private static func normalizedSpans(_ readings: [SourceReading], in text: String) -> [Span] {

@@ -22,7 +22,7 @@ final class RealBookLexiconProbe: XCTestCase {
 
         let occurrences = { (surface: String) -> Int in
             chapters.reduce(0) { total, c in
-                total + c.sourceReadings.filter { $0.surface == surface }.count
+                total + c.text.ranges(of: surface).count
             }
         }
         let covered = lex.rules.reduce(0) { $0 + occurrences($1.surface) }

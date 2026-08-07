@@ -681,6 +681,63 @@ Two costs to weigh:
   25 useful firings were lost to one. If coverage ever matters more than it does now, this is
   the knob — not the single-character gate.
 
+## 8b. Monoruby, and why the first run found no names
+
+The same probe against 響け！ユーフォニアム 2 — the book this investigation started from —
+first produced **8 rules and not one name**, while こころ produced 1,026. The difference is
+markup, not language.
+
+A publisher may annotate 久美子 as one ruby group (`久美子`/`くみこ`) or as three
+(`久`/`く`, `美`/`み`, `子`/`こ`). こころ does the former; this book does the latter. Only the
+pairs reach `Chapter.sourceReadings`, so every name arrived pre-shredded into single
+characters and the single-character gate — correctly, on the evidence it had — refused all of
+them: 子 ×1126, 美 ×992, 久 ×972, 麗 ×205, 奈 ×197, 秀 ×41.
+
+**`SourceReading.groupLength` fixes it without collapsing anything.** Storing groups instead
+of pairs was the obvious move and is wrong: `SourceReadingOverlay` tiles pairs onto MeCab
+tokens, and a three-character group cannot be laid onto a token when MeCab segments finer, so
+furigana would silently stop appearing. Instead each pair records how long its whole group
+was, and `PronunciationLexicon` reassembles them in memory. Rendering keeps the pairs; only
+the lexicon sees the group.
+
+| | rules | covering |
+|---|---|---|
+| before | 8 | — |
+| after | **122** | **2,293 occurrences** |
+
+久美子→くみこ ×972, 希美→のぞみ ×236, 麗奈→れいな ×196, 優子→ゆうこ ×119,
+夏紀→なつき ×113, 葉月→はづき ×79, 北宇治→きたうじ ×62, 小笠原→おがさわら,
+高坂→こうさか, 一ノ瀬→いちのせ. こころ is unchanged at 1,026, so the change is neutral for
+group-ruby books and decisive for monoruby ones.
+
+**The flattened-kana gate is now the dominant cost for this book**, and it takes the best
+entries: 緑輝→サファイア ×99, 秀一→しゅういち ×36, 大阪東照 ×13, 明静工科 ×8, 洛秋 ×3 —
+20 refusals, all `unconfirmedRepair`. Each is a name whose small kana this app restored and
+MeCab cannot vouch for, which is precisely the class §7 predicted would be lost. The gate is
+working as designed; the design costs this book its most distinctive names.
+
+### Scope of these changes
+
+Worth stating plainly, because a ruby-driven feature could easily leak into paths that have no
+ruby:
+
+- **The tokenizer is untouched.** MeCab is used read-only, as a corroborator for repaired
+  readings, and only in a flattened book. No file under `MeCab*` changed.
+- **Rendering is untouched.** `SourceReadingOverlay` and `validated` are byte-identical; the
+  only edit to `SourceReading` is one additional optional field.
+- **PDF, TXT, pasted text and OCR are unaffected.** They construct `Chapter(title:text:)` and
+  never set `sourceReadings`, so there is no group metadata, `isFlattenedSource` stays false,
+  and the lexicon returns empty for them.
+- **Plain Japanese text behaves exactly as before.** Nothing activates without ruby markup.
+
+Verified rather than asserted: the full app suite passes 124/124 including
+`PDFImporterTests`, `TextImporterTests` and `RubyLineBreakTests`, ReaderCore passes 132/132,
+and the こころ probe returns identical numbers before and after.
+
+The corollary is a real limitation, not a defect: **this feature is EPUB-only.** A PDF or a
+plain-text edition of the same novel yields no rules at all, because the readings simply are
+not in the file.
+
 ## 9. Review, 2026-08-07 — what blocks shipping
 
 This document was reviewed after it was written, by a second model and an independent

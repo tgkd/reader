@@ -73,7 +73,7 @@ public extension Chapter {
                 .filter { $0.start >= lower && $0.end <= upper }
                 .map { SourceReading(start: $0.start - lower, length: $0.length,
                                      surface: $0.surface, reading: $0.reading,
-                                     rawReading: $0.rawReading) }
+                                     rawReading: $0.rawReading, groupLength: $0.groupLength) }
             return Chapter(title: title.map { "\($0) (\(i + 1))" }, text: part,
                            sourceReadings: mine, isFlattenedSource: isFlattenedSource)
         }

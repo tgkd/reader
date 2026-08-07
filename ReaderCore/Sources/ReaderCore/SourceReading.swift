@@ -7,14 +7,16 @@ public struct SourceReading: Codable, Equatable, Sendable {
     public let reading: String
 
     public let rawReading: String?
+    public let groupLength: Int?
 
     public init(start: Int, length: Int, surface: String, reading: String,
-                rawReading: String? = nil) {
+                rawReading: String? = nil, groupLength: Int? = nil) {
         self.start = start
         self.length = length
         self.surface = surface
         self.reading = reading
         self.rawReading = rawReading
+        self.groupLength = groupLength
     }
 
     public var wasRepaired: Bool { rawReading != nil && rawReading != reading }
