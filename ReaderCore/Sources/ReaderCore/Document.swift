@@ -23,15 +23,20 @@ public struct Chapter: Identifiable, Codable, Equatable {
     public var text: String
     public var sourceReadings: [SourceReading]
 
+    public var isFlattenedSource: Bool
+
     public init(id: UUID = UUID(), title: String? = nil, text: String,
-                sourceReadings: [SourceReading] = []) {
+                sourceReadings: [SourceReading] = [], isFlattenedSource: Bool = false) {
         self.id = id
         self.title = title
         self.text = text
         self.sourceReadings = sourceReadings
+        self.isFlattenedSource = isFlattenedSource
     }
 
-    private enum CodingKeys: String, CodingKey { case id, title, text, sourceReadings }
+    private enum CodingKeys: String, CodingKey {
+        case id, title, text, sourceReadings, isFlattenedSource
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -39,6 +44,7 @@ public struct Chapter: Identifiable, Codable, Equatable {
         title = try c.decodeIfPresent(String.self, forKey: .title)
         text = try c.decode(String.self, forKey: .text)
         sourceReadings = (try? c.decodeIfPresent([SourceReading].self, forKey: .sourceReadings)) ?? []
+        isFlattenedSource = (try? c.decodeIfPresent(Bool.self, forKey: .isFlattenedSource)) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -47,6 +53,7 @@ public struct Chapter: Identifiable, Codable, Equatable {
         try c.encodeIfPresent(title, forKey: .title)
         try c.encode(text, forKey: .text)
         if !sourceReadings.isEmpty { try c.encode(sourceReadings, forKey: .sourceReadings) }
+        if isFlattenedSource { try c.encode(true, forKey: .isFlattenedSource) }
     }
 }
 
@@ -65,9 +72,10 @@ public extension Chapter {
             let mine = readings
                 .filter { $0.start >= lower && $0.end <= upper }
                 .map { SourceReading(start: $0.start - lower, length: $0.length,
-                                     surface: $0.surface, reading: $0.reading) }
+                                     surface: $0.surface, reading: $0.reading,
+                                     rawReading: $0.rawReading, groupLength: $0.groupLength) }
             return Chapter(title: title.map { "\($0) (\(i + 1))" }, text: part,
-                           sourceReadings: mine)
+                           sourceReadings: mine, isFlattenedSource: isFlattenedSource)
         }
     }
 }

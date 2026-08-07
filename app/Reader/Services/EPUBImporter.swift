@@ -14,7 +14,7 @@ struct EPUBImporter: DocumentImporter {
 
     func chapters() async throws -> [Chapter] {
         guard let archive = Archive(url: url, accessMode: .read) else { throw ImportError.unreadable }
-        let slots = repairFlattenedKana(in: try classify(archive))
+        let (slots, wasFlattened) = repairFlattenedKana(in: try classify(archive))
 
         let imagePaths: [String] = recognizer == nil ? [] : slots.flatMap { slot -> [String] in
             if case .images(_, let p) = slot { return p }
@@ -33,7 +33,8 @@ struct EPUBImporter: DocumentImporter {
             switch slot {
             case .text(let title, let text, let readings, _):
                 chapters.append(Chapter(title: title, text: text,
-                                        sourceReadings: propagate(index, into: text, given: readings)))
+                                        sourceReadings: propagate(index, into: text, given: readings),
+                                        isFlattenedSource: wasFlattened))
             case .images(let title, let images):
                 guard recognizer != nil else { continue }
                 let text = recognized[ocrCursor..<ocrCursor + images.count]
@@ -61,29 +62,30 @@ struct EPUBImporter: DocumentImporter {
         }
     }
 
-    private func repairFlattenedKana(in slots: [Slot]) -> [Slot] {
+    private func repairFlattenedKana(in slots: [Slot]) -> (slots: [Slot], wasFlattened: Bool) {
         let all = slots.flatMap { slot -> [String] in
             if case .text(_, _, let readings, _) = slot { return readings.map(\.reading) }
             return []
         }
-        guard KanaRepair.looksFlattened(all) else { return slots }
+        guard KanaRepair.looksFlattened(all) else { return (slots, false) }
 
-        return slots.map { slot in
+        func repaired(_ r: SourceReading) -> SourceReading {
+            let restored = KanaRepair.restoreSmallKana(r.reading)
+            return SourceReading(start: r.start, length: r.length, surface: r.surface,
+                                 reading: restored,
+                                 rawReading: restored == r.reading ? nil : r.reading,
+                                 groupLength: r.groupLength)
+        }
+
+        let out = slots.map { slot -> Slot in
             guard case .text(let title, let text, let readings, let groups) = slot else { return slot }
             return .text(
                 title: title,
                 text: text,
-                readings: readings.map {
-                    SourceReading(start: $0.start, length: $0.length, surface: $0.surface,
-                                  reading: KanaRepair.restoreSmallKana($0.reading))
-                },
-                groups: groups.map { g in
-                    HTMLText.RubyGroup(pairs: g.pairs.map {
-                        SourceReading(start: $0.start, length: $0.length, surface: $0.surface,
-                                      reading: KanaRepair.restoreSmallKana($0.reading))
-                    })
-                })
+                readings: readings.map(repaired),
+                groups: groups.map { HTMLText.RubyGroup(pairs: $0.pairs.map(repaired)) })
         }
+        return (out, true)
     }
 
     private func readingIndex(of slots: [Slot]) -> [String: [SourceReading]] {
@@ -95,7 +97,8 @@ struct EPUBImporter: DocumentImporter {
                 let base = g.pairs.first?.start ?? 0
                 split[g.surface] = g.pairs.map {
                     SourceReading(start: $0.start - base, length: $0.length,
-                                  surface: $0.surface, reading: $0.reading)
+                                  surface: $0.surface, reading: $0.reading,
+                                  rawReading: $0.rawReading, groupLength: $0.groupLength)
                 }
             }
         }
@@ -126,7 +129,9 @@ struct EPUBImporter: DocumentImporter {
                     guard s + p.length <= chars.count,
                           String(chars[s..<(s + p.length)]) == p.surface else { continue }
                     out.append(SourceReading(start: s, length: p.length,
-                                             surface: p.surface, reading: p.reading))
+                                             surface: p.surface, reading: p.reading,
+                                             rawReading: p.rawReading,
+                                             groupLength: p.groupLength))
                 }
             }
         }
@@ -461,6 +466,15 @@ private enum HTMLText {
                                            surface: base, reading: readings[next]))
             case rubyGroupEnd:
                 if found.count > groupStart {
+                    if found.count - groupStart > 1 {
+                        let total = found[groupStart...].reduce(0) { $0 + $1.length }
+                        for k in groupStart..<found.count {
+                            found[k] = SourceReading(start: found[k].start, length: found[k].length,
+                                                     surface: found[k].surface,
+                                                     reading: found[k].reading,
+                                                     groupLength: total)
+                        }
+                    }
                     groups.append(RubyGroup(pairs: Array(found[groupStart...])))
                     groupStart = found.count
                 }

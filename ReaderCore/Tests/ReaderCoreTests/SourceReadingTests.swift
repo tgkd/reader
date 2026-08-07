@@ -36,6 +36,47 @@ final class SourceReadingTests: XCTestCase {
         XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("sourceReadings"))
     }
 
+    func testDecodesAChapterWrittenBeforeTheFlattenedFlagExisted() throws {
+        let legacy = """
+        {"id":"3F2504E0-4F89-11D3-9A0C-0305E82C3301","text":"あ",
+         "sourceReadings":[{"start":0,"length":1,"surface":"あ","reading":"あ"}]}
+        """
+        let chapter = try JSONDecoder().decode(Chapter.self, from: Data(legacy.utf8))
+        XCTAssertEqual(chapter.text, "あ")
+        XCTAssertFalse(chapter.isFlattenedSource, "absent means the file was never repaired")
+        XCTAssertNil(chapter.sourceReadings.first?.rawReading)
+        XCTAssertFalse(chapter.sourceReadings.first!.wasRepaired)
+    }
+
+    func testOmitsTheFlattenedFlagWhenFalse() throws {
+        let data = try JSONEncoder().encode(Chapter(text: "あ"))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("isFlattenedSource"))
+    }
+
+    func testRoundTripsTheFlattenedFlagAndRawReading() throws {
+        let c = Chapter(text: "饒舌",
+                        sourceReadings: [SourceReading(start: 0, length: 2, surface: "饒舌",
+                                                       reading: "じょうぜつ",
+                                                       rawReading: "じようぜつ")],
+                        isFlattenedSource: true)
+        let back = try JSONDecoder().decode(Chapter.self, from: JSONEncoder().encode(c))
+        XCTAssertTrue(back.isFlattenedSource)
+        XCTAssertEqual(back.sourceReadings.first?.rawReading, "じようぜつ")
+        XCTAssertTrue(back.sourceReadings.first!.wasRepaired)
+    }
+
+    func testSplittingCarriesProvenanceIntoEverySubChapter() {
+        let text = String(repeating: "饒舌の話。", count: 1_200)
+        let readings = [SourceReading(start: 0, length: 2, surface: "饒舌",
+                                      reading: "じょうぜつ", rawReading: "じようぜつ")]
+        let parts = Chapter(text: text, sourceReadings: readings, isFlattenedSource: true)
+            .splitToRenderable()
+
+        XCTAssertGreaterThan(parts.count, 1)
+        XCTAssertTrue(parts.allSatisfy(\.isFlattenedSource))
+        XCTAssertEqual(parts.first?.sourceReadings.first?.rawReading, "じようぜつ")
+    }
+
     func testRoundTripsReadings() throws {
         let c = Chapter(text: "黄前久美子",
                         sourceReadings: [SourceReading(start: 0, length: 1, surface: "黄", reading: "おう")])

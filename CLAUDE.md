@@ -217,10 +217,20 @@ PDFKit / networking live in the `app/` target only.
   natural-finish auto-advance resume only cached audio — they must NEVER trigger a paid
   synthesis (see `ReaderModel.remoteOpenChapter`). The narration
   voice picker (Settings) is subscriber-only and hidden otherwise.
-- **The app decides WHAT to read and in WHICH VOICE; the Worker decides everything else.** The
-  request body is exactly `{text, voice_id, stream}`. The model, `language_code` and the five
-  `voice_settings` live in aiwork's `src/tts.ts` (model overridable via the `TTS_MODEL` var), so
-  narration is re-modelled or retuned **without an App Store release**. `stream` stays client-sent
+- **The app decides WHAT to read, in WHICH VOICE, and HOW ITS OWN BOOK IS PRONOUNCED; the
+  Worker decides everything else.** The request body is `{text, voice_id, stream}` plus an
+  optional `pronunciation_rules` — the book's own publisher ruby, derived by
+  `PronunciationLexicon` (see `docs/2026-08-07-pronunciation-dictionaries.md`). That last field
+  is an amendment, not a loophole: the rule exists to stop *generation parameters* drifting back
+  to the client, and a reading printed in the book is not a generation parameter — it is content
+  only the client has. ElevenLabs accepts only a dictionary *locator* on a synthesis request, so
+  the rules must reach the Worker for it to create that dictionary; there is no design in which
+  they don't. The Worker re-validates every rule (kana-only, ≥2 chars, must occur in the
+  submitted text, capped) because they are spent against our own account, and resolves them to a
+  pinned locator by canonical hash so one book is one dictionary on every device. The model,
+  `language_code` and the five `voice_settings` live in aiwork's `src/tts.ts` (model overridable
+  via the `TTS_MODEL` var), so narration is re-modelled or retuned **without an App Store
+  release**. `stream` stays client-sent
   because it declares "I can consume NDJSON" — a fact about the client, not config — and the Worker
   defaults it too. The Worker allow-lists `voice_id` against the same six ids as `Voice.catalog`;
   adding a voice needs BOTH. An explicitly-sent `model_id` still wins server-side, for builds

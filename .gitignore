@@ -25,3 +25,6 @@ appstore-screenshots/
 # wrangler local state (from site deploys)
 .wrangler/
 .eleven-matrix/
+
+# TTS probe output: generated audio, and pages built from copyrighted book text.
+scripts/tts-probes/out/

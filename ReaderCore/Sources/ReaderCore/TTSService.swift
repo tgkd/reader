@@ -15,10 +15,13 @@ public struct SynthesizedAudio: Equatable {
 public struct SynthesisRequest: Equatable {
     public let text: String
     public let voice: Voice
+    public let pronunciation: [PronunciationRule]
 
-    public init(text: String, voice: Voice = .shizuka) {
+    public init(text: String, voice: Voice = .shizuka,
+                pronunciation: [PronunciationRule] = []) {
         self.text = text
         self.voice = voice
+        self.pronunciation = pronunciation
     }
 
     public var cacheKey: ContentKey {

@@ -239,6 +239,32 @@ final class WorkerTTSServiceTests: XCTestCase {
         XCTAssertLessThan(SynthesisLimits.maxRequestChars, 5_000)
         XCTAssertLessThanOrEqual(Chapter.maxRenderableChars, SynthesisLimits.maxRequestChars)
     }
+
+    func testOmitsPronunciationRulesWhenTheBookHasNone() async throws {
+        _ = try? await makeService().synthesize(
+            SynthesisRequest(text: "本", voice: .shizuka))
+        let body = try XCTUnwrap(MockURLProtocol.lastBody)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(json["pronunciation_rules"],
+                     "an empty lexicon must not reach the wire as an empty array")
+    }
+
+    func testSendsTheBookLexiconWhenThereIsOne() async throws {
+        _ = try? await makeService().synthesize(
+            SynthesisRequest(text: "黄前久美子", voice: .shizuka,
+                             pronunciation: [
+                                PronunciationRule(surface: "黄前", reading: "おうまえ"),
+                                PronunciationRule(surface: "久美子", reading: "くみこ"),
+                             ]))
+        let body = try XCTUnwrap(MockURLProtocol.lastBody)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let rules = try XCTUnwrap(json["pronunciation_rules"] as? [[String: String]])
+        XCTAssertEqual(rules, [["surface": "黄前", "reading": "おうまえ"],
+                               ["surface": "久美子", "reading": "くみこ"]])
+    }
+
 }
 
 private final class ProgressSamples: @unchecked Sendable {

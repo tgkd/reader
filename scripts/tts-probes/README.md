@@ -1,0 +1,91 @@
+# TTS probes
+
+Throwaway-looking scripts that are not throwaway: each one answers a question about
+ElevenLabs' behaviour that its documentation does not, and several of the answers were
+surprising enough to change the design. They are kept so the next person does not re-derive
+them, and so a claim can be re-checked when upstream changes.
+
+Findings live in `docs/2026-08-07-pronunciation-dictionaries.md`; this is the apparatus.
+
+## Running
+
+Needs `ELEVEN_KEY` in the repo's `.env` (same file `capture-alignment.mjs` reads).
+
+```bash
+node scripts/tts-probes/<probe>.mjs
+```
+
+Output goes to `scripts/tts-probes/out/` unless `PROBE_OUT` says otherwise. That directory is
+gitignored: the probes generate audio, and some of them read copyrighted book text.
+
+Some probes take input through the environment rather than arguments, so a path with spaces or
+a `!` cannot be mangled by a shell:
+
+| variable | used by |
+|---|---|
+| `PROBE_TEXT` | a chapter to synthesize — `model-alignment-repeat`, `lexicon-end-to-end`, `lexicon-excerpt`, `build-sync-viewer` |
+| `PROBE_RULES` | a JSON array of `{string_to_replace, alias}` — `lexicon-end-to-end` |
+| `PROBE_OUT` | where audio and pages are written |
+| `AIWORK_DEV_VARS` | path to aiwork's `.dev.vars` — `gateway-management` only |
+
+To get a real rule set out of a real book, run the app-target probe and keep the `LEXJSON`
+line:
+
+```bash
+TEST_RUNNER_YOMI_EPUB=<book.epub> xcodebuild test -project app/Reader.xcodeproj \
+  -scheme Reader -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -derivedDataPath app/build -only-testing:ReaderTests/RealBookLexiconProbe
+```
+
+The `TEST_RUNNER_` prefix is load-bearing. Without it the variable never reaches the test
+process, the probe skips, and the run still reports success.
+
+## What each one settles
+
+**`alias-fires`** — whether an alias rule matches inside continuous Japanese. It does, but only
+with `word_boundaries: false`; at the default it is a silent no-op, which is indistinguishable
+from the model having read the name correctly. Includes a Latin control, without which "did not
+fire" and "fired but changed nothing" are the same measurement.
+
+**`alias-alignment`** — what `alignment.characters` contains when a rule fires. The original
+submitted text, with the aliased characters absorbing the spoken alias. This is the fact the
+whole feature rests on: it means `CharTokenMapper` and `ContentKey` need no changes.
+
+**`alias-collision`** — whether a rule fires *inside* a longer word. It does, at any position,
+and a realistic collision is subtle enough to pass unnoticed on listening. This is why the
+lexicon builder has an occurrence gate.
+
+**`dictionary-versioning`** — whether a pinned version keeps working after the dictionary is
+updated. It does, over one mutation; long-term retention is still unmeasured.
+
+**`locator-failure`** — what a bad locator does. An archived dictionary, an unknown id and a
+stale version all return **404 with no audio**. Since the locator rides on every reader
+request, that is a total narration outage, which is why the Worker drops the locator and
+retries.
+
+**`gateway-management`** — whether Cloudflare's AI Gateway forwards ElevenLabs *management*
+endpoints, not just inference. `GET` does, on the gateway credential alone. `POST` is still
+unverified, which is why dictionary creation fails soft.
+
+**`config-matrix`** — voice against `voice_settings` against `language_code`, one variable at a
+time. Written after a playground result disagreed with a production one and three things
+differed at once.
+
+**`voice-sweep`** — every catalog voice on a name-dense sentence. Voice does not rescue an
+irregular proper noun, but it does change ordinary words.
+
+**`model-alignment-repeat`** — the same chapter through the same model N times. `eleven_v3`
+fails the client's 1 s alignment guard on roughly three runs in four, which a single
+measurement had missed entirely.
+
+**`lexicon-end-to-end`** — a real rule set uploaded as a real dictionary, narrating a real
+chapter. The whole chain.
+
+**`archive-dictionaries`** — cleanup. Dictionaries cannot be deleted, only archived, and an
+archived one 404s at synthesis, so archive nothing that anything might still pin.
+
+## Cost
+
+Everything here spends real credits — roughly 0.5 per character on flash, 1.0 on v3. A
+chapter-length probe is a few hundred; `model-alignment-repeat` at five runs is a few thousand.
+Read the script before running it.
