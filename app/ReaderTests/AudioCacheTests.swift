@@ -305,4 +305,88 @@ final class AudioCacheTests: XCTestCase {
         store.save(sampleAudio(), for: SynthesisRequest(text: "after-clear").cacheKey)
         XCTAssertTrue(store.has(SynthesisRequest(text: "after-clear").cacheKey))
     }
+
+    /// The update that moves narration out of Caches must bring the existing narration with it.
+    /// Without this the release that fixes the purge is itself a purge, and from the reader's
+    /// side the two are indistinguishable.
+    func testExistingNarrationSurvivesTheMoveOutOfCaches() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let legacy = root.appendingPathComponent("Caches/Narration", isDirectory: true)
+        let target = root.appendingPathComponent("Support/Narration", isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        try fm.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+
+        try Data("audio".utf8).write(to: legacy.appendingPathComponent("abc.mp3"))
+        try Data("timings".utf8).write(to: legacy.appendingPathComponent("abc.json"))
+
+        DiskAudioStore.adoptLegacyCache(from: legacy, into: target)
+
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("abc.mp3")),
+                       Data("audio".utf8))
+        XCTAssertTrue(fm.fileExists(atPath: target.appendingPathComponent("abc.json").path))
+        XCTAssertFalse(fm.fileExists(atPath: legacy.path), "the emptied directory should be gone")
+    }
+
+    /// `removeItem` on a directory is recursive, so clearing the old location unconditionally
+    /// would delete precisely the files whose move had just failed — this code destroying the
+    /// audio it exists to rescue. A file that could not move must still be there to retry.
+    func testAFileThatCannotMoveIsNotDeletedInstead() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let legacy = root.appendingPathComponent("Caches/Narration", isDirectory: true)
+        let target = root.appendingPathComponent("Support/Narration", isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        try fm.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+
+        try Data("audio".utf8).write(to: legacy.appendingPathComponent("abc.mp3"))
+        // Make the destination unwritable so the move genuinely fails, which is the only way to
+        // reach the branch that used to delete the file instead.
+        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: target.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path) }
+
+        DiskAudioStore.adoptLegacyCache(from: legacy, into: target)
+
+        XCTAssertFalse(fm.fileExists(atPath: target.appendingPathComponent("abc.mp3").path),
+                       "the move was supposed to fail — otherwise this test proves nothing")
+        XCTAssertTrue(fm.fileExists(atPath: legacy.appendingPathComponent("abc.mp3").path),
+                      "what could not move must survive for the next attempt")
+        XCTAssertTrue(fm.fileExists(atPath: legacy.path),
+                      "and the directory holding it must not be removed")
+    }
+
+    /// Re-running must not clobber audio already in the new location with a stale copy.
+    func testAlreadyMigratedAudioIsNotOverwrittenByTheOldCopy() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let legacy = root.appendingPathComponent("Caches/Narration", isDirectory: true)
+        let target = root.appendingPathComponent("Support/Narration", isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        try fm.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+
+        try Data("old".utf8).write(to: legacy.appendingPathComponent("abc.mp3"))
+        try Data("current".utf8).write(to: target.appendingPathComponent("abc.mp3"))
+
+        DiskAudioStore.adoptLegacyCache(from: legacy, into: target)
+
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("abc.mp3")),
+                       Data("current".utf8))
+    }
+
+    /// Nothing to adopt is the normal case on every launch after the first.
+    func testMigrationIsAQuietNoOpWhenThereIsNothingToMove() {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let target = root.appendingPathComponent("Support/Narration", isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        try? fm.createDirectory(at: target, withIntermediateDirectories: true)
+
+        DiskAudioStore.adoptLegacyCache(
+            from: root.appendingPathComponent("Caches/Narration", isDirectory: true), into: target)
+
+        XCTAssertTrue(fm.fileExists(atPath: target.path))
+    }
 }

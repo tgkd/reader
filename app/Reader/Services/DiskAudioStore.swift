@@ -31,7 +31,9 @@ final class DiskAudioStore: GeneratedAudioStore {
                 .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Narration", isDirectory: true)
             Self.prepare(target)
-            Self.adoptLegacyCache(into: target)
+            if let legacy = Self.legacyCacheDirectory {
+                Self.adoptLegacyCache(from: legacy, into: target)
+            }
             self.dir = target
         }
     }
@@ -54,10 +56,12 @@ final class DiskAudioStore: GeneratedAudioStore {
     /// Without this the update that fixes the problem is also the update that deletes everyone's
     /// narration — indistinguishable, from the reader's side, from the purge this exists to
     /// prevent. A move within the same volume is a rename, so a large library costs nothing.
-    private static func adoptLegacyCache(into target: URL) {
+    ///
+    /// The old directory is removed only once it is empty. `removeItem` on a directory is
+    /// recursive, so clearing it unconditionally would delete exactly the files whose move had
+    /// just failed — this function destroying the audio it exists to rescue.
+    static func adoptLegacyCache(from legacy: URL, into target: URL) {
         let fm = FileManager.default
-        guard let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
-        let legacy = caches.appendingPathComponent("Narration", isDirectory: true)
         guard let entries = try? fm.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil)
         else { return }
         for url in entries {
@@ -68,7 +72,13 @@ final class DiskAudioStore: GeneratedAudioStore {
                 try? fm.moveItem(at: url, to: destination)
             }
         }
-        try? fm.removeItem(at: legacy)
+        let left = (try? fm.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil)) ?? []
+        if left.isEmpty { try? fm.removeItem(at: legacy) }
+    }
+
+    private static var legacyCacheDirectory: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Narration", isDirectory: true)
     }
 
     /// Whether this store's directory is held out of backup. Read back from the filesystem
