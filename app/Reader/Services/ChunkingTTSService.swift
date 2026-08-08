@@ -20,7 +20,8 @@ final class ChunkingTTSService: TTSService {
         let segments = Chunker.split(text, maxChars: maxChars ?? SynthesisLimits.maxRequestChars)
         if segments.count <= 1 { return try await withBackoff { try await self.inner.synthesize(request) } }
 
-        let ordered = try await synthesizeSegments(segments, voice: request.voice)
+        let ordered = try await synthesizeSegments(segments, voice: request.voice,
+                                                   pronunciation: request.pronunciation)
         let stitched = AlignmentStitcher.stitch(ordered)
         store?.save(stitched, for: request.cacheKey)
         if store?.has(request.cacheKey) != false {
@@ -32,7 +33,8 @@ final class ChunkingTTSService: TTSService {
     }
 
     private func synthesizeSegments(_ segments: [String],
-                                    voice: Voice) async throws -> [SynthesizedAudio] {
+                                    voice: Voice,
+                                    pronunciation: [PronunciationRule]) async throws -> [SynthesizedAudio] {
         var distinct: [String] = []
         var slot: [String: Int] = [:]
         for segment in segments where slot[segment] == nil {
@@ -50,7 +52,10 @@ final class ChunkingTTSService: TTSService {
                 let text = distinct[i]
                 dispatched += 1
                 group.addTask {
-                    do { return (i, .success(try await self.synthesizeSegment(text, voice: voice))) }
+                    do {
+                        return (i, .success(try await self.synthesizeSegment(
+                            text, voice: voice, pronunciation: pronunciation)))
+                    }
                     catch { return (i, .failure(error)) }
                 }
             }
@@ -72,8 +77,11 @@ final class ChunkingTTSService: TTSService {
         return ordered
     }
 
-    private func synthesizeSegment(_ text: String, voice: Voice) async throws -> SynthesizedAudio {
-        let request = SynthesisRequest(text: text, voice: voice)
+    private func synthesizeSegment(_ text: String, voice: Voice,
+                                   pronunciation: [PronunciationRule]) async throws -> SynthesizedAudio {
+        let request = SynthesisRequest(text: text, voice: voice, pronunciation: pronunciation)
+        // Rules are deliberately absent from the key: a segment cached before the book had a
+        // lexicon must still be found, exactly as at chapter level.
         let key = request.cacheKey
         if let cached = store?.load(key) { return cached }
         let audio = try await withBackoff { try await self.inner.synthesize(request) }

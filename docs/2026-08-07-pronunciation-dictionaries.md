@@ -29,6 +29,10 @@ production configuration — `eleven_flash_v2_5`, voice Shizuka (`WQz3clzUdMqvBf
   and it was right about what it measured; what unblocked it was **dropping the global
   lexicon entirely**, which is where every remaining blocker lived. Confirmed in real reading
   the same day. See §11.
+- **One defect shipped with it: dictionary identity is per chapter, not per book** (§11), and
+  the hash that would make it per book has a collision (§12). §12 is the plan; read it before
+  touching any of this. Nothing is mispronounced by either — both are resource and identity
+  problems.
 
 The dictionary is a **remote resource on the ElevenLabs account**, not something the client
 carries: rules are uploaded once via `add-from-rules`, and a synthesis request references
@@ -993,6 +997,10 @@ book one dictionary, as documented. Not done: the shipped behaviour is correct-b
 and changing rule identity re-mints every dictionary, so it wants to be a deliberate change
 rather than a follow-on commit.
 
+**§12 plans it properly, and reverses parts of this paragraph.** "Small" was optimistic: the
+count cap must not survive as written, and the hash has a collision that only becomes dangerous
+once identity is per book. Read §12 before implementing any of the above.
+
 Still unmeasured, in the order it would matter:
 
 1. **Prosody in aggregate.** §7 measured that a redundant alias adds a small pause on four
@@ -1008,6 +1016,178 @@ Still unmeasured, in the order it would matter:
    ×99 — the most valuable name in the volume, refused because its book flattens small kana
    and MeCab cannot vouch for サファイア. The gate is correct and the cost is real; whether to
    trust the repair, or ask once per book, was never decided.
+
+## 12. The fix for §11, planned 2026-08-08 — and a collision found while planning it
+
+Three rounds against two outside models (`gpt-5.6-sol` rounds 1–2, `Kimi-K3` round 3), with an
+independent verifier reading both repositories between rounds. The conclusion never moved:
+**hash and upload the client's full canonical rule set, and use chapter occurrence only to decide
+whether to attach a dictionary at all.** Almost every implementation detail moved, twice.
+
+### The collision, which is the reason to read this section
+
+`pronunciationSetHash` separates surface from reading with **NUL** and entries with **SOH** —
+deliberate separator choices, unusable in ordinary text. But nothing above constrains `surface`'s
+character class, and JSON transports control characters happily (`"xy あzw"`), so one
+crafted surface reproduces the separators and collides with a two-rule set:
+
+```
+[{xy, あ}, {zw, い}]          ->  "xy" NUL "あ" SOH "zw" NUL "い"
+[{"xy" NUL "あ" SOH "zw", い}] ->  the same bytes
+```
+
+Verified 2026-08-08: identical serialization, and **the forged surface passes every check in
+`canonicalPronunciationRules`** (7 codepoints, kana reading, surface ≠ reading). Today this is
+inert — identity is per chapter and nothing trusts a hash across books. **The §11 fix is what
+makes it matter**, because then one hash pins one book's pronunciation on every device and a
+crafted set resolves a book to another book's dictionary. `tts.ts:122` already declares the threat
+model it sits inside: "Nothing here trusts the client's own gating."
+
+The fix is length prefixes — state each field's extent before its bytes, and no separator can be
+forged. That is preferred over rejecting control characters in `surface` because it cannot be
+defeated by whatever separator someone picks next. **It ships in the same commit as the identity
+change**; no mapping may ever be written under a forgeable scheme. The `v2` prefix orphans the old
+family rather than migrating it.
+
+> **How this was nearly recorded wrongly.** Two reviewers and this author all described the
+> separator as a space, and the "verification" reproduced the serialization *from the review* and
+> tested a space-based witness, which does **not** collide. `Read` renders NUL and SOH as blanks,
+> so nothing caught it until the line was dumped with `od -c`. The finding survived in a much
+> narrower form — it needs control characters, not ordinary text. Reimplementing code in order to
+> test it tests the reimplementation.
+
+### What the review overturned
+
+**`maxRules: 5_000` was justified from the wrong measurement.** §3's "142, 500, 1,000 and 5,000 all
+accepted" reports `version_rules_num` from the **creation** response. The cap governs *synthesis*,
+and the largest dictionary ever narrated against is the 122-rule set in §8c. Final: **2,048 default,
+4,096 hard ceiling, production value set only after a synthesis probe against ≥1,026 rules clears.**
+
+**Reject overflow; do not truncate.** The cap is masked today because chapter filtering runs first —
+こころ's 2,340 occurrences over 113 chapters average ~21 per chapter, so no subset approaches 500.
+Full-set hashing exposes it: 1,026 rules sliced to 500 in codepoint order drops 526 and decides which
+names still work by where their kanji sort. That is *worse than the current defect* for any chapter
+whose firing surfaces sort late. If a truncating cap is ever reintroduced, the hash must serialize
+exactly the array uploaded — the same mismatch class as the original defect.
+
+**Recreate-on-404 was proposed and withdrawn.** A `pronunciation_dictionary_not_found` is
+indistinguishable from a transient upstream fault, so recreating on it mints undeletable
+dictionaries off a signal we do not understand — up to 150/day/ID under the shipped quota, which is
+the exact growth this fix exists to bound. `index.ts:883-887` already says the second generation
+"is acceptable only because it is a never-path: it must not become a general retry policy." Keep
+the one-shot fallback; log the stale mapping; clean it by hand at this scale.
+
+**No Durable Object.** After the fix, creation is bounded by distinct rule sets, hence transitively
+by the existing 150/day quota (`quota.ts:33-36`) — no new machinery buys anything at one user. What
+is genuinely uncovered: that quota **fails open** on a KV error (`index.ts:489-496`), which is right
+for billing and wrong for an irreversible resource. A single `lexicons:created` counter, fail-closed,
+covers it — skipping creation costs pronunciation, never narration.
+
+**Freeze the Worker's identity inputs, not the client's gates.** Post-fix, "one book, one dictionary"
+holds only while the canonical set is byte-identical everywhere, so every change to what enters that
+set re-mints every dictionary — a per-release tax, not a one-time migration. Frozen: the wire
+contract, the membership checks, the sort, the serialization. **Not** frozen: `PronunciationLexicon`,
+`DocumentLexicon`, `EPUBImporter` — freezing those pins the feature at its current 20-name
+`unconfirmedRepair` loss, and the cost of changing them is mixed per-chapter pronunciation depending
+on which build generated first, which is the trade already accepted for stale cache above.
+
+### What is inert, and why that is the load-bearing claim
+
+Uploading rules for names absent from a chapter changes nothing *in that chapter*: an alias fires
+only where its surface occurs, so an absent surface cannot match. The canonical sort is by surface
+codepoint, so inserting absent rules also preserves the **relative order** of the present ones — any
+order-sensitive resolution inside ElevenLabs sees today's rules in today's sequence.
+
+That is inference, not an API contract, and it has one hole: it holds over the *submitted* text and
+says nothing about whether ElevenLabs applies aliases to text it has already rewritten. A kana
+surface is admissible (the Worker constrains only the *reading* to kana), so under iterative
+replacement a rule absent from the chapter could match another rule's output. `alias-collision`
+measured intra-word firing, not chaining. Unsettled.
+
+### The plan, in order
+
+**0. Inventory — free. Done 2026-08-08, and it does not answer the question it was meant to.**
+
+```
+total 33   live 8   archived 25   has_more false   Worker-minted (yomi-<16hex>) 1
+GET /v1/user/subscription -> 401 missing_permissions (needs user_read)
+```
+
+The list endpoint returns dictionaries, not a quota, and **no endpoint reachable on this key
+exposes a dictionary limit at all**. So the ceiling cannot be read; it can only be discovered by
+hitting it. That settles the open question from §11 in the least satisfying way, and it decides
+the shape of the registry counter: `lexicons:created` is an **internal exposure budget chosen by
+us**, not a reflection of ElevenLabs' capacity, and it must be documented as such wherever the
+number appears. Set it conservatively (~250 against today's 33) and treat the alert, not the
+ceiling, as the real instrument.
+
+**1. Synthesis probes — billed, and they gate the release. Run 2026-08-08; both gates passed.**
+
+The exit condition was real: if attaching a book's whole lexicon changed how the rules that *do*
+apply are spoken, the design was to be abandoned rather than the cap tuned. It did not.
+
+`scripts/tts-probes/full-set-equivalence.mjs`, three arms on one text — no dictionary, the
+chapter's applicable rules only (what shipped), the whole book's set (what the fix sends):
+
+| book | chapter | applicable | absent | n | full − subset | within-arm spread |
+|---|---|---|---|---|---|---|
+| group-ruby novel | 3,988 chars | 19 | 103 | 3 | 5.7 s on 925 s | 12.7 s |
+| monoruby novel | 1,548 chars | 36 | **990** | 6 | 0.75 s on 391 s | sd 2.2–3.9 s |
+
+**Absent rules are inert.** In 21 runs across both books the alignment contract never moved:
+`joinOK` true every time, every character described, undescribed 0.03–0.05 s against the client's
+1.0 s guard, zero backwards starts. The larger dictionary was if anything the *steadier* arm.
+
+Two notes on method, because the first pass nearly recorded the opposite. At n=2 the second book
+looked like a regression (6.9 s delta against a 5.4 s "spread"), and the probe's own verdict line
+said so; at n=6 the same comparison is 0.75 s with t = 0.41. **A two-sample spread is not a
+variance estimate**, and a probe that prints a verdict from one will eventually print a wrong one.
+The 990-absent-rule case matters more than the 103 one, too: if there were a per-rule cost the
+effect should scale with the count, so the harsher test is the one that carries the result.
+
+`scripts/tts-probes/alias-chaining.mjs` settles the one hole in the inertness argument — whether
+ElevenLabs applies aliases to text another alias produced. Rule 黄前→おうまえ plus a decoy
+おうまえ→まったくちがうことばです whose surface appears nowhere in the submitted text:
+
+| arm | audio |
+|---|---|
+| base rule only | 3.921 s |
+| base + decoy (decoy surface absent) | 4.104 s |
+| control: decoy surface present in the text | 6.246 s |
+
+The decoy costs 2.3 s when it fires and 0.18 s when it could only fire on another rule's output.
+**No chaining.** So no character-class constraint on `surface` is needed, and the inertness
+argument holds for the reason claimed rather than by luck.
+
+Still not done from this step: capturing the full 404 JSON from an archived dictionary, which
+would say whether locator attribution is possible at all. It gates no release — the recovery path
+deliberately does not depend on it.
+
+**2. Worker, one deploy, intra-commit order load-bearing.** Hash v2 first → split canonicalisation
+from applicability → cap with reject-on-overflow → guard fix (`locators?.length`, and log the whole
+locator list, ending the misattribution where the log blames the book locator for a stale global
+one) → `lexicons:created`, fail-closed.
+
+**3. Canary.** Three-rule book across two chapters → one hash, one dictionary, one creation. Chapter
+with no matching rule → no locator, no creation.
+
+**4. Client, independently.** Thread `pronunciation` through `ChunkingTTSService` (`:23-24`, `:53`,
+`:75-76`) — it rebuilds `SynthesisRequest` without rules, dormant only because chapters cap at 4,000
+chars against a 4,500 request limit. No lexicon-gate changes in the same train, so one app version
+defines the identity at switchover.
+
+**Deliberately not done:** `ContentKey` change, archiving or rewriting old mappings, Durable Objects,
+App Attest, touching the fail-open billing quota, a surface character-class gate unless (b) forces
+it, automatic stale-mapping healing.
+
+### Accepted costs
+
+Shipping **adds** dictionaries before it subtracts any — roughly one full-set dictionary per
+already-read book, on top of the stranded subsets, which stay forever. The win is the growth rate.
+Rollback resumes per-chapter minting; v2 mappings are ignored by old code, not corrupted.
+Concurrent first requests can still duplicate: KV get → create → put is not atomic, so two isolates
+can both miss and both create, last write wins, the other stranded. Do not claim exact
+one-dictionary semantics.
 
 ## Reproducing
 

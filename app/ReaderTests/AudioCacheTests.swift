@@ -21,6 +21,26 @@ final class AudioCacheTests: XCTestCase {
     }
     private enum FakeError: Error { case failed }
 
+    private final class RuleRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var seen: [[PronunciationRule]] = []
+        func record(_ rules: [PronunciationRule]) { lock.withLock { seen.append(rules) } }
+    }
+
+    private struct RecordingTTS: TTSService {
+        let recorder: RuleRecorder
+        func synthesize(_ request: SynthesisRequest) async throws -> SynthesizedAudio {
+            recorder.record(request.pronunciation)
+            let chars = request.text.map(String.init)
+            return SynthesizedAudio(
+                audio: Data(request.text.utf8),
+                alignment: Alignment(characters: chars,
+                                     startTimes: chars.indices.map(Double.init),
+                                     endTimes: chars.indices.map { Double($0 + 1) }),
+                text: request.text)
+        }
+    }
+
     private final class MemoryAudioStore: GeneratedAudioStore, @unchecked Sendable {
         private let lock = NSLock()
         private var map: [String: SynthesizedAudio] = [:]
@@ -160,6 +180,31 @@ final class AudioCacheTests: XCTestCase {
         XCTAssertTrue(store.has(SynthesisRequest(text: text).cacheKey),
                       "the whole chapter must be cached before the segments are pruned")
         XCTAssertEqual(store.count, 1)
+    }
+
+    /// A chapter split across requests must still be read with the book's own readings. Every
+    /// segment is a separate synthesis, so rules dropped here are dropped from the narration —
+    /// and because pronunciation is not in the cache key, the wrong audio would then be cached
+    /// under the right name. Dormant while chapters cap below the request limit; it stops being
+    /// dormant the moment either number moves.
+    func testChunkedSynthesisCarriesTheBookLexiconIntoEverySegment() async throws {
+        let recorder = RuleRecorder()
+        let chunking = ChunkingTTSService(inner: RecordingTTS(recorder: recorder),
+                                          store: MemoryAudioStore(),
+                                          maxChars: 5, maxConcurrent: 2)
+        let text = "あいうえおかきくけこさしすせそたちつてと"
+        let rules = [PronunciationRule(surface: "甲乙", reading: "こうおつ"),
+                     PronunciationRule(surface: "丙丁", reading: "へいてい")]
+        let segments = Chunker.split(Normalize.nfkc(text), maxChars: 5)
+        XCTAssertGreaterThan(segments.count, 1, "text must split into multiple segments")
+
+        _ = try await chunking.synthesize(
+            SynthesisRequest(text: text, pronunciation: rules))
+
+        XCTAssertEqual(recorder.seen.count, segments.count)
+        for sent in recorder.seen {
+            XCTAssertEqual(sent, rules, "every segment must carry the whole book's lexicon")
+        }
     }
 
     func testIdenticalSegmentsAreBilledOnce() async throws {

@@ -82,6 +82,19 @@ measurement had missed entirely.
 **`lexicon-end-to-end`** — a real rule set uploaded as a real dictionary, narrating a real
 chapter. The whole chain.
 
+**`full-set-equivalence`** — whether attaching a book's WHOLE lexicon narrates a chapter
+differently from attaching only the rules that occur in it. It does not, across two books and
+21 runs. This is the gate for the per-book identity change (§12): the whole design rests on
+absent rules being inert, which is an inference about ElevenLabs' matching rather than a
+documented contract. Takes `PROBE_RUNS`; **use at least 4.** At n=2 it once reported a
+regression that vanished at n=6 — a two-sample spread is not a variance estimate, and this
+script will happily print a verdict from one.
+
+**`alias-chaining`** — whether a rule can fire on text another rule produced. It cannot. This is
+the one hole in the inertness argument above, and it is closed with a decoy long enough to be
+unmistakable in the duration, plus a control proving the decoy is audible when its surface really
+is present.
+
 **`archive-dictionaries`** — cleanup. Dictionaries cannot be deleted, only archived, and an
 archived one 404s at synthesis, so archive nothing that anything might still pin.
 

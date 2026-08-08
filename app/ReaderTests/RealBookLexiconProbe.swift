@@ -59,6 +59,24 @@ final class RealBookLexiconProbe: XCTestCase {
             print("LEXJSON \(json)")
         }
 
+        let scored = chapters.enumerated().map { i, c in
+            (i, lex.rules.reduce(0) { $0 + c.text.ranges(of: $1.surface).count })
+        }
+        let pick = Int(ProcessInfo.processInfo.environment["YOMI_CHAPTER"] ?? "")
+            ?? scored.max(by: { $0.1 < $1.1 })?.0 ?? 0
+        if chapters.indices.contains(pick) {
+            let text = chapters[pick].text
+            let hits = lex.rules.filter { text.contains($0.surface) }
+            print("LEXCHAPTER index \(pick), \(text.count) chars, "
+                  + "\(hits.count)/\(lex.rules.count) rules applicable")
+            print("LEXTEXT \(Data(text.utf8).base64EncodedString())")
+            let subset = hits.map { ["string_to_replace": $0.surface, "alias": $0.reading] }
+            if let data = try? JSONSerialization.data(withJSONObject: subset),
+               let json = String(data: data, encoding: .utf8) {
+                print("LEXSUBSET \(json)")
+            }
+        }
+
         print("LEX ---- refused, most frequent first ----")
         for c in lex.rejected.sorted(by: { $0.occurrences > $1.occurrences }).prefix(25) {
             print("LEX   \(c.surface)\t→ \(c.reading)\t×\(c.occurrences)\t\(c.rejection.map(String.init(describing:)) ?? "-")")
