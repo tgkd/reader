@@ -100,6 +100,13 @@ archived one 404s at synthesis, so archive nothing that anything might still pin
 
 ## Cost
 
-Everything here spends real credits — roughly 0.5 per character on flash, 1.0 on v3. A
-chapter-length probe is a few hundred; `model-alignment-repeat` at five runs is a few thousand.
-Read the script before running it.
+Everything here spends real money, billed per character of submitted text:
+**$0.05 per 1,000 characters on flash**, $0.10 on multilingual/v3.
+
+A 4,000-character chapter is **$0.20 per run**, so anything that repeats a chapter adds up fast:
+`full-set-equivalence` at 3 arms x 3 runs is ~$1.80, and `model-alignment-repeat` at five runs is
+~$1.00. The short synthetic probes (`alias-fires`, `alias-collision`, `alias-chaining`) are
+fractions of a cent. Read the script and do the arithmetic before running it.
+
+Prices are per model, so re-check them against `TTS_MODEL` rather than carrying a $/hour figure
+across a model change — narration used to cost twice this on the multilingual rate.
