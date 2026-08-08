@@ -76,6 +76,8 @@ enum L10n {
     static var readerFailedTitle: String { String(localized: "reader.failed.title") }
     static var readerFailedTokenizer: String { String(localized: "reader.failed.tokenizer") }
     static var readerFailedAudio: String { String(localized: "reader.failed.audio") }
+    static var readerFailedSubscription: String { String(localized: "reader.failed.subscription") }
+    static var readerFailedAllowance: String { String(localized: "reader.failed.allowance") }
     static var readerFailedNetwork: String { String(localized: "reader.failed.network") }
     static var readerNextChapter: String { String(localized: "reader.nextChapter") }
     static var readerSubscribeTitle: String { String(localized: "reader.subscribe.title") }

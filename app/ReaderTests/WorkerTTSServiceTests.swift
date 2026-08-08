@@ -265,6 +265,64 @@ final class WorkerTTSServiceTests: XCTestCase {
                                ["surface": "久美子", "reading": "くみこ"]])
     }
 
+
+    /// A subscriber who has spent the period's narration must not be shown a Membership
+    /// prompt — they already pay. The status alone cannot carry that distinction, so the
+    /// client has to read the body it previously threw away.
+    func testSpentAllowanceIsDistinctFromNeedingASubscription() async {
+        MockURLProtocol.handler = { request in
+            let body = Data("""
+            {"error":{"code":"narration_allowance_exhausted","used_characters":45000,            "limit_characters":46000,"remaining_characters":1000}}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 402,
+                                    httpVersion: nil, headerFields: nil)!, body)
+        }
+        do {
+            _ = try await makeService().synthesize(SynthesisRequest(text: "あ"))
+            XCTFail("expected the request to fail")
+        } catch let error as WorkerTTSService.WorkerError {
+            guard case .allowanceExhausted(let remaining, let limit) = error else {
+                return XCTFail("got \(error)")
+            }
+            XCTAssertEqual(remaining, 1_000)
+            XCTAssertEqual(limit, 46_000)
+        } catch {
+            XCTFail("got \(error)")
+        }
+    }
+
+    /// An error body we cannot read is not worth failing differently over: fall back to the
+    /// status code rather than inventing a reason.
+    func testUnreadableErrorBodyFallsBackToTheStatusCode() async {
+        MockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 402,
+                             httpVersion: nil, headerFields: nil)!, Data("not json".utf8))
+        }
+        do {
+            _ = try await makeService().synthesize(SynthesisRequest(text: "あ"))
+            XCTFail("expected the request to fail")
+        } catch let error as WorkerTTSService.WorkerError {
+            XCTAssertEqual(error, .http(402))
+        } catch {
+            XCTFail("got \(error)")
+        }
+    }
+
+    /// 401/403 still mean "buy a subscription" and must not be diverted into the allowance path.
+    func testUnauthorizedStillAsksForASubscription() async {
+        MockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 403,
+                             httpVersion: nil, headerFields: nil)!, Data())
+        }
+        do {
+            _ = try await makeService().synthesize(SynthesisRequest(text: "あ"))
+            XCTFail("expected the request to fail")
+        } catch let error as WorkerTTSService.WorkerError {
+            XCTAssertEqual(error, .subscriptionRequired)
+        } catch {
+            XCTFail("got \(error)")
+        }
+    }
 }
 
 private final class ProgressSamples: @unchecked Sendable {

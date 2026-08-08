@@ -258,4 +258,51 @@ final class AudioCacheTests: XCTestCase {
                       "an in-flight sibling must finish and cache — it may already have been billed")
         XCTAssertFalse(store.has(SynthesisRequest(text: segments.first!).cacheKey))
     }
+
+    private func sampleAudio(_ text: String = "あ") -> SynthesizedAudio {
+        let chars = text.map(String.init)
+        return SynthesizedAudio(
+            audio: Data(repeating: 0x55, count: 2_048),
+            alignment: Alignment(characters: chars,
+                                 startTimes: chars.indices.map(Double.init),
+                                 endTimes: chars.indices.map { Double($0 + 1) }),
+            text: text)
+    }
+
+    /// Narration is paid for, so it must not ride along in the reader's iCloud backup — a novel
+    /// is several hundred megabytes. Read the flag back off the filesystem: what this asserts is
+    /// the state on disk, not that we remembered to call the setter.
+    func testGeneratedAudioIsHeldOutOfBackup() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let store = DiskAudioStore(dir: dir)
+        store.save(sampleAudio(), for: SynthesisRequest(text: "excluded").cacheKey)
+
+        XCTAssertTrue(store.isExcludedFromBackup)
+        XCTAssertEqual(
+            try dir.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+    }
+
+    /// `clear()` removes the directory, which takes the exclusion with it. A cleared cache that
+    /// silently began backing itself up would be the same bug in a different place.
+    func testClearingTheCacheDoesNotReadmitItToBackup() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let store = DiskAudioStore(dir: dir)
+        store.save(sampleAudio(), for: SynthesisRequest(text: "cleared").cacheKey)
+        XCTAssertGreaterThan(store.totalBytes(), 0)
+
+        store.clear()
+
+        XCTAssertEqual(store.totalBytes(), 0, "the user's manual clear must actually free the space")
+        XCTAssertFalse(store.has(SynthesisRequest(text: "cleared").cacheKey))
+        XCTAssertTrue(store.isExcludedFromBackup, "clearing must not re-admit the store to backup")
+        // And the store stays usable afterwards rather than needing a relaunch.
+        store.save(sampleAudio(), for: SynthesisRequest(text: "after-clear").cacheKey)
+        XCTAssertTrue(store.has(SynthesisRequest(text: "after-clear").cacheKey))
+    }
 }

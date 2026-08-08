@@ -4,6 +4,7 @@ import ReaderCore
 final class WorkerTTSService: TTSService {
     enum WorkerError: LocalizedError, Equatable {
         case subscriptionRequired
+        case allowanceExhausted(remaining: Int, limit: Int)
         case http(Int)
         case badResponse
         case truncatedStream
@@ -12,13 +13,58 @@ final class WorkerTTSService: TTSService {
 
         var errorDescription: String? {
             switch self {
-            case .subscriptionRequired: return "Subscription required"
+            case .subscriptionRequired: return L10n.readerFailedSubscription
+            case .allowanceExhausted: return L10n.readerFailedAllowance
             case .http(let code): return "TTS failed (\(code))"
             case .badResponse: return "Malformed TTS response"
             case .truncatedStream: return "Narration ended early"
             case .misalignedStream: return "Narration timings didn't match the text"
             case .audioAlignmentMismatch: return "Narration timings didn't match the audio"
             }
+        }
+    }
+
+    /// What the Worker says when a subscriber has spent their period's narration.
+    ///
+    /// A distinct case rather than another `.http(code)`, because the two failures need opposite
+    /// responses from the user: 401/403 means buy a subscription, and showing that to someone who
+    /// already pays is worse than saying nothing. The status alone is not enough — the Worker
+    /// distinguishes several conditions by `code`, so branch on that and treat an unreadable body
+    /// as a plain HTTP failure rather than guessing.
+    private struct WorkerErrorBody: Decodable {
+        struct Payload: Decodable {
+            let code: String
+            let remaining_characters: Int?
+            let limit_characters: Int?
+        }
+        let error: Payload
+    }
+
+    /// Read a failed response's body before deciding what went wrong.
+    ///
+    /// The body arrives on the same byte stream as audio would, so this is a few lines rather
+    /// than a restructuring — but it has to be drained, and it is bounded because a body that
+    /// large is not one of ours. Any failure to read or decode falls back to the status code:
+    /// an error message is not worth failing differently over.
+    private static func failure(status: Int, body: URLSession.AsyncBytes) async -> WorkerError {
+        var data = Data()
+        do {
+            for try await byte in body {
+                data.append(byte)
+                if data.count > 8_192 { break }
+            }
+        } catch {
+            return .http(status)
+        }
+        guard let decoded = try? JSONDecoder().decode(WorkerErrorBody.self, from: data) else {
+            return .http(status)
+        }
+        switch decoded.error.code {
+        case "narration_allowance_exhausted":
+            return .allowanceExhausted(remaining: decoded.error.remaining_characters ?? 0,
+                                       limit: decoded.error.limit_characters ?? 0)
+        default:
+            return .http(status)
         }
     }
 
@@ -71,8 +117,8 @@ final class WorkerTTSService: TTSService {
 
         let (bytes, response) = try await session.bytes(for: req)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw [401, 403].contains(http.statusCode)
-                ? WorkerError.subscriptionRequired : WorkerError.http(http.statusCode)
+            if [401, 403].contains(http.statusCode) { throw WorkerError.subscriptionRequired }
+            throw await Self.failure(status: http.statusCode, body: bytes)
         }
 
         let (audio, alignment) = try await accumulate(bytes, expecting: text.count,

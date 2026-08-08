@@ -95,6 +95,8 @@
 "reader.failed.tokenizer" = "Text engine unavailable";
 "reader.failed.audio" = "Audio failed to load";
 "reader.failed.network" = "Can’t reach the narration server — check your connection";
+"reader.failed.subscription" = "Subscription required";
+"reader.failed.allowance" = "You’ve used this month’s narration. Chapters you’ve already generated still play.";
 "reader.nextChapter" = "Next Chapter";
 
 /* Reader — subscription gate (no active `reader Pro` entitlement) */
