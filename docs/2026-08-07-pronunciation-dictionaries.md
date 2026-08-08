@@ -25,10 +25,10 @@ production configuration — `eleven_flash_v2_5`, voice Shizuka (`WQz3clzUdMqvBf
 - **Supplying the reading is the only remedy.** Checked by elimination (§7): all five Japanese
   voices, with and without our settings, plus v3 and multilingual_v2, all read the test names
   wrong. Configuration cannot fix an irregular proper noun; only the book's own ruby knows it.
-- **Not yet shippable.** Reviewed 2026-08-07 (§9). The mechanism is sound; the *selection*
-  problem is unsolved — the safety check proposed in §8 was measured to have no
-  discriminating power, the small-kana gate in §7 is vacuous as written, and a bad global
-  rule has no rollback. §9 lists what must be settled first.
+- **Shipped 2026-08-08, in Yomi 1.3 — book-scoped rules only.** §9 declared this unshippable
+  and it was right about what it measured; what unblocked it was **dropping the global
+  lexicon entirely**, which is where every remaining blocker lived. Confirmed in real reading
+  the same day. See §11.
 
 The dictionary is a **remote resource on the ElevenLabs account**, not something the client
 carries: rules are uploaded once via `add-from-rules`, and a synthesis request references
@@ -370,6 +370,10 @@ canonicalises and hashes it, looks the hash up in KV, creates the dictionary onc
 stores `{id, version}` against the hash, and attaches that locator. Stateless on the client,
 idempotent under concurrent first chapters, and identical across devices because the same book
 yields the same hash. A 122-rule set is a few KB against a 4,000-character chapter.
+
+*(Shipped this way, with one deviation nobody intended: the canonicaliser drops rules that do
+not occur in the submitted text, and it runs before the hash — so the identity is per chapter,
+not per book. §11.)*
 
 It also puts client-supplied text on a route that spends against our own ElevenLabs account,
 which is the reason `voice_id` is allow-listed. The same discipline applies: cap the rule
@@ -808,6 +812,11 @@ long opaque string that a human will eventually get wrong, and the failure is to
 
 ## 9. Review, 2026-08-07 — what blocks shipping
 
+> **Settled 2026-08-08 — see §11.** Three of the four blockers below were blockers *for the
+> global lexicon*, and the global lexicon was not built. Read this section as the argument
+> that killed Phase 1, not as an outstanding list. Blocker 2 (prosody in aggregate) is the
+> one that survives, and it survives unmeasured.
+
 This document was reviewed after it was written, by a second model and an independent
 verifier reading the code. §0–§6 survived; the design sections did not, and the corrections
 are folded in above. What follows is what remains open, in the order it should be settled.
@@ -881,6 +890,11 @@ or an accidental archive takes narration to zero — surfaced to the user throug
 `WorkerTTSService.swift:67-70` as "TTS failed (404)", indistinguishable from a billing
 problem. There is no partial failure mode: it is either fine or total.
 
+*(The global locator was never built — §11. Book-scoped locators are narrower: a bad one
+kills one book, not all narration. The retry below shipped regardless, and §8c is why: the
+404 reproduced itself, from a hand-copied version id, ten minutes after the retry was
+written.)*
+
 **The mitigation is small and belongs in the Worker.** On a 404 whose body carries
 `pronunciation_dictionary_not_found`, retry once with the locator dropped. That converts the
 outage into exactly the degradation everyone assumed it already was — narration continues,
@@ -894,9 +908,111 @@ retry policy.
 rule, and an unpinned locator would silently follow the dictionary's latest version, which is
 the mutable-shared-state failure §3 exists to avoid.
 
+## 11. Shipped 2026-08-08, and how it behaves in use
+
+Yomi 1.3 (reader `7b877e6`) and aiwork `e872975`. **Book-scoped rules only. The global
+lexicon of §7's Phase 1 was never built, and abandoning it is what made the rest shippable** —
+three of §9's four blockers were properties of a hand-curated list applied to every book, and
+none of them survive the move to rules a book supplies about itself:
+
+| §9 blocker | why it does not apply |
+|---|---|
+| 1. bad locator = total outage | book-scoped: a bad locator kills one book, and the Worker drops it and retries (§10) |
+| 2. redundant aliases cost prosody | **still open, still unmeasured in aggregate** — the only survivor |
+| 3. collisions are quiet and unpredictable | the occurrence gate can be exact when the book is the corpus: a surface earns a rule only if every occurrence in the whole book carries that ruby |
+| 4. narration/furigana divergence | cannot arise — the rules and the displayed furigana come from the same ruby |
+
+Blocker 3 is the interesting one. It was unanswerable for a global list because "does this
+string collide somewhere in Japanese" has no bounded corpus. Book-scoped, the corpus *is* the
+book, so the question becomes finite and the answer is checkable: `PronunciationLexicon`
+rejects a surface that appears anywhere unannotated, that is annotated two ways, or that sits
+inside a longer annotated reading. A gate nobody could build globally is arithmetic locally.
+
+The chain: `PronunciationLexicon.build` (ReaderCore, book-scoped, seven rejection reasons) →
+`DocumentLexicon` (corroborates repaired readings against MeCab through `TokenizerWorker`) →
+`ReaderModel.pronunciationRules()` (memoized per book, on the paying path only) →
+`SynthesisRequest.pronunciation` → Worker `bookPronunciationLocator`: canonicalise, SHA-256,
+look the hash up in KV, create the dictionary once if absent, attach the pinned locator. The
+client is stateless, the same book yields the same dictionary on every device, and concurrent
+first chapters cannot mint two. Every failure returns no locator rather than throwing.
+
+Rules are **not** in `ContentKey`, so cache probes deliberately send the bare request — an
+already-generated chapter keeps its audio and its old pronunciation. That was chosen, not
+overlooked: keying on the lexicon would re-bill every user for every chapter the moment a gate
+changed.
+
+**Confirmed in real reading, 2026-08-08.** The app's author ran the shipped build on their own
+books: the names are right. That is the outcome the feature exists for.
+
+**And the production account corroborates it, which the listening alone could not.** A
+listening report says the narration sounded correct, not that the lexicon caused it — the
+model is sometimes right unaided. The remote state settles which:
+
+```
+dictionary  I0MFSwR3LXGwrpAXrlwY  "yomi-daa3f0ad69ef2112"
+            "Yomi book lexicon, derived from publisher ruby",  27 rules, word_boundaries: false
+            created 2026-08-07 20:42 local
+KV (remote) lexicon:daa3f0ad69ef2112…  ->  {id: I0MFSwR3LXGwrpAXrlwY, version_id: H7A7x3hwSvYUDtLfBJsk}
+```
+
+Three things follow. The name is the Worker's own `yomi-${hash.slice(0,16)}`, so no probe made
+it. The KV entry is in the **production** namespace, so the deployed Worker made it. And
+`bookPronunciationLocator` runs downstream of the subscription gate — the gate that answered
+every one of my production probes with 401 — so a real entitled request minted it. The
+lexicon fired.
+
+The 27 rules are all ユーフォニアム character names — 黄前→おうまえ, 高坂→こうさか,
+鎧塚→よろいづか — which is the chapter-filtered subset of that book's 122.
+
+### The filter runs before the hash, so identity is per chapter, not per book
+
+That subset is also a defect, and finding one entry in KV rather than several is what exposed
+it. `canonicalPronunciationRules(input, text)` drops every rule whose surface does not occur in
+the submitted text (`tts.ts`, `if (!text.includes(surface)) continue`), and
+`bookPronunciationLocator` hashes **what survives that filter**. The client sends the whole
+book's lexicon on every chapter, so each chapter contributes a different surviving subset, a
+different hash, and therefore **its own dictionary**.
+
+So a 30-chapter book creates up to 30 dictionaries, not one — and §3 measured that dictionaries
+**cannot be deleted**. This contradicts what §7 claims above and what CLAUDE.md's amended
+invariant claims, both of which say one book resolves to one dictionary on every device. The
+per-device half is still true: the same chapter text yields the same subset and the same hash
+anywhere. The per-book half is false as shipped.
+
+Nothing is mispronounced by this. Each chapter gets exactly the rules that can fire in it, and
+the outage modes in §10 are unaffected. The cost is an unbounded, unreclaimable resource
+growing per chapter read instead of per book imported, and a rule the client vetted against the
+whole book being re-uploaded once per chapter it appears in.
+
+The fix is small and belongs in the Worker: hash the client's canonical set **before**
+occurrence filtering and upload that same full set, keeping the per-rule validation (kana-only,
+lengths, count cap, ambiguous-surface rejection) and relaxing occurrence from *drop each rule*
+to *reject a set where none of the rules occurs at all*. That preserves the abuse guard — the
+route still refuses rule sets unrelated to the text it is asked to narrate — while making one
+book one dictionary, as documented. Not done: the shipped behaviour is correct-but-wasteful,
+and changing rule identity re-mints every dictionary, so it wants to be a deliberate change
+rather than a follow-on commit.
+
+Still unmeasured, in the order it would matter:
+
+1. **Prosody in aggregate.** §7 measured that a redundant alias adds a small pause on four
+   words. Nothing has measured 122 rules firing thousands of times across a chapter. It may
+   compound, or vanish into prose that has pauses anyway.
+2. **A third markup convention.** Two books, two conventions, wildly different yields — 1,026
+   rules from こころ, 8 from ユーフォニアム until monoruby reassembly took it to 122.
+3. **Dictionary accumulation.** One dictionary per distinct rule set, forever, no delete
+   (§3, §10) — and per the section above that is currently one *per chapter read*, not per
+   book. No account quota has ever been measured, so the ceiling is unknown as well as the
+   rate.
+4. **`unconfirmedRepair` on flattened books.** 20 refusals in ユーフォニアム, including 緑輝
+   ×99 — the most valuable name in the volume, refused because its book flattens small kana
+   and MeCab cannot vouch for サファイア. The gate is correct and the cost is real; whether to
+   trust the repair, or ask once per book, was never decided.
+
 ## Reproducing
 
-Probe scripts are not committed — they create remote resources. The shapes:
+Probe scripts are committed under `scripts/tts-probes/` — see its README for what each one
+settles and what it costs to run. They create remote resources and spend credits. The shapes:
 
 - alias firing: create dictionaries differing only in `word_boundaries`, synthesize the
   same text against each, compare durations; include a Latin control so a non-firing rule
@@ -907,4 +1023,8 @@ Probe scripts are not committed — they create remote resources. The shapes:
 - gateway passthrough: `GET {gatewayBase}/elevenlabs/v1/pronunciation-dictionaries` with
   only `cf-aig-authorization`.
 
-Twelve probe dictionaries were created during this investigation and archived afterwards.
+Thirty-three dictionaries existed on the account when this was written: 25 archived probes
+(archiving is the only cleanup — §3), seven live probes, and one created by the Worker itself
+in production. Archive nothing the Worker minted: an archived dictionary 404s at synthesis
+(§10), and its hash stays in KV, so the next request for that chapter resolves to a locator
+that no longer works and the narration falls back to the retry path on every request.

@@ -226,8 +226,11 @@ PDFKit / networking live in the `app/` target only.
   only the client has. ElevenLabs accepts only a dictionary *locator* on a synthesis request, so
   the rules must reach the Worker for it to create that dictionary; there is no design in which
   they don't. The Worker re-validates every rule (kana-only, ≥2 chars, must occur in the
-  submitted text, capped) because they are spent against our own account, and resolves them to a
-  pinned locator by canonical hash so one book is one dictionary on every device. The model,
+  submitted text, capped) because they are spent against our own account, and resolves the
+  surviving set to a pinned locator by canonical hash, so the same text resolves to the same
+  dictionary on every device. Note the occurrence filter runs BEFORE the hash, so identity is
+  currently per CHAPTER, not per book — deterministic and correct, but it mints one
+  undeletable dictionary per chapter read (§11 of the findings doc, incl. the fix). The model,
   `language_code` and the five `voice_settings` live in aiwork's `src/tts.ts` (model overridable
   via the `TTS_MODEL` var), so narration is re-modelled or retuned **without an App Store
   release**. `stream` stays client-sent

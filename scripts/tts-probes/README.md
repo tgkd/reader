@@ -64,8 +64,9 @@ request, that is a total narration outage, which is why the Worker drops the loc
 retries.
 
 **`gateway-management`** — whether Cloudflare's AI Gateway forwards ElevenLabs *management*
-endpoints, not just inference. `GET` does, on the gateway credential alone. `POST` is still
-unverified, which is why dictionary creation fails soft.
+endpoints, not just inference. `GET` and `POST` both do, on the gateway credential alone, so
+the Worker can create a book's dictionary itself. `PATCH` (archive) is still untested, which
+only matters if reclamation is ever automated — §10 argues it should not be.
 
 **`config-matrix`** — voice against `voice_settings` against `language_code`, one variable at a
 time. Written after a playground result disagreed with a production one and three things
