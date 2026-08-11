@@ -173,6 +173,55 @@ final class SourceReadingTests: XCTestCase {
         XCTAssertEqual(out, tokens)
     }
 
+    func testComposesAStemAnnotationWithTheTokensBareOkurigana() throws {
+        let text = "響け"
+        let tokens = try MeCabTokenizer().tokenize(text)
+        try XCTSkipUnless(tokens.count == 1 && tokens[0].surface == "響け",
+                          "this test describes the case where MeCab keeps 響け whole")
+        let book = SourceReadingOverlay.bookReadings(
+            [SourceReading(start: 0, length: 1, surface: "響", reading: "ひび")],
+            tokens: tokens, text: text)
+
+        XCTAssertEqual(book, ["ひびけ"],
+                       "ruby marks the kanji stem and leaves the okurigana bare, so the token's "
+                           + "book reading is the stem plus the kana it did not annotate")
+    }
+
+    func testComposesWhenTheAnnotationIsNotAtTheTokenStart() {
+        let book = SourceReadingOverlay.bookReadings(
+            [SourceReading(start: 1, length: 1, surface: "茶", reading: "ちゃ")],
+            tokens: [Token(surface: "お茶")], text: "お茶")
+
+        XCTAssertEqual(book, ["おちゃ"])
+    }
+
+    func testComposesAcrossKatakanaAndTheLongVowelMark() {
+        let book = SourceReadingOverlay.bookReadings(
+            [SourceReading(start: 0, length: 1, surface: "缶", reading: "かん")],
+            tokens: [Token(surface: "缶コーヒー")], text: "缶コーヒー")
+
+        XCTAssertEqual(book, ["かんコーヒー"])
+    }
+
+    func testRefusesToComposeOverAnythingThatIsNotKana() {
+        let book = SourceReadingOverlay.bookReadings(
+            [SourceReading(start: 0, length: 1, surface: "響", reading: "ひび")],
+            tokens: [Token(surface: "響A")], text: "響A")
+
+        XCTAssertEqual(book, [nil],
+                       "the book said nothing about how to read A, and guessing is how a wrong "
+                           + "reading reaches a paid narration")
+    }
+
+    func testATokenTheBookNeverAnnotatedHasNoBookReading() {
+        let book = SourceReadingOverlay.bookReadings(
+            [SourceReading(start: 0, length: 1, surface: "響", reading: "ひび")],
+            tokens: [Token(surface: "響け"), Token(surface: "ユーフォニアム")],
+            text: "響けユーフォニアム")
+
+        XCTAssertEqual(book, ["ひびけ", nil])
+    }
+
     func testDoesNotApplyAnAnnotationThatSpansTokens() throws {
         let text = "川島緑輝"
         let tokens = try MeCabTokenizer().tokenize(text)

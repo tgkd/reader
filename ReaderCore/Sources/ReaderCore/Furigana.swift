@@ -37,6 +37,19 @@ public enum Furigana {
         c.unicodeScalars.contains(where: isIdeograph)
     }
 
+    /// Hiragana, katakana, the long-vowel mark and the bare voicing marks.
+    ///
+    /// Narrower than `!isKanji`, which also admits Latin, digits and punctuation — the distinction
+    /// matters wherever an unannotated character has to be read literally.
+    static func isKana(_ c: Character) -> Bool {
+        c.unicodeScalars.allSatisfy {
+            (0x3041...0x3096).contains($0.value)
+                || (0x30A1...0x30FA).contains($0.value)
+                || $0.value == 0x30FC
+                || $0.value == 0x309B || $0.value == 0x309C
+        }
+    }
+
     public static func isIdeograph(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
         case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF,

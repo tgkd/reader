@@ -46,8 +46,32 @@ public enum SourceReadingOverlay {
     public static func apply(_ readings: [SourceReading],
                              to tokens: [Token],
                              text: String) -> [Token] {
+        var out = tokens
+        for (i, book) in bookReadings(readings, tokens: tokens, text: text).enumerated() {
+            guard let book else { continue }
+            out[i] = Token(surface: tokens[i].surface,
+                           reading: preferred(book: book, tokenizer: tokens[i].reading),
+                           dictionaryForm: tokens[i].dictionaryForm)
+        }
+        return out
+    }
+
+    /// The book's own reading for each token, or nil where the book has not described one.
+    ///
+    /// Two shapes count as described. Annotations that tile the token exactly (`秀` + `一` over the
+    /// token 秀一) concatenate. And an annotation covering only part of the token composes with the
+    /// literal kana of the remainder: `響`, ruby'd ひび, inside the token 響け yields ひびけ. That
+    /// second shape is the ordinary one in Japanese books — ruby marks the kanji stem and leaves
+    /// the okurigana bare — and dropping it cost narration every reading a book had spelled out.
+    ///
+    /// A remainder that is not kana refuses the whole token: the book has said nothing about how to
+    /// read those characters, and guessing is how a wrong reading reaches a paid narration.
+    public static func bookReadings(_ readings: [SourceReading],
+                                    tokens: [Token],
+                                    text: String) -> [String?] {
+        let empty = [String?](repeating: nil, count: tokens.count)
         let valid = readings.validated(against: text)
-        guard !valid.isEmpty else { return tokens }
+        guard !valid.isEmpty else { return empty }
 
         let raw = Array(text)
         var normalizedCache: [Int: Int] = [:]
@@ -61,26 +85,33 @@ public enum SourceReadingOverlay {
         var startingAt: [Int: (end: Int, reading: SourceReading)] = [:]
         for r in valid { startingAt[normalized(r.start)] = (normalized(r.end), r) }
 
-        var out = tokens
+        var out = empty
         var offset = 0
         for (i, token) in tokens.enumerated() {
+            let chars = Array(token.surface)
             let start = offset
-            let end = offset + token.surface.count
+            let end = offset + chars.count
             offset = end
 
             var position = start
-            var parts: [SourceReading] = []
-            while position < end, let hit = startingAt[position], hit.end <= end {
-                parts.append(hit.reading)
-                position = hit.end
+            var surface = "", reading = "", annotated = false
+            while position < end {
+                if let hit = startingAt[position], hit.end <= end {
+                    surface += hit.reading.surface
+                    reading += hit.reading.reading
+                    position = hit.end
+                    annotated = true
+                } else {
+                    let c = chars[position - start]
+                    guard Furigana.isKana(c) else { break }
+                    surface.append(c)
+                    reading.append(c)
+                    position += 1
+                }
             }
-            guard position == end, !parts.isEmpty,
-                  Normalize.nfkc(parts.map(\.surface).joined()) == token.surface else { continue }
-
-            out[i] = Token(surface: token.surface,
-                           reading: preferred(book: parts.map(\.reading).joined(),
-                                              tokenizer: token.reading),
-                           dictionaryForm: token.dictionaryForm)
+            guard position == end, annotated,
+                  Normalize.nfkc(surface) == token.surface else { continue }
+            out[i] = reading
         }
         return out
     }

@@ -251,4 +251,45 @@ final class PronunciationLexiconTests: XCTestCase {
         XCTAssertEqual(lex.rejected.first?.rejection, .unconfirmedRepair,
                        "one repaired part taints the whole assembled name")
     }
+
+    func testAdmitsAStemAnnotationReadAgainstItsToken() {
+        let lex = PronunciationLexicon.build(
+            text: "響け！",
+            readings: [reading(0, "響", "ひび")],
+            tokens: [Token(surface: "響け"), Token(surface: "！")])
+
+        XCTAssertEqual(lex.rules, [PronunciationRule(surface: "響け", reading: "ひびけ")],
+                       "alone, 響 is a single-character base and narration is told nothing at all "
+                           + "about a reading the book printed")
+    }
+
+    func testTheBareAnnotationStaysRefusedAlongsideTheComposedRule() {
+        let lex = PronunciationLexicon.build(
+            text: "響け！",
+            readings: [reading(0, "響", "ひび")],
+            tokens: [Token(surface: "響け"), Token(surface: "！")])
+
+        XCTAssertEqual(lex.rejected.first(where: { $0.surface == "響" })?.rejection,
+                       .singleCharacterBase,
+                       "the one-character alias would still match 響 inside other words")
+    }
+
+    func testAComposedRuleStillNeedsEveryOccurrenceAnnotated() {
+        let lex = PronunciationLexicon.build(
+            text: "響け。響け。",
+            readings: [reading(0, "響", "ひび")],
+            tokens: [Token(surface: "響け"), Token(surface: "。"),
+                     Token(surface: "響け"), Token(surface: "。")])
+
+        XCTAssertTrue(lex.rules.isEmpty)
+        XCTAssertEqual(lex.rejected.first(where: { $0.surface == "響け" })?.rejection,
+                       .unannotatedOccurrence(count: 1),
+                       "composing a token reading must not buy a pass on the occurrence gate")
+    }
+
+    func testWithoutTokensTheBareAnnotationIsAllThereIs() {
+        let lex = PronunciationLexicon.build(text: "響け！", readings: [reading(0, "響", "ひび")])
+
+        XCTAssertTrue(lex.rules.isEmpty, "the segmentation is what turns 響 into 響け")
+    }
 }

@@ -34,8 +34,9 @@ public struct Lexicon: Equatable, Sendable {
 
 public enum PronunciationLexicon {
     public static func build(chapters: [Chapter],
+                             tokens: [Int: [Token]] = [:],
                              corroborate: (String) -> String? = { _ in nil }) -> Lexicon {
-        build(texts: chapters.map { ($0.text, $0.sourceReadings) },
+        build(texts: chapters.enumerated().map { ($1.text, $1.sourceReadings, tokens[$0]) },
               isFlattened: chapters.contains { $0.isFlattenedSource },
               corroborate: corroborate)
     }
@@ -43,16 +44,21 @@ public enum PronunciationLexicon {
     public static func build(text: String,
                              readings: [SourceReading],
                              isFlattened: Bool = false,
+                             tokens: [Token]? = nil,
                              corroborate: (String) -> String? = { _ in nil }) -> Lexicon {
-        build(texts: [(text, readings)], isFlattened: isFlattened, corroborate: corroborate)
+        build(texts: [(text, readings, tokens)], isFlattened: isFlattened, corroborate: corroborate)
     }
 
-    private static func build(texts: [(text: String, readings: [SourceReading])],
+    private static func build(texts: [(text: String, readings: [SourceReading], tokens: [Token]?)],
                               isFlattened: Bool,
                               corroborate: (String) -> String? ) -> Lexicon {
         let parts = texts.map { part -> (normalized: String, spans: [Span], valid: [SourceReading]) in
             let valid = regrouped(part.readings.validated(against: part.text))
-            return (Normalize.nfkc(part.text), normalizedSpans(valid, in: part.text), valid)
+            var spans = normalizedSpans(valid, in: part.text)
+            if let tokens = part.tokens {
+                spans = merging(spans, tokenSpans(part.readings, tokens: tokens, text: part.text))
+            }
+            return (Normalize.nfkc(part.text), spans, valid)
         }
         let spans = parts.flatMap(\.spans)
         guard !spans.isEmpty else { return Lexicon(rules: [], rejected: []) }
@@ -164,6 +170,35 @@ public enum PronunciationLexicon {
         return out
     }
 
+    /// Whole-token candidates: the book's reading read against the token that contains it.
+    ///
+    /// `響 → ひび` is a single-character base and refused on sight, which left narration with no
+    /// guidance at all for a reading the book had printed. The same annotation seen against its
+    /// token is `響け → ひびけ` — two characters, kana, and something the gates below can judge on
+    /// its merits. Additive: the per-annotation spans stay, so nothing that used to be admitted
+    /// stops being admitted.
+    private static func tokenSpans(_ readings: [SourceReading],
+                                   tokens: [Token],
+                                   text: String) -> [Span] {
+        let book = SourceReadingOverlay.bookReadings(readings, tokens: tokens, text: text)
+        var spans: [Span] = []
+        var offset = 0
+        for (i, token) in tokens.enumerated() {
+            let start = offset
+            offset += token.surface.count
+            guard let reading = book[i] else { continue }
+            spans.append(Span(start: start, surface: token.surface,
+                              reading: Normalize.nfkc(reading)))
+        }
+        return spans
+    }
+
+    private static func merging(_ spans: [Span], _ others: [Span]) -> [Span] {
+        func key(_ s: Span) -> String { "\(s.start)\u{1}\(s.surface)\u{1}\(s.reading)" }
+        var seen = Set(spans.map(key))
+        return spans + others.filter { seen.insert(key($0)).inserted }
+    }
+
     private static func normalizedSpans(_ readings: [SourceReading], in text: String) -> [Span] {
         let raw = Array(text)
         var cache: [Int: Int] = [:]
@@ -191,11 +226,6 @@ public enum PronunciationLexicon {
     }
 
     private static func isKana(_ s: String) -> Bool {
-        !s.isEmpty && s.unicodeScalars.allSatisfy {
-            (0x3041...0x3096).contains($0.value)
-                || (0x30A1...0x30FA).contains($0.value)
-                || $0.value == 0x30FC
-                || $0.value == 0x309B || $0.value == 0x309C
-        }
+        !s.isEmpty && s.allSatisfy(Furigana.isKana)
     }
 }
