@@ -40,6 +40,7 @@ final class ReaderModel {
     private var playbackTask: Task<Void, Never>?
     private var endObservers: [NSObjectProtocol] = []
     private var endOfAudioObserver: Any?
+    private var lastAdvance: (time: Double, at: Double)?
     nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
     nonisolated(unsafe) private var routeChangeObserver: NSObjectProtocol?
     nonisolated(unsafe) private var mediaResetObserver: NSObjectProtocol?
@@ -219,7 +220,13 @@ final class ReaderModel {
             }
             do {
                 beginSynthesisProgress(charCount: request.text.count)
-                beginProgressivePlayback(key: key, request: request, gen: gen)
+                // Only stream when this reader is the one about to start the task. SynthesisStream
+                // keeps no replay buffer, so joining a run somebody else started delivers the
+                // middle of the chapter as if it were the beginning — play the finished audio
+                // instead, which costs the wait but is the chapter the listener asked for.
+                if !services.synthesis.isSynthesizing(key) {
+                    beginProgressivePlayback(key: key, request: request, gen: gen)
+                }
                 defer {
                     services.synthesisStream.unsubscribe(key)
                     if progressive != nil { abortProgressivePlayback() }
@@ -293,8 +300,9 @@ final class ReaderModel {
         source.append(synth.audio)
         source.finish()
         attachPlayer(to: source)
-        duration = max(timeline.duration,
-                       Double(synth.audio.count) / Self.mp3BytesPerSecond)
+        let audioSeconds = Double(synth.audio.count) / Self.mp3BytesPerSecond
+        duration = max(timeline.duration, audioSeconds)
+        watchForStalledEnd(audioSeconds)
         recordMeasuredRate()
 
         let resume = document.progress.time
@@ -306,15 +314,13 @@ final class ReaderModel {
         return .ready
     }
 
-    private func attachPlayer(to source: ChapterAudioSource) {
+    private func makeItem(for source: ChapterAudioSource) -> AVPlayerItem {
         let queue = DispatchQueue(label: "app.reader.chapter-audio")
-        let item = AVPlayerItem(asset: source.makeAsset(queue: queue))
-        let p = AVPlayer(playerItem: item)
-        p.automaticallyWaitsToMinimizeStalling = false
+        return AVPlayerItem(asset: source.makeAsset(queue: queue))
+    }
 
+    private func observeEnd(of item: AVPlayerItem) {
         endObservers.forEach(NotificationCenter.default.removeObserver)
-        if let endOfAudioObserver { player?.removeTimeObserver(endOfAudioObserver) }
-        endOfAudioObserver = nil
         endObservers = [
             NotificationCenter.default.addObserver(
                 forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main
@@ -327,8 +333,55 @@ final class ReaderModel {
                 MainActor.assumeIsolated { self?.handlePlaybackFinished(successfully: false) }
             },
         ]
+    }
+
+    private func attachPlayer(to source: ChapterAudioSource) {
+        let item = makeItem(for: source)
+        let p = AVPlayer(playerItem: item)
+        p.automaticallyWaitsToMinimizeStalling = false
+
+        if let endOfAudioObserver { player?.removeTimeObserver(endOfAudioObserver) }
+        endOfAudioObserver = nil
+        lastAdvance = nil
+        observeEnd(of: item)
         audioSource = source
         player = p
+    }
+
+    /// Replace the growing, over-advertised item with one whose byte length is exact.
+    ///
+    /// A progressive source has to declare its length before a single byte exists, and the guess
+    /// runs long by half — so `AVPlayerItem` believes in a tail that never arrives and never posts
+    /// `didPlayToEndTime`. Once synthesis seals, the real length is known, so the chapter finishes
+    /// on the same item shape a cached chapter uses and completion has one implementation instead
+    /// of two. The cost is a brief re-buffer, once, mid-chapter.
+    private func swapInExactAudio(_ audio: Data) {
+        guard let player, !audio.isEmpty else { return }
+        let resumeAt = playerTime
+
+        let exact = ChapterAudioSource(expectedBytes: audio.count)
+        exact.append(audio)
+        exact.finish()
+
+        let outgoing = audioSource
+        let item = makeItem(for: exact)
+        if let endOfAudioObserver { player.removeTimeObserver(endOfAudioObserver) }
+        endOfAudioObserver = nil
+        lastAdvance = nil
+        observeEnd(of: item)
+        player.replaceCurrentItem(with: item)
+        audioSource = exact
+        outgoing?.abort()
+
+        // Seek before resuming: the replacement item starts unbuffered, and this player does not
+        // wait to minimise stalling.
+        player.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.isPlaying else { return }
+                self.player?.play()
+            }
+        }
     }
 
     private final class Progressive {
@@ -362,6 +415,8 @@ final class ReaderModel {
     private static let timelineRefreshSeconds = 2.0
     private static let estimateEvidenceSeconds = 25.0
     private static let estimateRefreshSeconds = 20.0
+    private static let stallWindowSeconds = 2.5
+    private static let stallGraceSeconds = 1.5
 
     private var progressive: Progressive?
 
@@ -453,29 +508,54 @@ final class ReaderModel {
     }
 
     private func finishProgressivePlayback(with synth: SynthesizedAudio, gen: Int) {
-        guard gen == loadGeneration, let p = progressive else { return }
-        p.source.finish(reconcilingWith: synth.audio)
+        guard gen == loadGeneration, progressive != nil else { return }
+        swapInExactAudio(synth.audio)
         refreshTimings(synth.alignment)
-        duration = max(timeline.duration,
-                       Double(synth.audio.count) / Self.mp3BytesPerSecond)
+        let audioSeconds = Double(synth.audio.count) / Self.mp3BytesPerSecond
+        duration = max(timeline.duration, audioSeconds)
         generatedTime = duration
-        endPlaybackAtRealEnd(duration)
+        // The bytes, not the alignment, decide where the playhead can actually reach: the response
+        // guard tolerates an alignment describing up to a second more audio than it shipped.
+        watchForStalledEnd(audioSeconds)
         recordMeasuredRate()
         progressive = nil
         audioState = .ready
     }
 
-    private func endPlaybackAtRealEnd(_ seconds: Double) {
+    /// Backstop for a player that stops without saying so.
+    ///
+    /// `didPlayToEndTime` is the primary signal and, on an exact-length item, fires on its own.
+    /// This catches a playhead that simply stops on the last frames: without it the manually
+    /// latched `isPlaying` never clears and the transport goes on offering pause for a chapter that
+    /// has already ended. Deliberately NOT a "close enough to the end" trip — that races the real
+    /// ending and clips the last fraction of a second off every chapter.
+    private func watchForStalledEnd(_ seconds: Double) {
         guard let player, seconds > 0 else { return }
         if let endOfAudioObserver { player.removeTimeObserver(endOfAudioObserver) }
+        lastAdvance = nil
         endOfAudioObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
-            MainActor.assumeIsolated {
-                guard let self, self.isPlaying else { return }
-                guard time.seconds >= seconds - 0.1 else { return }
-                self.handlePlaybackFinished(successfully: true)
-            }
+            MainActor.assumeIsolated { self?.checkForStalledEnd(at: time.seconds, target: seconds) }
+        }
+    }
+
+    /// Only inside the closing seconds. A stall before that is buffering, where the established
+    /// behaviour is to keep showing pause rather than to guess that the chapter ended.
+    private func checkForStalledEnd(at time: Double, target: Double) {
+        guard isPlaying, time > target - Self.stallWindowSeconds else {
+            lastAdvance = nil
+            return
+        }
+        let now = CACurrentMediaTime()
+        guard let last = lastAdvance else {
+            lastAdvance = (time, now)
+            return
+        }
+        if time > last.time + 0.05 {
+            lastAdvance = (time, now)
+        } else if now - last.at >= Self.stallGraceSeconds {
+            handlePlaybackFinished(successfully: true)
         }
     }
 
@@ -505,6 +585,7 @@ final class ReaderModel {
         audioSource?.abort()
         audioSource = nil
         player = nil
+        lastAdvance = nil
     }
 
     private func seekPlayer(to t: Double) {
@@ -523,6 +604,7 @@ final class ReaderModel {
         guard let player else { return }
         activateSession()
         if currentTime >= duration, duration > 0 { seekPlayer(to: 0) }
+        lastAdvance = nil
         player.defaultRate = Float(speed)
         player.play()
         isPlaying = true
@@ -574,6 +656,7 @@ final class ReaderModel {
         let limit = isGenerating ? min(duration, generatedTime) : duration
         let clamped = min(max(0, t), limit)
         seekPlayer(to: clamped)
+        lastAdvance = nil
         currentTime = clamped
         activeIndex = highlightIndex(at: clamped)
         nowPlaying.setPlayback(elapsed: clamped, rate: isPlaying ? speed : 0)
@@ -653,19 +736,53 @@ final class ReaderModel {
         }
         currentTime = playerTime
         activeIndex = highlightIndex(at: currentTime)
+        #if DEBUG
+        logHighlight()
+        #endif
     }
+
+    #if DEBUG
+    /// `YOMI_HIGHLIGHT_DEBUG=1` prints what the pill is actually tracking.
+    ///
+    /// Running the tokenizer and replaying the CoreText geometry both ruled themselves out as
+    /// explanations for a pill that looked like it covered only part of a word — the token is whole
+    /// and the rect spans it. What was never captured is which token was active at the time, so
+    /// that is what this prints: if the answer is a lone punctuation token, the walk in
+    /// `highlightIndex` was the cause.
+    private static let highlightDebug =
+        ProcessInfo.processInfo.environment["YOMI_HIGHLIGHT_DEBUG"] != nil
+    @ObservationIgnored private var loggedIndex = Int.min
+
+    private func logHighlight() {
+        let current = activeIndex ?? -1
+        guard Self.highlightDebug, current != loggedIndex else { return }
+        loggedIndex = current
+        let at = String(format: "%.2f", currentTime)
+        guard let i = activeIndex, let span = timeline[i] else {
+            print("HL t=\(at) index=nil"); return
+        }
+        let raw = timeline.index(at: currentTime)
+        print("HL t=\(at) index=\(i) beforeWalk=\(raw.map(String.init) ?? "nil") "
+              + "surface=\(span.surface.debugDescription) reading=\(span.reading ?? "-") "
+              + "span=\(String(format: "%.2f–%.2f", span.start, span.end)) "
+              + "matched=\(span.matchedChars)")
+    }
+    #endif
 
     private func highlightIndex(at t: Double) -> Int? {
         guard let i = timeline.index(at: t) else { return nil }
         var k = i
-        while k >= 0, let span = timeline[k],
-              span.surface.allSatisfy(\.isWhitespace) { k -= 1 }
+        // Punctuation is a token of its own, and a pill sitting on a lone 「!」 reads as the word
+        // before it having been skipped. Walk back to the last span with something to say, so
+        // punctuation is highlighted as part of the word it follows.
+        while k >= 0, let span = timeline[k], !hasWordChar(span.surface) { k -= 1 }
         return k >= 0 ? k : nil
     }
 
     private func handlePlaybackFinished(successfully: Bool) {
         isPlaying = false
         link.stop()
+        lastAdvance = nil
         guard successfully else {
             teardownPlayer()
             services.audioStore.remove(
