@@ -10,7 +10,8 @@ final class LibraryModel {
         let cached: Bool
         var id: Document.ID { document.id }
 
-        var percent: Int { Int((document.progress.fraction * 100).rounded()) }
+        var fraction: Double { document.readFraction }
+        var percent: Int { Int((fraction * 100).rounded()) }
         var statusLabel: String {
             if percent <= 0 { return L10n.statusUnread }
             if percent >= 100 { return L10n.statusDone }

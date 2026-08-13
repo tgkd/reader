@@ -67,7 +67,11 @@ enum Importer {
         onParsingProgress?(0, 0)
         let bounded = chapters.flatMap { $0.splitToRenderable() }
         guard !bounded.isEmpty else { throw ImportError.empty }
-        let title = url.deletingPathExtension().lastPathComponent
-        return Document(title: title, author: nil, chapters: bounded)
+        let metadata = (try? await importer.metadata()) ?? DocumentMetadata()
+        let fileName = url.deletingPathExtension().lastPathComponent
+        let published = metadata.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Document(title: published.flatMap { $0.isEmpty ? nil : $0 } ?? fileName,
+                        author: metadata.author, chapters: bounded,
+                        writingMode: metadata.writingMode)
     }
 }

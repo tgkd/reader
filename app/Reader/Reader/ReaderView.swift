@@ -68,15 +68,18 @@ struct ReaderView: View {
                     spans: model.spans,
                     structureVersion: model.structureVersion,
                     activeIndex: model.activeIndex,
-                    vertical: app.readingOrientation.isVertical,
+                    vertical: app.readingOrientation(for: model.document).isVertical,
+                    chapterID: model.currentChapter?.id,
                     theme: theme,
                     fontName: app.readingFont.psName,
                     fontScale: app.readingSize.scale,
                     showFurigana: app.showFurigana,
                     topInset: 64 + safeArea.top,
                     bottomInset: 88 + safeArea.bottom,
+                    initialToken: model.initialToken,
                     onTapToken: { model.tapToken($0) },
                     onTapBackground: { model.toggleChrome() },
+                    onVisibleToken: { model.noteVisibleToken($0) },
                     onNextChapter: model.canGoToNextChapter
                         ? { Task { await model.openChapter(model.chapterIndex + 1) } }
                         : nil
@@ -119,9 +122,10 @@ struct ReaderView: View {
             Spacer(minLength: 6)
 
             HStack(spacing: 0) {
-                chromeIcon(app.readingOrientation.isVertical ? "arrow.up.and.down" : "arrow.left.and.right",
+                chromeIcon(app.readingOrientation(for: model.document).isVertical
+                            ? "arrow.up.and.down" : "arrow.left.and.right",
                            label: L10n.a11yOrientation) {
-                    app.readingOrientation = app.readingOrientation == .tate ? .yoko : .tate
+                    app.toggleReadingOrientation(for: model.document)
                 }
                 chromeIcon(app.themeName.symbol, label: L10n.a11yTheme) {
                     app.cycleTheme()

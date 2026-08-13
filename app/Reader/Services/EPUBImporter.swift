@@ -54,6 +54,14 @@ struct EPUBImporter: DocumentImporter {
         return chapters
     }
 
+    func metadata() async throws -> DocumentMetadata {
+        guard let archive = Archive(url: url, accessMode: .read),
+              let opfPath = try? locateOPF(in: archive),
+              let bytes = try? data(at: opfPath, in: archive),
+              let opf = try? OPF.parse(bytes) else { return DocumentMetadata() }
+        return DocumentMetadata(title: opf.title, author: opf.author, writingMode: opf.writingMode)
+    }
+
     func ocrCandidateCount() -> Int {
         guard let archive = Archive(url: url, accessMode: .read),
               let slots = try? classify(archive) else { return 0 }
@@ -279,20 +287,26 @@ struct EPUBImporter: DocumentImporter {
 }
 
 private final class ContainerParser: NSObject, XMLParserDelegate {
-    private var path: String?
+    private static let packageType = "application/oebps-package+xml"
+
+    private var packagePath: String?
+    private var anyPath: String?
 
     static func rootfilePath(_ data: Data) -> String? {
         let p = ContainerParser()
         let parser = XMLParser(data: data)
         parser.delegate = p
         parser.parse()
-        return p.path
+        return p.packagePath ?? p.anyPath
     }
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
                 qualifiedName qName: String?, attributes: [String: String]) {
-        guard path == nil, elementName.localName == "rootfile" else { return }
-        path = attributes["full-path"]
+        guard elementName.localName == "rootfile",
+              let path = attributes["full-path"], !path.isEmpty else { return }
+        if anyPath == nil { anyPath = path }
+        let type = attributes["media-type"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if packagePath == nil, type == Self.packageType { packagePath = path }
     }
 }
 
@@ -301,6 +315,9 @@ private struct OPF {
     let spine: [String]
     let navHref: String?
     let ncxHref: String?
+    let title: String?
+    let author: String?
+    let writingMode: WritingMode?
 
     static func parse(_ data: Data) throws -> OPF {
         let p = OPFParser()
@@ -309,7 +326,8 @@ private struct OPF {
         guard parser.parse() else { throw ImportError.unreadable }
         guard !p.spine.isEmpty else { throw ImportError.empty }
         return OPF(manifest: p.manifest, spine: p.spine,
-                   navHref: p.navHref, ncxHref: p.ncxID.flatMap { p.manifest[$0] })
+                   navHref: p.navHref, ncxHref: p.ncxID.flatMap { p.manifest[$0] },
+                   title: p.title, author: p.author, writingMode: p.writingMode)
     }
 }
 
@@ -318,6 +336,13 @@ private final class OPFParser: NSObject, XMLParserDelegate {
     var spine: [String] = []
     var navHref: String?
     var ncxID: String?
+    var title: String?
+    var author: String?
+    var writingMode: WritingMode?
+
+    private var inMetadata = false
+    private var capturing: String?
+    private var buffer = ""
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
                 qualifiedName qName: String?, attributes: [String: String]) {
@@ -336,9 +361,44 @@ private final class OPFParser: NSObject, XMLParserDelegate {
             }
         case "spine":
             ncxID = attributes["toc"]
+        case "metadata":
+            inMetadata = true
+        case "meta":
+            guard writingMode == nil,
+                  attributes["name"]?.lowercased() == "primary-writing-mode",
+                  let content = attributes["content"]?.lowercased() else { break }
+            if content.hasPrefix("vertical") { writingMode = .vertical }
+            else if content.hasPrefix("horizontal") { writingMode = .horizontal }
+        case "title" where inMetadata && title == nil,
+             "creator" where inMetadata && author == nil:
+            capturing = elementName.localName
+            buffer = ""
         default:
             break
         }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if capturing != nil { buffer += string }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?,
+                qualifiedName qName: String?) {
+        let name = elementName.localName
+        if name == "metadata" {
+            inMetadata = false
+            capturing = nil
+            return
+        }
+        guard let field = capturing, name == field else { return }
+        let value = buffer
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !value.isEmpty {
+            if field == "title" { title = value } else { author = value }
+        }
+        capturing = nil
+        buffer = ""
     }
 }
 

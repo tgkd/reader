@@ -52,6 +52,27 @@ final class AppModel {
     var readingOrientation: Orientation = .tate {
         didSet { UserDefaults.standard.set(readingOrientation.rawValue, forKey: Self.orientationKey) }
     }
+    private(set) var orientationOverrides: [String: Orientation] = [:] {
+        didSet {
+            let raw = orientationOverrides.mapValues(\.rawValue)
+            UserDefaults.standard.set(raw, forKey: Self.orientationOverrideKey)
+        }
+    }
+
+    func readingOrientation(for document: Document) -> Orientation {
+        if let pinned = orientationOverrides[document.id.uuidString] { return pinned }
+        switch document.writingMode {
+        case .vertical:   return .tate
+        case .horizontal: return .yoko
+        case nil:         return readingOrientation
+        }
+    }
+
+    func toggleReadingOrientation(for document: Document) {
+        let next: Orientation = readingOrientation(for: document) == .tate ? .yoko : .tate
+        orientationOverrides[document.id.uuidString] = next
+        readingOrientation = next
+    }
     var showFurigana: Bool = true {
         didSet { UserDefaults.standard.set(showFurigana, forKey: Self.furiganaKey) }
     }
@@ -65,6 +86,7 @@ final class AppModel {
     private static let fontKey = "reader.readingFont"
     private static let sizeKey = "reader.readingSize"
     private static let orientationKey = "reader.readingOrientation"
+    private static let orientationOverrideKey = "reader.orientationOverrides"
     private static let furiganaKey = "reader.showFurigana"
     private static let voiceKey = "reader.narrationVoice"
     var entitlementTick = 0
@@ -104,6 +126,9 @@ final class AppModel {
         if let raw = defaults.string(forKey: Self.fontKey), let f = ReadingFont(rawValue: raw) { readingFont = f }
         if let raw = defaults.string(forKey: Self.sizeKey), let s = ReadingSize(rawValue: raw) { readingSize = s }
         if let raw = defaults.string(forKey: Self.orientationKey), let o = Orientation(rawValue: raw) { readingOrientation = o }
+        if let raw = defaults.dictionary(forKey: Self.orientationOverrideKey) as? [String: String] {
+            orientationOverrides = raw.compactMapValues(Orientation.init(rawValue:))
+        }
         if defaults.object(forKey: Self.furiganaKey) != nil { showFurigana = defaults.bool(forKey: Self.furiganaKey) }
         if let raw = defaults.string(forKey: Self.voiceKey),
            let v = Voice.catalog.first(where: { $0.id == raw }) { narrationVoice = v }
@@ -392,7 +417,9 @@ final class AppModel {
     @discardableResult
     private func saveImported(_ document: Document, title: String) -> Bool {
         var document = document
-        document.title = title
+        if document.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            document.title = title
+        }
         services.library.save(document)
         if !services.library.flush() {
             importErrorNeedsMembership = false

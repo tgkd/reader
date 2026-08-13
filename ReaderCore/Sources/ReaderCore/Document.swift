@@ -1,19 +1,26 @@
 import Foundation
 
+public enum WritingMode: String, Codable, Equatable, Sendable {
+    case vertical, horizontal
+}
+
 public struct Document: Identifiable, Codable, Equatable {
     public let id: UUID
     public var title: String
     public var author: String?
     public var chapters: [Chapter]
     public var progress: ReadingProgress
+    public var writingMode: WritingMode?
 
     public init(id: UUID = UUID(), title: String, author: String? = nil,
-                chapters: [Chapter], progress: ReadingProgress = ReadingProgress()) {
+                chapters: [Chapter], progress: ReadingProgress = ReadingProgress(),
+                writingMode: WritingMode? = nil) {
         self.id = id
         self.title = title
         self.author = author
         self.chapters = chapters
         self.progress = progress
+        self.writingMode = writingMode
     }
 }
 
@@ -83,11 +90,51 @@ public extension Chapter {
 public struct ReadingProgress: Codable, Equatable {
     public var chapterIndex: Int
     public var time: Double
-    public var fraction: Double
+    public var duration: Double
+    public var charOffset: Int
 
-    public init(chapterIndex: Int = 0, time: Double = 0, fraction: Double = 0) {
+    public init(chapterIndex: Int = 0, time: Double = 0, duration: Double = 0,
+                charOffset: Int = 0) {
         self.chapterIndex = chapterIndex
         self.time = time
-        self.fraction = fraction
+        self.duration = duration
+        self.charOffset = charOffset
+    }
+
+    private enum CodingKeys: String, CodingKey { case chapterIndex, time, duration, charOffset }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        chapterIndex = (try? c.decodeIfPresent(Int.self, forKey: .chapterIndex)) ?? 0
+        time = (try? c.decodeIfPresent(Double.self, forKey: .time)) ?? 0
+        duration = (try? c.decodeIfPresent(Double.self, forKey: .duration)) ?? 0
+        charOffset = (try? c.decodeIfPresent(Int.self, forKey: .charOffset)) ?? 0
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(chapterIndex, forKey: .chapterIndex)
+        try c.encode(time, forKey: .time)
+        if duration > 0 { try c.encode(duration, forKey: .duration) }
+        if charOffset > 0 { try c.encode(charOffset, forKey: .charOffset) }
+    }
+}
+
+public extension Document {
+    var readFraction: Double {
+        let lengths = chapters.map { Double($0.text.count) }
+        let total = lengths.reduce(0, +)
+        guard total > 0, !lengths.isEmpty else { return 0 }
+        let index = min(max(0, progress.chapterIndex), lengths.count - 1)
+        let consumed = lengths[..<index].reduce(0, +)
+        let within: Double
+        if progress.duration > 0 {
+            within = min(1, max(0, progress.time / progress.duration))
+        } else if lengths[index] > 0 {
+            within = min(1, max(0, Double(progress.charOffset) / lengths[index]))
+        } else {
+            within = 0
+        }
+        return min(1, (consumed + within * lengths[index]) / total)
     }
 }

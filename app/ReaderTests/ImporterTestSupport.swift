@@ -129,7 +129,10 @@ enum Fixture {
     static func epub(manifest: [EPUBItem], spine: [SpineRef],
                      opfDir: String = "OEBPS", containerXML: String? = nil,
                      spineTOC: String? = nil,
-                     extraFiles: [String: Data] = [:]) throws -> URL {
+                     extraFiles: [String: Data] = [:],
+                     metaInfFiles: [String: Data] = [:],
+                     metadataXML: String? = nil,
+                     spineDirection: String? = nil) throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ReaderTests-epub-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -149,6 +152,10 @@ enum Fixture {
         try container.write(to: metaInf.appendingPathComponent("container.xml"),
                             atomically: true, encoding: .utf8)
 
+        for (name, bytes) in metaInfFiles {
+            try bytes.write(to: metaInf.appendingPathComponent(name))
+        }
+
         let manifestXML = manifest.map {
             let props = $0.properties.map { " properties=\"\($0)\"" } ?? ""
             return "<item id=\"\($0.id)\" href=\"\($0.href)\" media-type=\"\($0.mediaType)\"\(props)/>"
@@ -156,11 +163,18 @@ enum Fixture {
         let spineXML = spine.map {
             "<itemref idref=\"\($0.idref)\"\($0.linear ? "" : " linear=\"no\"")/>"
         }.joined(separator: "\n")
+        let metadataBlock = metadataXML.map {
+            """
+            <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\($0)</metadata>
+            """
+        } ?? ""
         let opf = """
         <?xml version="1.0"?>
         <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+          \(metadataBlock)
           <manifest>\(manifestXML)</manifest>
-          <spine\(spineTOC.map { " toc=\"\($0)\"" } ?? "")>\(spineXML)</spine>
+          <spine\(spineTOC.map { " toc=\"\($0)\"" } ?? "")\
+        \(spineDirection.map { " page-progression-direction=\"\($0)\"" } ?? "")>\(spineXML)</spine>
         </package>
         """
         let opfURL = root.appendingPathComponent(opfPath)

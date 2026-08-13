@@ -7,14 +7,17 @@ struct RubyTextView: UIViewRepresentable {
     let structureVersion: Int
     let activeIndex: Int?
     let vertical: Bool
+    let chapterID: UUID?
     let theme: Theme
     let fontName: String
     let fontScale: CGFloat
     let showFurigana: Bool
     var topInset: CGFloat = 0
     var bottomInset: CGFloat = 0
+    var initialToken: Int? = nil
     var onTapToken: (Int) -> Void
     var onTapBackground: () -> Void
+    var onVisibleToken: ((Int) -> Void)? = nil
     var onNextChapter: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> RubyScrollView {
@@ -27,17 +30,21 @@ struct RubyTextView: UIViewRepresentable {
     func updateUIView(_ sv: RubyScrollView, context: Context) {
         sv.content.onTapToken = onTapToken
         sv.content.onTapBackground = onTapBackground
+        sv.onVisibleToken = onVisibleToken
         sv.onNextChapter = onNextChapter
         sv.configure(spans: spans, structureVersion: structureVersion,
-                     activeIndex: activeIndex, vertical: vertical,
+                     activeIndex: activeIndex, vertical: vertical, chapterID: chapterID,
+                     initialToken: initialToken,
                      fontName: fontName, fontScale: fontScale, showFurigana: showFurigana,
                      topInset: topInset, bottomInset: bottomInset,
                      ink: theme.ink.ui, hi: theme.hi.ui)
     }
 }
 
-final class RubyScrollView: UIScrollView {
+final class RubyScrollView: UIScrollView, UIScrollViewDelegate {
     let content = RubyContentView()
+
+    var onVisibleToken: ((Int) -> Void)?
 
     var onNextChapter: (() -> Void)? {
         didSet {
@@ -53,6 +60,8 @@ final class RubyScrollView: UIScrollView {
     private var needsResize = true
     private var didPlaceInitialOffset = false
     private var lastCrossAxis: CGFloat = -1
+    private var chapterID: UUID?
+    private var pendingAnchor: Int?
 
     private let readingInset: CGFloat = 30
     private let columnEndInset: CGFloat = 24
@@ -87,19 +96,52 @@ final class RubyScrollView: UIScrollView {
         alwaysBounceHorizontal = false
         addSubview(content)
         addSubview(nextButton)
+        content.viewportCenter = { [weak self] in self?.viewportCenterInContent() }
+        delegate = self
+    }
+
+    private func reportVisibleToken() {
+        guard let onVisibleToken,
+              let point = viewportCenterInContent(),
+              let token = content.tokenIndex(at: point) else { return }
+        onVisibleToken(token)
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { reportVisibleToken() }
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { reportVisibleToken() }
+
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { reportVisibleToken() }
+
+    private func viewportCenterInContent() -> CGPoint? {
+        guard bounds.width > 1, bounds.height > 1,
+              content.bounds.width > 1, content.bounds.height > 1 else { return nil }
+        return CGPoint(x: contentOffset.x + bounds.width / 2 - content.frame.origin.x,
+                       y: contentOffset.y + bounds.height / 2 - content.frame.origin.y)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(spans: [TokenSpan], structureVersion: Int, activeIndex: Int?, vertical: Bool,
+                   chapterID: UUID?, initialToken: Int?,
                    fontName: String, fontScale: CGFloat, showFurigana: Bool,
                    topInset: CGFloat, bottomInset: CGFloat,
                    ink: UIColor, hi: UIColor) {
+        let sameChapter = (self.chapterID == chapterID)
+        if !sameChapter { pendingAnchor = initialToken }
+        self.chapterID = chapterID
+        content.keepsPlaceAcrossReflow = sameChapter
+
         let orientationChanged = (self.vertical != vertical)
         self.vertical = vertical
         alwaysBounceVertical = !vertical
         alwaysBounceHorizontal = vertical
         let insetsChanged = (chromeTop != topInset || chromeBottom != bottomInset)
+        let anchorBeforeInsetChange = (insetsChanged && sameChapter)
+            ? viewportCenterInContent().flatMap { content.tokenIndex(at: $0) }
+            : nil
         chromeTop = topInset
         chromeBottom = bottomInset
         let structureChanged = content.configure(
@@ -112,6 +154,7 @@ final class RubyScrollView: UIScrollView {
         }
 
         if structureChanged || orientationChanged || insetsChanged {
+            pendingAnchor = content.takeReflowAnchor() ?? anchorBeforeInsetChange ?? pendingAnchor
             stopFollowing()
             needsResize = true
             didPlaceInitialOffset = false
@@ -167,7 +210,8 @@ final class RubyScrollView: UIScrollView {
             contentOffset = vertical
                 ? CGPoint(x: max(0, contentSize.width - bounds.width), y: 0)
                 : CGPoint(x: 0, y: -adjustedContentInset.top)
-            jumpToActive()
+            if !jumpToActive() { jumpToAnchor() }
+            pendingAnchor = nil
         }
     }
 
@@ -175,7 +219,10 @@ final class RubyScrollView: UIScrollView {
     private var settledFrames = 0
 
     private func targetOffset() -> CGFloat? {
-        guard let center = content.activeLineCenter() else { return nil }
+        content.activeLineCenter().map(offset(centering:))
+    }
+
+    private func offset(centering center: CGFloat) -> CGFloat {
         if vertical {
             let t = center + content.frame.origin.x - bounds.width / 2
             let lo = -adjustedContentInset.left
@@ -223,8 +270,16 @@ final class RubyScrollView: UIScrollView {
         contentOffset = vertical ? CGPoint(x: next, y: 0) : CGPoint(x: 0, y: next)
     }
 
-    private func jumpToActive() {
-        guard let target = targetOffset() else { return }
+    @discardableResult
+    private func jumpToActive() -> Bool {
+        guard let target = targetOffset() else { return false }
+        contentOffset = vertical ? CGPoint(x: target, y: 0) : CGPoint(x: 0, y: target)
+        return true
+    }
+
+    private func jumpToAnchor() {
+        guard let token = pendingAnchor, let center = content.lineCenter(forToken: token) else { return }
+        let target = offset(centering: center)
         contentOffset = vertical ? CGPoint(x: target, y: 0) : CGPoint(x: 0, y: target)
     }
 
@@ -269,6 +324,10 @@ final class RubyContentView: UIView {
     private var structureKey = 0
     private var showFurigana = true
 
+    var viewportCenter: (() -> CGPoint?)?
+    var keepsPlaceAcrossReflow = false
+    private var reflowAnchor: Int?
+
     private let highlightLayer = CAShapeLayer()
 
     override init(frame: CGRect) {
@@ -304,6 +363,9 @@ final class RubyContentView: UIView {
                                      showFurigana: showFurigana, fontName: fontName, fontScale: fontScale)
         var structureChanged = false
         if key != structureKey {
+            if keepsPlaceAcrossReflow, let point = viewportCenter?() {
+                reflowAnchor = tokenIndex(at: point)
+            }
             structureKey = key
             self.spans = spans
             self.vertical = vertical
@@ -502,9 +564,12 @@ final class RubyContentView: UIView {
     }
 
     func activeLineCenter() -> CGFloat? {
-        guard let active = activeIndex, active >= 0, active < tokenRanges.count,
-              currentFrame() != nil else { return nil }
-        guard let i = linesForToken(tokenRanges[active]).first, i < lines.count else { return nil }
+        activeIndex.flatMap(lineCenter(forToken:))
+    }
+
+    func lineCenter(forToken token: Int) -> CGFloat? {
+        guard token >= 0, token < tokenRanges.count, currentFrame() != nil else { return nil }
+        guard let i = linesForToken(tokenRanges[token]).first, i < lines.count else { return nil }
         var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
         CTLineGetTypographicBounds(lines[i], &ascent, &descent, &leading)
         let origin = lineOrigins[i]
@@ -512,6 +577,21 @@ final class RubyContentView: UIView {
             return origin.x + (ascent - descent) / 2
         }
         return bounds.height - origin.y - (ascent - descent) / 2
+    }
+
+    func tokenIndex(at point: CGPoint) -> Int? {
+        guard currentFrame() != nil else { return nil }
+        let flipped = CGPoint(x: point.x, y: bounds.height - point.y)
+        guard let li = lineIndex(at: flipped), li < lineRanges.count else { return nil }
+        let lr = lineRanges[li]
+        return tokenRanges.firstIndex {
+            $0.location + $0.length > lr.location && $0.location < lr.location + lr.length
+        }
+    }
+
+    func takeReflowAnchor() -> Int? {
+        defer { reflowAnchor = nil }
+        return reflowAnchor
     }
 
     @objc private func handleTap(_ g: UITapGestureRecognizer) {

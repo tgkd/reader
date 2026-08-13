@@ -27,6 +27,8 @@ final class ReaderModel {
     var chromeVisible = true
 
     private(set) var chapterIndex = 0
+    private(set) var initialToken: Int?
+    private var visibleToken: Int?
     var chaptersVisible = false
 
     private(set) var entry: DictionaryEntry?
@@ -121,6 +123,8 @@ final class ReaderModel {
         }
         chapterTokens = (Normalize.nfkc(text), tokens)
         setTimeline(SpanTimeline(untimedTokens: tokens))
+        initialToken = savedToken()
+        visibleToken = initialToken
         loadState = .ready
 
         let request = SynthesisRequest(text: text, voice: services.narrationVoice)
@@ -700,33 +704,47 @@ final class ReaderModel {
     }
 
     func saveProgressOnLeave() {
-        persistProgress()
-        persistChapterPosition()
+        if !persistProgress() { persistChapterPosition() }
+    }
+
+    func noteVisibleToken(_ index: Int) { visibleToken = index }
+
+    private func savedToken() -> Int? {
+        guard chapterIndex == document.progress.chapterIndex,
+              document.progress.charOffset > 0 else { return nil }
+        return TokenOffsets.token(atCharOffset: document.progress.charOffset, in: timeline.spans)
     }
 
     private func persistChapterPosition() {
-        guard audioState != .ready,
-              document.chapters.indices.contains(chapterIndex),
-              chapterIndex != document.progress.chapterIndex else { return }
+        guard document.chapters.indices.contains(chapterIndex) else { return }
+        let sameChapter = chapterIndex == document.progress.chapterIndex
+        let offset = visibleToken.map { TokenOffsets.charOffset(ofToken: $0, in: timeline.spans) } ?? 0
+        guard !sameChapter || offset != document.progress.charOffset else { return }
+        var progress = sameChapter ? document.progress : ReadingProgress(chapterIndex: chapterIndex)
+        progress.charOffset = offset
         var doc = document
-        doc.progress = ReadingProgress(chapterIndex: chapterIndex, time: 0,
-                                       fraction: Double(chapterIndex) / Double(max(1, chapterCount)))
+        doc.progress = progress
         services.library.save(doc)
     }
 
-    func persistProgress(completed: Bool = false) {
-        guard audioState == .ready, duration > 0 else { return }
+    @discardableResult
+    func persistProgress(completed: Bool = false) -> Bool {
+        guard audioState == .ready, duration > 0 else { return false }
         let stop: PlaybackStop = completed
             ? .completed
             : .interrupted(time: playerTime)
         guard let progress = ReadingProgressResolver.resolve(stop, duration: duration,
-                                                             chapterIndex: chapterIndex,
-                                                             chapterCount: chapterCount)
-        else { return }
+                                                             chapterIndex: chapterIndex)
+        else { return false }
         currentTime = progress.time
+        var stored = progress
+        stored.charOffset = visibleToken.map {
+            TokenOffsets.charOffset(ofToken: $0, in: timeline.spans)
+        } ?? 0
         var doc = document
-        doc.progress = progress
+        doc.progress = stored
         services.library.save(doc)
+        return true
     }
 
     private func tick() {

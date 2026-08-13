@@ -392,6 +392,163 @@ final class EPUBImporterTests: XCTestCase {
         XCTAssertEqual(result.map(\.text), ["NESTED"])
     }
 
+    func testPackageRootfileWinsOverAnEarlierNonPackageRootfile() async throws {
+        let container = """
+        <?xml version="1.0"?>
+        <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+          <rootfiles>
+            <rootfile full-path="OEBPS/missing.pdf" media-type="application/pdf"/>
+            <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+          </rootfiles>
+        </container>
+        """
+        let manifest = [Fixture.EPUBItem(id: "c0", href: "c0.xhtml",
+                                         content: Fixture.xhtml(body: "<p>PACKAGE</p>"))]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")],
+                                   containerXML: container)
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.text), ["PACKAGE"])
+    }
+
+    func testFirstRootfileWinsAmongSeveralPackages() async throws {
+        let container = """
+        <?xml version="1.0"?>
+        <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+          <rootfiles>
+            <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+            <rootfile full-path="OEBPS/alternate.opf" media-type="application/oebps-package+xml"/>
+          </rootfiles>
+        </container>
+        """
+        let manifest = [Fixture.EPUBItem(id: "c0", href: "c0.xhtml",
+                                         content: Fixture.xhtml(body: "<p>DEFAULT</p>"))]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")],
+                                   containerXML: container)
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.text), ["DEFAULT"])
+    }
+
+    func testRepeatedSpineEntryIsReadOncePerOccurrence() async throws {
+        let manifest = [
+            Fixture.EPUBItem(id: "a", href: "a.xhtml", content: Fixture.xhtml(body: "<p>ALPHA</p>")),
+            Fixture.EPUBItem(id: "b", href: "b.xhtml", content: Fixture.xhtml(body: "<p>BRAVO</p>")),
+        ]
+        let url = try Fixture.epub(manifest: manifest, spine: [
+            Fixture.SpineRef("a"), Fixture.SpineRef("b"), Fixture.SpineRef("a"),
+        ])
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.text), ["ALPHA", "BRAVO", "ALPHA"])
+    }
+
+    func testFontObfuscationEncryptionLeavesTextExtractable() async throws {
+        let encryption = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"
+                    xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+          <enc:EncryptedData>
+            <enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+            <enc:CipherData><enc:CipherReference URI="OEBPS/fonts/obfuscated.otf"/></enc:CipherData>
+          </enc:EncryptedData>
+        </encryption>
+        """
+        let manifest = [Fixture.EPUBItem(id: "c0", href: "c0.xhtml",
+                                         content: Fixture.xhtml(body: "<p>本文は読める</p>"))]
+        let url = try Fixture.epub(
+            manifest: manifest, spine: [Fixture.SpineRef("c0")],
+            extraFiles: ["fonts/obfuscated.otf": Data([0x00, 0x01, 0x02, 0x03])],
+            metaInfFiles: ["encryption.xml": Data(encryption.utf8)])
+        let result = try await chapters(url)
+        XCTAssertEqual(result.map(\.text), ["本文は読める"])
+    }
+
+    func testPublisherTitleAndCreatorBecomeDocumentMetadata() async throws {
+        let manifest = [Fixture.EPUBItem(id: "c0", href: "c0.xhtml",
+                                         content: Fixture.xhtml(body: "<p>ONE</p>"))]
+        let url = try Fixture.epub(
+            manifest: manifest, spine: [Fixture.SpineRef("c0")],
+            metadataXML: "<dc:title>銀河鉄道の夜</dc:title><dc:creator>宮沢賢治</dc:creator>")
+        let doc = try await Importer.document(from: Fixture.renamed(url, to: "ignore-me.epub"))
+        XCTAssertEqual(doc.title, "銀河鉄道の夜")
+        XCTAssertEqual(doc.author, "宮沢賢治")
+    }
+
+    func testFilenameIsUsedWhenThePublisherGivesNoTitle() async throws {
+        let manifest = [Fixture.EPUBItem(id: "c0", href: "c0.xhtml",
+                                         content: Fixture.xhtml(body: "<p>ONE</p>"))]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")])
+        let doc = try await Importer.document(from: Fixture.renamed(url, to: "手元の名前.epub"))
+        XCTAssertEqual(doc.title, "手元の名前")
+        XCTAssertNil(doc.author)
+    }
+
+    func testBlankPublisherTitleFallsBackToTheFilename() async throws {
+        let manifest = [Fixture.EPUBItem(id: "c0", href: "c0.xhtml",
+                                         content: Fixture.xhtml(body: "<p>ONE</p>"))]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")],
+                                   metadataXML: "<dc:title>   </dc:title>")
+        let doc = try await Importer.document(from: Fixture.renamed(url, to: "予備の名前.epub"))
+        XCTAssertEqual(doc.title, "予備の名前")
+    }
+
+    func testOnlyTheFirstCreatorIsTaken() async throws {
+        let manifest = [Fixture.EPUBItem(id: "c0", href: "c0.xhtml",
+                                         content: Fixture.xhtml(body: "<p>ONE</p>"))]
+        let url = try Fixture.epub(
+            manifest: manifest, spine: [Fixture.SpineRef("c0")],
+            metadataXML: "<dc:creator>一人目</dc:creator><dc:creator>二人目</dc:creator>")
+        let doc = try await Importer.document(from: url)
+        XCTAssertEqual(doc.author, "一人目")
+    }
+
+    func testChapterTitlesAreNotMistakenForThePublicationTitle() async throws {
+        let manifest = [
+            Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: "<p>ONE</p>")),
+            Fixture.EPUBItem(id: "nav", href: "nav.xhtml",
+                             content: Fixture.navDoc([("c0.xhtml", "第一章")]), properties: "nav"),
+        ]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")],
+                                   metadataXML: "<dc:title>作品名</dc:title>")
+        let doc = try await Importer.document(from: url)
+        XCTAssertEqual(doc.title, "作品名")
+        XCTAssertEqual(doc.chapters.map(\.title), ["第一章"])
+    }
+
+    private func writingMode(metadata: String? = nil, direction: String? = nil) async throws -> WritingMode? {
+        let manifest = [Fixture.EPUBItem(id: "c0", href: "c0.xhtml",
+                                         content: Fixture.xhtml(body: "<p>ONE</p>"))]
+        let url = try Fixture.epub(manifest: manifest, spine: [Fixture.SpineRef("c0")],
+                                   metadataXML: metadata, spineDirection: direction)
+        return try await Importer.document(from: url).writingMode
+    }
+
+    func testPrimaryWritingModeVerticalIsRead() async throws {
+        let mode = try await writingMode(
+            metadata: "<meta name=\"primary-writing-mode\" content=\"vertical-rl\"/>")
+        XCTAssertEqual(mode, .vertical)
+    }
+
+    func testPrimaryWritingModeHorizontalIsRead() async throws {
+        let mode = try await writingMode(
+            metadata: "<meta name=\"primary-writing-mode\" content=\"horizontal-tb\"/>")
+        XCTAssertEqual(mode, .horizontal)
+    }
+
+    func testMissingWritingModeMetadataLeavesItUnset() async throws {
+        let mode = try await writingMode(metadata: "<dc:title>題</dc:title>")
+        XCTAssertNil(mode)
+    }
+
+    func testPageProgressionDirectionAloneDoesNotImplyVerticalText() async throws {
+        let mode = try await writingMode(direction: "rtl")
+        XCTAssertNil(mode)
+    }
+
+    func testUnknownWritingModeValueIsIgnored() async throws {
+        let mode = try await writingMode(
+            metadata: "<meta name=\"primary-writing-mode\" content=\"sideways\"/>")
+        XCTAssertNil(mode)
+    }
+
     func testCorruptArchiveThrowsUnreadable() async {
         let url = Fixture.write(Data("not a zip".utf8), ext: "epub")
         do {

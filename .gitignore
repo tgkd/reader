@@ -28,3 +28,6 @@ appstore-screenshots/
 
 # TTS probe output: generated audio, and pages built from copyrighted book text.
 scripts/tts-probes/out/
+
+# Per-project session memory (handoffs, decisions, investigations)
+.claude/notes/

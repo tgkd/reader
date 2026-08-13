@@ -8,20 +8,16 @@ public enum PlaybackStop: Equatable {
 public enum ReadingProgressResolver {
     public static func resolve(_ stop: PlaybackStop,
                                duration: Double,
-                               chapterIndex: Int,
-                               chapterCount: Int) -> ReadingProgress? {
+                               chapterIndex: Int) -> ReadingProgress? {
         guard duration > 0 else { return nil }
-        let chapters = Double(max(1, chapterCount))
         let index = max(0, chapterIndex)
         switch stop {
         case .interrupted(let time):
             guard time > 0 else { return nil }
-            let within = min(1, time / duration)
-            return ReadingProgress(chapterIndex: index, time: time,
-                                   fraction: (Double(index) + within) / chapters)
+            return ReadingProgress(chapterIndex: index, time: min(time, duration),
+                                   duration: duration)
         case .completed:
-            return ReadingProgress(chapterIndex: index, time: duration,
-                                   fraction: (Double(index) + 1) / chapters)
+            return ReadingProgress(chapterIndex: index, time: duration, duration: duration)
         }
     }
 }

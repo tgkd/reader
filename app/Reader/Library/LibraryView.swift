@@ -201,8 +201,8 @@ struct LibraryView: View {
                         Text(author)
                             .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    if item.document.progress.fraction > 0 {
-                        ProgressView(value: item.document.progress.fraction)
+                    if item.fraction > 0 {
+                        ProgressView(value: item.fraction)
                             .padding(.top, 2)
                     }
                 }
