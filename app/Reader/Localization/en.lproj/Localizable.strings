@@ -28,10 +28,7 @@
 "settings.size.medium" = "Medium";
 "settings.size.large" = "Large";
 
-/* Settings — writing direction + theme */
-"settings.section.direction" = "Writing direction";
-"direction.vertical" = "Vertical";
-"direction.horizontal" = "Horizontal";
+/* Settings — furigana + theme */
 "settings.section.furigana" = "Furigana";
 "furigana.show" = "Show";
 "furigana.hide" = "Hide";

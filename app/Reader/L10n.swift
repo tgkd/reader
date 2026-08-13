@@ -23,9 +23,6 @@ enum L10n {
     static var sizeSmall: String { String(localized: "settings.size.small") }
     static var sizeMedium: String { String(localized: "settings.size.medium") }
     static var sizeLarge: String { String(localized: "settings.size.large") }
-    static var settingsDirection: String { String(localized: "settings.section.direction") }
-    static var directionVertical: String { String(localized: "direction.vertical") }
-    static var directionHorizontal: String { String(localized: "direction.horizontal") }
     static var settingsFurigana: String { String(localized: "settings.section.furigana") }
     static var furiganaShow: String { String(localized: "furigana.show") }
     static var furiganaHide: String { String(localized: "furigana.hide") }

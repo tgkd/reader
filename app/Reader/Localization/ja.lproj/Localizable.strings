@@ -26,10 +26,7 @@
 "settings.size.medium" = "中";
 "settings.size.large" = "大";
 
-/* 設定 — 書字方向・テーマ */
-"settings.section.direction" = "書字方向";
-"direction.vertical" = "縦書き";
-"direction.horizontal" = "横書き";
+/* 設定 — ふりがな・テーマ */
 "settings.section.furigana" = "ふりがな";
 "furigana.show" = "表示";
 "furigana.hide" = "非表示";

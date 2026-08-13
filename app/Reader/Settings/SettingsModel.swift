@@ -46,16 +46,8 @@ enum ReadingSize: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum Orientation: String, CaseIterable, Codable, Identifiable {
+enum Orientation: String, Codable {
     case tate, yoko
 
-    var id: String { rawValue }
     var isVertical: Bool { self == .tate }
-
-    var displayName: String {
-        switch self {
-        case .tate: return L10n.directionVertical
-        case .yoko: return L10n.directionHorizontal
-        }
-    }
 }

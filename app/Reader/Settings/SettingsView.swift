@@ -33,13 +33,6 @@ struct SettingsView: View {
                               selected: app.readingSize == size) { app.readingSize = size }
                 }
 
-                sectionHeader(L10n.settingsDirection)
-                ForEach(Orientation.allCases) { ori in
-                    optionRow(ori.displayName,
-                              font: .system(size: 16),
-                              selected: app.readingOrientation == ori) { app.readingOrientation = ori }
-                }
-
                 sectionHeader(L10n.settingsFurigana)
                 optionRow(L10n.furiganaShow, font: .system(size: 16),
                           selected: app.showFurigana) { app.showFurigana = true }

@@ -11,11 +11,11 @@ final class LibraryModel {
         var id: Document.ID { document.id }
 
         var fraction: Double { document.readFraction }
-        var percent: Int { Int((fraction * 100).rounded()) }
+        var percent: Int { fraction <= 0 ? 0 : max(1, Int((fraction * 100).rounded())) }
         var statusLabel: String {
-            if percent <= 0 { return L10n.statusUnread }
-            if percent >= 100 { return L10n.statusDone }
-            return "\(percent)%"
+            if fraction <= 0 { return L10n.statusUnread }
+            if fraction >= 1 { return L10n.statusDone }
+            return "\(min(99, percent))%"
         }
     }
 
