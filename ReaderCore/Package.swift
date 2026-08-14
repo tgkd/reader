@@ -18,6 +18,10 @@ let package = Package(
                 .product(name: "IPADic", package: "Mecab-Swift"),
             ]
         ),
-        .testTarget(name: "ReaderCoreTests", dependencies: ["ReaderCore"]),
+        .testTarget(
+            name: "ReaderCoreTests",
+            dependencies: ["ReaderCore"],
+            exclude: ["fixtures", "corpus"]
+        ),
     ]
 )
