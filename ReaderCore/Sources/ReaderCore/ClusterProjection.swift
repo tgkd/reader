@@ -72,7 +72,7 @@ struct ClusterProjection {
     }
 
     static func isVariationSelector(_ scalar: Unicode.Scalar) -> Bool {
-        (0xFE00...0xFE0F).contains(scalar.value) || (0xE0100...0xE01EF).contains(scalar.value)
+        VariationSelector.isSelector(scalar)
     }
 
     private static func width(_ scalar: Unicode.Scalar) -> Int {

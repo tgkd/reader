@@ -113,6 +113,11 @@ struct EPUBImporter: DocumentImporter {
         return split.filter { byWord[$0.key]?.count == 1 && $0.key.count > 1 }
     }
 
+    private func spellings(of word: String) -> [String] {
+        let bare = VariationSelector.stripped(word)
+        return bare == word ? [word] : [word, bare]
+    }
+
     private func propagate(_ index: [String: [SourceReading]],
                            into text: String,
                            given existing: [SourceReading]) -> [SourceReading] {
@@ -125,21 +130,24 @@ struct EPUBImporter: DocumentImporter {
             $0.key.count != $1.key.count ? $0.key.count > $1.key.count : $0.key < $1.key
         }
         for (word, pairs) in ordered {
-            var from = text.startIndex
-            while let r = text.range(of: word, range: from..<text.endIndex) {
-                from = r.upperBound
-                let start = text.distance(from: text.startIndex, to: r.lowerBound)
-                let span = start..<(start + word.count)
-                guard !taken.contains(where: { $0.overlaps(span) }) else { continue }
-                taken.append(span)
-                for p in pairs {
-                    let s = start + p.start
-                    guard s + p.length <= chars.count,
-                          String(chars[s..<(s + p.length)]) == p.surface else { continue }
-                    out.append(SourceReading(start: s, length: p.length,
-                                             surface: p.surface, reading: p.reading,
-                                             rawReading: p.rawReading,
-                                             groupLength: p.groupLength))
+            for spelling in spellings(of: word) {
+                var from = text.startIndex
+                while let r = text.range(of: spelling, range: from..<text.endIndex) {
+                    from = r.upperBound
+                    let start = text.distance(from: text.startIndex, to: r.lowerBound)
+                    let span = start..<(start + spelling.count)
+                    guard !taken.contains(where: { $0.overlaps(span) }) else { continue }
+                    taken.append(span)
+                    for p in pairs {
+                        let s = start + p.start
+                        guard s + p.length <= chars.count else { continue }
+                        let local = String(chars[s..<(s + p.length)])
+                        guard VariationSelector.sameWord(local, p.surface) else { continue }
+                        out.append(SourceReading(start: s, length: p.length,
+                                                 surface: local, reading: p.reading,
+                                                 rawReading: p.rawReading,
+                                                 groupLength: p.groupLength))
+                    }
                 }
             }
         }

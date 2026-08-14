@@ -678,11 +678,31 @@ tokenizer. `Normalize.nfkc` is shared by the tokenizer, the TTS request body and
 Stripping there would reshape the hash input and re-bill every chapter containing a variation
 selector — exactly the failure f5ad953 removed the model from the key to stop.
 
-**Still unknown.** Whether ElevenLabs' alignment emits a variation selector as its own entry:
-`CharTokenMapper` takes `$0.first` of each `alignment.characters` element
-(`CharTokenMapper.swift:19`), so a lone-selector entry yields a `Character` that can never
-equal a composed `葛󠄀`. The 8-token lookahead should absorb it, but there is no fixture with an
-IVS in it to prove that, and none of the four committed fixtures contains one.
+**Answered, 2026-08-14, against the live API on device.** ElevenLabs' alignment **does** emit a
+variation selector as its own timed entry: 葛 at 6.02 s, `U+E0100` at 6.34 s, 城 at 6.46 s —
+the invisible character is given a twelfth of a second of its own. So `aChars` holds a bare 葛
+and a lone selector where the token stream holds one composed 葛󠄀, and neither side's lookahead
+can match the other's character. The mapper's "both missing" branch advances past it and
+re-syncs within a character or two, exactly as hoped. Measured on a chapter with five
+selectors: at two sampled moments the highlight was on the token the audio was speaking (once
+exactly, once one character ahead, inside the readout's own rounding). The cost of a selector
+is two characters of local slack, not drift.
+
+**What that measurement did surface is a pronunciation bug, in the lexicon rather than the
+tokenizer.** The rule minted from publisher ruby carries the selector in its key —
+`葛󠄀城 → かつらぎ`, `U+845B U+E0100 U+57CE` — and ElevenLabs applies dictionary entries by exact
+string match. A book that writes the same name both ways therefore gets it right where the
+selector appears and wrong where it does not: on the test chapter, two 葛城 out of three were
+Katsuragi and the bare one came back as something like "kakasho". `EPUBImporter.propagate`
+already spreads a stated reading to every *identical* occurrence; it now treats a variation
+selector as the glyph-level detail it is, so both spellings are annotated and both become
+rules. Note the furigana was right at all three sites throughout — IPADic knows 葛城 — which is
+the asymmetry to remember: **the reader can be right on the page and wrong in the ear, and only
+the ear is billed.**
+
+Not a defect, for the record: the same chapter reads 四 as し where the furigana says よん. Both
+are correct Japanese for an enumerated 四, IPADic picked one and ElevenLabs the other, and
+nothing in the pipeline is positioned to say which a given book means.
 
 ---
 
