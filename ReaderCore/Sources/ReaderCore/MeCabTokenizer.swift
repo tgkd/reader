@@ -47,14 +47,16 @@ public final class MeCabTokenizer: JapaneseTokenizer {
         guard !normalized.isEmpty else { return [] }
 
         let bytes = Array(normalized.utf8)
+        let clusters = ClusterProjection(normalized: normalized, byteCount: bytes.count)
+
         var tokens: [Token] = []
         tokens.reserveCapacity(bytes.count / 4)
         var cursor = 0
 
         if let lattice = mecab_model_new_lattice(model) {
             defer { mecab_lattice_destroy(lattice) }
-            normalized.withCString { sentence in
-                mecab_lattice_set_sentence2(lattice, sentence, bytes.count)
+            clusters.parseText.withCString { sentence in
+                mecab_lattice_set_sentence2(lattice, sentence, clusters.parseByteCount)
                 guard mecab_parse_lattice(tagger, lattice) != 0,
                       let base = mecab_lattice_get_sentence(lattice) else { return }
 
@@ -63,22 +65,31 @@ public final class MeCabTokenizer: JapaneseTokenizer {
                     defer { node = n.pointee.next }
                     guard let surface = n.pointee.surface, n.pointee.length > 0 else { continue }
 
-                    let lo = UnsafeRawPointer(surface) - UnsafeRawPointer(base)
-                    let hi = lo + Int(n.pointee.length)
-                    guard lo >= cursor, hi <= bytes.count else { continue }
+                    let parsedLo = UnsafeRawPointer(surface) - UnsafeRawPointer(base)
+                    let parsedHi = parsedLo + Int(n.pointee.length)
+                    guard parsedLo >= 0, parsedHi <= clusters.parseByteCount else { continue }
 
-                    if cursor < lo {
-                        tokens.append(Token(surface: Self.slice(bytes, cursor, lo),
+                    let lo = clusters.project(parsedLo)
+                    let hi = clusters.project(parsedHi)
+                    let end = clusters.snapForward(hi)
+                    guard end > cursor else {
+                        Self.dropReadingOfLast(&tokens)
+                        continue
+                    }
+                    let start = max(cursor, clusters.snapBackward(lo))
+                    if start > cursor {
+                        tokens.append(Token(surface: Self.slice(bytes, cursor, start),
                                             reading: nil, dictionaryForm: nil))
                     }
 
-                    let text = Self.slice(bytes, lo, hi)
+                    let widened = start != lo || end != hi
+                    let text = Self.slice(bytes, start, end)
                     let reading = Self.field(n.pointee.feature, at: readingIndex) ?? text
                     let lemma = Self.field(n.pointee.feature, at: lemmaIndex) ?? text
                     tokens.append(Token(surface: text,
-                                        reading: Self.usableReading(reading),
+                                        reading: widened ? nil : Self.usableReading(reading),
                                         dictionaryForm: Self.usableLemma(lemma)))
-                    cursor = hi
+                    cursor = end
                 }
             }
         }
@@ -88,6 +99,12 @@ public final class MeCabTokenizer: JapaneseTokenizer {
                                 reading: nil, dictionaryForm: nil))
         }
         return tokens
+    }
+
+    private static func dropReadingOfLast(_ tokens: inout [Token]) {
+        guard let last = tokens.last, last.reading != nil else { return }
+        tokens[tokens.count - 1] = Token(surface: last.surface, reading: nil,
+                                         dictionaryForm: last.dictionaryForm)
     }
 
     private static func lastError() -> String {

@@ -20,11 +20,21 @@ and surrogate pairs). See `docs/char-token-sync.md`.
 **One MeCab pass per chapter is the single source of truth** for (a) highlight sync spans,
 (b) furigana readings, (c) `dictionaryForm` (kanji lemma) for lookup. Never add a second
 segmenter — it will disagree with the furigana segmentation. All tokenization goes through
-the `TokenizerWorker` actor (app target): off the main thread — the one-time ~50 MB IPADic
-load and per-chapter tokenize used to freeze the reader-open transition — and serialized,
-because MeCab is not thread-safe. Never tokenize on the main actor. `MeCabTokenizer` also emits the
-whitespace it would otherwise drop as untimed gap tokens (walking `annotation.range`), so
-`joined(surfaces) == nfkc(text)` holds and paragraphs / line breaks / indents survive to the page.
+the `TokenizerWorker` actor (app target): off the main thread — opening the dictionary is cheap
+(it is `mmap`ed) but first-touch page faults across 49 MB and the per-chapter tokenize used to
+freeze the reader-open transition — and serialized. The engine no longer forces that
+serialization: `MeCabTokenizer` binds MeCab's **lattice API** (one lattice per call over a shared
+tagger), where the mutable parse state lives in the lattice, so concurrent parses would be safe.
+It stays serialized by design. Never tokenize on the main actor. `MeCabTokenizer` builds every
+surface as a byte slice of the NFKC text, taken from `node.surface`'s offset into the parsed
+buffer, and emits the whitespace MeCab drops as untimed gap tokens — so both
+`joined(surfaces) == nfkc(text)` and `sum(surface.count) == nfkc(text).count` hold, and
+paragraphs / line breaks / indents survive to the page. Both invariants are load-bearing: the
+second is what `TokenOffsets` (saved reading position), `SourceReadingOverlay` (publisher ruby)
+and `PronunciationLexicon` walk on, and a surface that splits a grapheme cluster drifts every
+later token in the chapter. `ClusterProjection` is what keeps it true — it strips variation
+selectors before the parse (so 葛󠄀城 stays one word) and snaps node boundaries outward onto
+`Character` boundaries. See `docs/2026-08-14-tokenizer-alternatives.md`.
 
 ## Architecture
 
@@ -32,7 +42,8 @@ Two modules. The split is load-bearing: **all non-UI logic + contracts live in `
 which is headless and `swift test`-able on macOS** (no simulator). SwiftUI / CoreText / AVFoundation /
 PDFKit / networking live in the `app/` target only.
 
-- **`ReaderCore/`** (SwiftPM, one dep: MeCab-Swift + IPADic) — `CharTokenMapper`, `Chunker`,
+- **`ReaderCore/`** (SwiftPM; MeCab 0.996 vendored in `Sources/CMeCab`, dictionary from the
+  Mecab-Swift package's `IPADic` product) — `CharTokenMapper`, `Chunker`,
   `AlignmentStitcher`, `SpanTimeline`, `MeCabTokenizer`, `Normalize`, `ContentKey`,
   `ReadingProgressResolver`, `JapaneseTextDecoder`; the model types (`Document`/`Chapter`/
   `ReadingProgress`/`Token`/`TokenSpan`/`Alignment`) and the protocols (`TTSService`,
