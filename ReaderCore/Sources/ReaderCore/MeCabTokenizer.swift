@@ -16,7 +16,10 @@ public final class MeCabTokenizer: JapaneseTokenizer {
         let dictionary = IPADic()
         let path = dictionary.url.path
 
-        var argv = ["mecab", "-d", path].map { strdup($0) }
+        let arguments: [String] = ["mecab", "-d", path]
+        var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { argument in
+            argument.withCString { strdup($0) }
+        }
         defer { argv.forEach { free($0) } }
 
         guard let model = argv.withUnsafeMutableBufferPointer({
