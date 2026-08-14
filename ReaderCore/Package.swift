@@ -39,13 +39,17 @@ let package = Package(
         .target(
             name: "ReaderCore",
             dependencies: [
-                .product(name: "Mecab-Swift", package: "Mecab-Swift"),
+                "CMeCab",
                 .product(name: "IPADic", package: "Mecab-Swift"),
             ]
         ),
         .testTarget(
             name: "ReaderCoreTests",
-            dependencies: ["ReaderCore"],
+            dependencies: [
+                "ReaderCore",
+                "CMeCab",
+                .product(name: "IPADic", package: "Mecab-Swift"),
+            ],
             exclude: ["fixtures", "corpus"]
         ),
     ]
