@@ -12,6 +12,31 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "CMeCab",
+            exclude: [
+                "src/make.bat",
+                "src/Makefile.am",
+                "src/Makefile.in",
+                "src/Makefile.msvc.in",
+                "src/mecab.cpp",
+                "src/mecab-cost-train.cpp",
+                "src/mecab-dict-gen.cpp",
+                "src/mecab-dict-index.cpp",
+                "src/mecab-system-eval.cpp",
+                "src/mecab-test-gen.cpp",
+            ],
+            sources: ["src"],
+            resources: [.copy("BSD"), .copy("COPYING"), .copy("AUTHORS")],
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("HAVE_CONFIG_H"),
+                .define("MECAB_USE_UTF8_ONLY"),
+                .headerSearchPath("include"),
+            ],
+            cxxSettings: [.define("HAVE_ICONV")],
+            linkerSettings: [.linkedLibrary("iconv")]
+        ),
+        .target(
             name: "ReaderCore",
             dependencies: [
                 .product(name: "Mecab-Swift", package: "Mecab-Swift"),
