@@ -116,7 +116,7 @@ public final class MeCabTokenizer: JapaneseTokenizer {
         String(decoding: bytes[lo..<hi], as: UTF8.self)
     }
 
-    private static func field(_ feature: UnsafePointer<CChar>?, at index: Int) -> String? {
+    static func field(_ feature: UnsafePointer<CChar>?, at index: Int) -> String? {
         guard var p = feature else { return nil }
         var seen = 0
         while seen < index {
