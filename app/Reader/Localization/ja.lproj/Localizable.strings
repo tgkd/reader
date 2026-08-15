@@ -52,7 +52,7 @@
 "about.privacy" = "プライバシーポリシー";
 "about.contact" = "お問い合わせ";
 "about.section.sources" = "データソース";
-"about.sources.note" = "辞書データは電子辞書研究開発グループ（EDRDG）のJMdictをライセンスに従って使用しています。テキスト解析にはMeCabとIPADic辞書を使用しています。";
+"about.sources.note" = "辞書データは電子辞書研究開発グループ（EDRDG）のJMdictをライセンスに従って使用しています。テキスト解析にはMeCabとIPADic辞書を使用しています。収録しているサンプル作品は青空文庫（https://www.aozora.gr.jp/）の著作権消滅作品です。";
 "about.ai.note" = "朗読音声・スキャン文字認識・読み仮名はAIによる生成のため、誤りを含む場合があります。";
 
 /* 設定 — ストレージ：保存した音声を削除 */
@@ -76,6 +76,9 @@
 /* Library — the + menu and the paste-text import sheet */
 "library.add.importFile" = "ファイルを読み込む";
 "library.add.pasteText" = "テキストを貼り付け";
+"library.add.sampleBooks" = "サンプル作品";
+"sampleBooks.note" = "青空文庫の著作権消滅作品から、短編を収録しています。";
+"sampleBooks.added" = "ライブラリに追加済み";
 "paste.titleField" = "タイトル";
 "paste.placeholder" = "日本語のテキストを貼り付け…";
 "paste.add" = "ライブラリに追加";

@@ -57,6 +57,9 @@ enum L10n {
 
     static var libraryAddImportFile: String { String(localized: "library.add.importFile") }
     static var libraryAddPasteText: String { String(localized: "library.add.pasteText") }
+    static var libraryAddSampleBooks: String { String(localized: "library.add.sampleBooks") }
+    static var sampleBooksNote: String { String(localized: "sampleBooks.note") }
+    static var sampleBooksAdded: String { String(localized: "sampleBooks.added") }
     static var pasteTitleField: String { String(localized: "paste.titleField") }
     static var pastePlaceholder: String { String(localized: "paste.placeholder") }
     static var pasteAdd: String { String(localized: "paste.add") }

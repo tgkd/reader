@@ -9,6 +9,7 @@ struct LibraryView: View {
     @State private var model = LibraryModel()
     @State private var importing = false
     @State private var showingPaste = false
+    @State private var showingSamples = false
     @State private var showingSettings = false
     @State private var pendingDelete: LibraryModel.Item?
     @State private var deleteFailed = false
@@ -44,6 +45,9 @@ struct LibraryView: View {
         .task {
             isSubscribed = await app.services.isSubscribed()
             for await active in app.services.entitlementUpdates() { isSubscribed = active }
+        }
+        .task {
+            await app.seedStarterBooksIfNeeded()
         }
         .onChange(of: app.entitlementTick) { _, _ in
             Task { isSubscribed = await app.services.isSubscribed() }
@@ -98,6 +102,10 @@ struct LibraryView: View {
         .sheet(isPresented: $showingPaste) {
             PasteTextView()
                 .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showingSamples) {
+            StarterBooksView()
+                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
@@ -161,6 +169,9 @@ struct LibraryView: View {
                     .disabled(app.importActivity != nil)
                     Button { showingPaste = true } label: {
                         Label(L10n.libraryAddPasteText, systemImage: "document.on.clipboard")
+                    }
+                    Button { showingSamples = true } label: {
+                        Label(L10n.libraryAddSampleBooks, systemImage: "books.vertical")
                     }
                 } label: {
                     Image(systemName: "plus")

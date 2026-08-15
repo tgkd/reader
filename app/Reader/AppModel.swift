@@ -49,7 +49,7 @@ final class AppModel {
     var readingSize: ReadingSize = .medium {
         didSet { UserDefaults.standard.set(readingSize.rawValue, forKey: Self.sizeKey) }
     }
-    var readingOrientation: Orientation = .tate {
+    var readingOrientation: Orientation = .yoko {
         didSet { UserDefaults.standard.set(readingOrientation.rawValue, forKey: Self.orientationKey) }
     }
     private(set) var orientationOverrides: [String: Orientation] = [:] {
@@ -89,6 +89,7 @@ final class AppModel {
     private static let orientationOverrideKey = "reader.orientationOverrides"
     private static let furiganaKey = "reader.showFurigana"
     private static let voiceKey = "reader.narrationVoice"
+    private static let starterSeedKey = "reader.starterSeedPending"
     var entitlementTick = 0
 
     let services = AppServices()
@@ -96,6 +97,7 @@ final class AppModel {
     private(set) var importActivity: ImportActivity?
     @ObservationIgnored private var importTask: Task<Void, Never>?
     @ObservationIgnored private var importTaskID: UUID?
+    @ObservationIgnored private var didSeedStarterBooks = false
     var importError: String?
     var importNotice: String?
     var importNoticeNeedsMembership = false
@@ -328,6 +330,51 @@ final class AppModel {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
         saveImported(Document(title: "", chapters: chapters),
                      title: name.isEmpty ? Self.defaultPasteTitle(from: trimmed) : name)
+    }
+
+    func seedStarterBooksIfNeeded() async {
+        guard !didSeedStarterBooks else { return }
+        let defaults = UserDefaults.standard
+        if services.libraryWasCreated, defaults.object(forKey: Self.starterSeedKey) == nil {
+            defaults.set(StarterLibrary.books.map(\.id), forKey: Self.starterSeedKey)
+        }
+        guard var pending = defaults.array(forKey: Self.starterSeedKey) as? [String],
+              !pending.isEmpty else { return }
+        didSeedStarterBooks = true
+        for book in StarterLibrary.books where pending.contains(book.id) {
+            guard let url = StarterLibrary.url(for: book),
+                  let document = try? await Self.loadStarter(url) else { continue }
+            let needsSave = !libraryContains(book)
+            if needsSave { services.library.save(document) }
+            guard services.library.flush() else { continue }
+            if needsSave { libraryRevision &+= 1 }
+            pending.removeAll { $0 == book.id }
+            defaults.set(pending, forKey: Self.starterSeedKey)
+        }
+    }
+
+    func importStarterBook(_ book: StarterLibrary.Book) async {
+        guard let url = StarterLibrary.url(for: book) else { return }
+        importError = nil
+        importErrorNeedsMembership = false
+        do {
+            let document = try await Self.loadStarter(url)
+            guard !libraryContains(book) else { return }
+            saveImported(document, title: book.title)
+        } catch {
+            importErrorNeedsMembership = false
+            importError = error.localizedDescription
+        }
+    }
+
+    func libraryContains(_ book: StarterLibrary.Book) -> Bool {
+        services.library.all().contains { $0.title == book.title }
+    }
+
+    private static func loadStarter(_ url: URL) async throws -> Document {
+        try await Task.detached(priority: .userInitiated) {
+            try await Importer.document(from: url, ocr: nil)
+        }.value
     }
 
     static func defaultPasteTitle(from text: String) -> String {

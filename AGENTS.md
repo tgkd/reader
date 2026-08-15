@@ -210,7 +210,18 @@ screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 Simulator
   (`api.thetango.org` — not a secret: it ships in every IPA, and all billable routes are
   auth-gated); an empty `REVENUECAT_KEY` leaves the paywall unconfigured (crash-guarded).
   `.env` is read ONLY by `scripts/capture-alignment.mjs` (`ELEVEN_KEY`).
-- **Library starts empty** — users import their own books. Swipe-to-delete a row also purges its
+- **The library is seeded once with the eight bundled starter books; everything after that is the
+  user's own import.** `AppModel.seedStarterBooksIfNeeded` arms only when `DiskLibraryStore`
+  had to create `library.json` (`wasCreated`) — a fresh install, never a launch into an existing
+  library, however empty the user has since made it — and the same eight stay reachable from the
+  `+` menu → *Sample Books* (`StarterBooksView` → `importStarterBook`). Both paths parse across a
+  suspension, so both re-check `libraryContains` on the main actor between the parse and the save:
+  seeding and a manual add of the same title race otherwise, and each would persist its own row
+  under a fresh UUID. Arming writes the eight ids to `reader.starterSeedPending` BEFORE the first
+  save, and each id is struck only once its own `library.flush()` reports the write landed — so a
+  seed interrupted by a kill, a crash or a failed write resumes on the next launch, when
+  `wasCreated` is already false and can no longer be the trigger. See `docs/starter-books.md`.
+  Swipe-to-delete a row also purges its
   cached narration (`AppServices.purgeAudio`). Settings has a "clear audio cache" control
   (`audioStore.clear()` / `totalBytes()`). Reading font/size/orientation/furigana + theme + the
   narration voice (by `Voice.catalog` id, falling back to George) persist via `UserDefaults` in

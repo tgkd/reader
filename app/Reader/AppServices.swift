@@ -24,6 +24,7 @@ final class AppServices {
     let fixtures: FixtureTTSService
     let audioStore: GeneratedAudioStore
     let library: LibraryStore
+    let libraryWasCreated: Bool
     let dictionary: DictionaryService
 
     init() {
@@ -41,7 +42,9 @@ final class AppServices {
         tts = ChunkingTTSService(inner: worker, store: store)
         synthesis = SynthesisCoordinator(tts: tts, store: store)
 
-        library = DiskLibraryStore(starter: [])
+        let libraryStore = DiskLibraryStore(starter: [])
+        library = libraryStore
+        libraryWasCreated = libraryStore.wasCreated
 
         let sqlite: DictionaryService? = SQLiteDictionaryService()
         dictionary = sqlite ?? MockDictionaryService.seeded()

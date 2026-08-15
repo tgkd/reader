@@ -11,6 +11,12 @@ Books-register** aesthetic; three navigable screens **Library → Reader →
 Dictionary sheet**; both **vertical (tategaki)** and horizontal reading; the
 **word-synced highlight is animated** so the core feature can actually be judged.
 
+Amended 2026-08-15: the Reader now **opens in yokogaki**
+(`AppModel.readingOrientation = .yoko`) — the original brief opened in tategaki,
+and the block below has been brought in line so a fresh design session matches
+the app. A book's own `primary-writing-mode` still outranks the default, and the
+per-book orientation toggle is unchanged.
+
 ---
 
 ```
@@ -58,10 +64,11 @@ reading. Requirements:
   • **Support BOTH orientations with a toggle:**
     - **Tategaki (vertical):** top-to-bottom, columns flowing right-to-left
       (`writing-mode: vertical-rl`). Furigana sits to the *right* of each kanji.
-      This is the authentic novel-reading mode — showcase it as the default for
-      the Reader screen.
+      This is the authentic novel-reading mode — showcase it, but reach it from
+      the toggle rather than on open.
     - **Yokogaki (horizontal):** normal left-to-right; furigana sits *above*
-      kanji. Provide a clear, unobtrusive toggle between the two modes.
+      kanji. The Reader screen opens in this mode. Provide a clear, unobtrusive
+      toggle between the two modes.
   • **Furigana** over/beside every kanji, muted, ~50% size. (Use the readings I
     give below — don't invent furigana.)
   • **The synced highlight, ANIMATED.** Include a play/pause control; when

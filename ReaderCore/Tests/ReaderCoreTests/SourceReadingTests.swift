@@ -222,7 +222,7 @@ final class SourceReadingTests: XCTestCase {
         XCTAssertEqual(book, ["ひびけ", nil])
     }
 
-    func testDoesNotApplyAnAnnotationThatSpansTokens() throws {
+    func testAppliesAnAnnotationThatSpansTokensByJoiningThem() throws {
         let text = "川島緑輝"
         let tokens = try MeCabTokenizer().tokenize(text)
         try XCTSkipUnless(tokens.contains { $0.surface == "緑" } && tokens.contains { $0.surface == "輝" },
@@ -230,6 +230,17 @@ final class SourceReadingTests: XCTestCase {
         let out = SourceReadingOverlay.apply(
             [SourceReading(start: 2, length: 2, surface: "緑輝", reading: "サファイア")],
             to: tokens, text: text)
-        XCTAssertEqual(out, tokens)
+
+        XCTAssertEqual(out.map(\.surface).joined(), text)
+        XCTAssertEqual(out.last?.surface, "緑輝")
+        XCTAssertEqual(out.last?.reading, "サファイア",
+                       """
+                       carrying this annotation without applying it was the earlier behaviour, on \
+                       the grounds that identical starts would make SpanTimeline.index(at:) — a \
+                       rightmost search — skip the earlier token forever. That is a hazard of \
+                       spreading one reading over two surviving tokens; joining them leaves a \
+                       single span, so there is no tie to lose, and 緑輝 is a name no tokenizer \
+                       can derive
+                       """)
     }
 }

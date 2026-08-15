@@ -46,12 +46,98 @@ public enum SourceReadingOverlay {
     public static func apply(_ readings: [SourceReading],
                              to tokens: [Token],
                              text: String) -> [Token] {
-        var out = tokens
-        for (i, book) in bookReadings(readings, tokens: tokens, text: text).enumerated() {
+        let joined = joiningAcrossAnnotations(readings, tokens: tokens, text: text)
+        var out = joined
+        for (i, book) in bookReadings(readings, tokens: joined, text: text).enumerated() {
             guard let book else { continue }
-            out[i] = Token(surface: tokens[i].surface,
-                           reading: preferred(book: book, tokenizer: tokens[i].reading),
-                           dictionaryForm: tokens[i].dictionaryForm)
+            out[i] = Token(surface: joined[i].surface,
+                           reading: preferred(book: book, tokenizer: joined[i].reading),
+                           dictionaryForm: joined[i].dictionaryForm)
+        }
+        return out
+    }
+
+    public static func joiningAcrossAnnotations(_ readings: [SourceReading],
+                                                tokens: [Token],
+                                                text: String) -> [Token] {
+        let valid = readings.validated(against: text)
+        guard !valid.isEmpty, !tokens.isEmpty else { return tokens }
+
+        let raw = Array(text)
+        var normalizedCache: [Int: Int] = [:]
+        func normalized(_ rawOffset: Int) -> Int {
+            if let hit = normalizedCache[rawOffset] { return hit }
+            let n = Normalize.nfkc(String(raw[0..<rawOffset])).count
+            normalizedCache[rawOffset] = n
+            return n
+        }
+
+        var starts: [Int] = []
+        var cursor = 0
+        for token in tokens {
+            starts.append(cursor)
+            cursor += token.surface.count
+        }
+        let total = cursor
+
+        func tokenIndex(containing offset: Int) -> Int? {
+            guard offset >= 0, offset < total else { return nil }
+            var low = 0, high = starts.count - 1
+            while low < high {
+                let mid = (low + high + 1) / 2
+                if starts[mid] <= offset { low = mid } else { high = mid - 1 }
+            }
+            return low
+        }
+
+        var joinsNext = [Bool](repeating: false, count: tokens.count)
+        for reading in valid {
+            let start = normalized(reading.start), end = normalized(reading.end)
+            guard end > start,
+                  let first = tokenIndex(containing: start),
+                  let last = tokenIndex(containing: end - 1),
+                  last > first else { continue }
+            for i in first..<last { joinsNext[i] = true }
+        }
+        guard joinsNext.contains(true) else { return tokens }
+
+        var startingAt: [Int: (end: Int, reading: SourceReading)] = [:]
+        for r in valid { startingAt[normalized(r.start)] = (normalized(r.end), r) }
+
+        let chars = Array(tokens.map(\.surface).joined())
+        func composes(_ range: Range<Int>) -> Bool {
+            var position = range.lowerBound
+            var surface = "", annotated = false
+            while position < range.upperBound {
+                if let hit = startingAt[position], hit.end <= range.upperBound {
+                    surface += hit.reading.surface
+                    position = hit.end
+                    annotated = true
+                } else {
+                    guard Furigana.isKana(chars[position]) else { return false }
+                    surface.append(chars[position])
+                    position += 1
+                }
+            }
+            return annotated && Normalize.nfkc(surface) == String(chars[range])
+        }
+
+        var out: [Token] = []
+        var i = 0
+        while i < tokens.count {
+            var j = i
+            while j < tokens.count - 1, joinsNext[j] { j += 1 }
+            let parts = tokens[i...j]
+            if j > i, composes(starts[i]..<(starts[j] + tokens[j].surface.count)) {
+                let readings = parts.map(\.reading)
+                out.append(Token(surface: parts.map(\.surface).joined(),
+                                 reading: readings.contains(where: { $0 == nil })
+                                     ? nil : readings.compactMap { $0 }.joined(),
+                                 dictionaryForm: nil))
+            } else {
+                out.append(contentsOf: parts)
+            }
+            i = j + 1
         }
         return out
     }

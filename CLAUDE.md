@@ -207,6 +207,20 @@ PDFKit / networking live in the `app/` target only.
   downstream so every ingestion path shares one normalization.
 - **`Chunker.split(text).joined()` must equal the input exactly** (lossless); `AlignmentStitcher`
   keeps token starts monotonic across stitched segments.
+- **A reading the book printed outranks the tokenizer's guess, including where the two disagree
+  about word boundaries.** MeCab segments by grammar; ruby marks a word. `SourceReadingOverlay`
+  therefore JOINS the token run an annotation covers (`joiningAcrossAnnotations`) before overlaying
+  — measured over the bundled starter books, accepting only annotations that fit inside one token
+  discarded 305 of 1881, 139 of them readings the tokenizer got wrong (兵十 ひょうじゅう → へいじゅう,
+  洋杖 ステッキ → ようつえ). Joining keeps both stream invariants and moves the cut onto the boundary
+  the book itself drew; it supersedes the earlier "carried but not applied" rule (7698541), whose
+  concern — identical starts defeating `SpanTimeline.index(at:)`'s rightmost search — was a hazard
+  of spreading one reading over two SURVIVING tokens, and cannot arise when they become one. A
+  joined token drops its `dictionaryForm` (its parts' lemmas describe pieces); tap-to-define already
+  falls back to the surface. The refusal that REMAINS deliberate: an annotation covering part of a
+  token whose remainder is not kana (掻 ruby'd か inside 掻き立て) is still dropped whole — and the
+  join is gated on that SAME composition test, so a refused annotation never costs a lemma or a
+  highlight boundary either (ruby 茶碗 over the tokens 御茶 + 碗 leaves both tokens standing).
 - **One CoreText surface per chapter, so chapters are capped at `Chapter.maxRenderableChars` (~4k).**
   A larger chapter exceeds the platform's max layer/texture size and renders BLANK (and tokenizing +
   laying it out janks the main thread). Import splits oversized chapters into sub-chapters at
@@ -327,7 +341,18 @@ screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 Simulator
   (`api.thetango.org` — not a secret: it ships in every IPA, and all billable routes are
   auth-gated); an empty `REVENUECAT_KEY` leaves the paywall unconfigured (crash-guarded).
   `.env` is read ONLY by `scripts/capture-alignment.mjs` (`ELEVEN_KEY`).
-- **Library starts empty** — users import their own books. Swipe-to-delete a row also purges its
+- **The library is seeded once with the eight bundled starter books; everything after that is the
+  user's own import.** `AppModel.seedStarterBooksIfNeeded` arms only when `DiskLibraryStore`
+  had to create `library.json` (`wasCreated`) — a fresh install, never a launch into an existing
+  library, however empty the user has since made it — and the same eight stay reachable from the
+  `+` menu → *Sample Books* (`StarterBooksView` → `importStarterBook`). Both paths parse across a
+  suspension, so both re-check `libraryContains` on the main actor between the parse and the save:
+  seeding and a manual add of the same title race otherwise, and each would persist its own row
+  under a fresh UUID. Arming writes the eight ids to `reader.starterSeedPending` BEFORE the first
+  save, and each id is struck only once its own `library.flush()` reports the write landed — so a
+  seed interrupted by a kill, a crash or a failed write resumes on the next launch, when
+  `wasCreated` is already false and can no longer be the trigger. See `docs/starter-books.md`.
+  Swipe-to-delete a row also purges its
   cached narration (`AppServices.purgeAudio`). Settings has a "clear audio cache" control
   (`audioStore.clear()` / `totalBytes()`). Reading font/size/orientation/furigana + theme + the
   narration voice (by `Voice.catalog` id, falling back to Shizuka) persist via `UserDefaults` in

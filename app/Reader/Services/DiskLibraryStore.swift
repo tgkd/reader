@@ -5,6 +5,7 @@ final class DiskLibraryStore: LibraryStore {
     private let url: URL
     private var docs: [Document]
     private let writeQueue = DispatchQueue(label: "app.reader.library.write")
+    let wasCreated: Bool
 
     init(starter: [Document]) {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -12,6 +13,7 @@ final class DiskLibraryStore: LibraryStore {
         url = dir.appendingPathComponent("library.json")
 
         if let data = try? Data(contentsOf: url) {
+            wasCreated = false
             if let saved = try? JSONDecoder().decode([Document].self, from: data) {
                 docs = saved
             } else {
@@ -21,6 +23,7 @@ final class DiskLibraryStore: LibraryStore {
                 try? FileManager.default.moveItem(at: url, to: backup)
             }
         } else {
+            wasCreated = true
             docs = starter
             persist()
         }

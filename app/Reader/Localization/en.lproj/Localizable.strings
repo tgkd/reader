@@ -54,7 +54,7 @@
 "about.privacy" = "Privacy Policy";
 "about.contact" = "Contact";
 "about.section.sources" = "Data sources";
-"about.sources.note" = "Dictionary data from JMdict, property of the Electronic Dictionary Research and Development Group, used in conformance with the Group's licence. Text analysis uses MeCab with the IPADic dictionary.";
+"about.sources.note" = "Dictionary data from JMdict, property of the Electronic Dictionary Research and Development Group, used in conformance with the Group's licence. Text analysis uses MeCab with the IPADic dictionary. The bundled sample books are copyright-expired works from Aozora Bunko (https://www.aozora.gr.jp/).";
 "about.ai.note" = "Narration, scanned-text recognition, and readings are AI-generated and may contain mistakes.";
 
 /* Settings — storage: clear cached narration */
@@ -78,6 +78,9 @@
 /* Library — the + menu and the paste-text import sheet */
 "library.add.importFile" = "Import File";
 "library.add.pasteText" = "Paste Text";
+"library.add.sampleBooks" = "Sample Books";
+"sampleBooks.note" = "Short public-domain works from Aozora Bunko, bundled with the app.";
+"sampleBooks.added" = "Already in your library";
 "paste.titleField" = "Title";
 "paste.placeholder" = "Paste or type Japanese text…";
 "paste.add" = "Add to Library";
