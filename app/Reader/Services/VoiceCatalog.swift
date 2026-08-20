@@ -11,13 +11,16 @@ final class VoiceCatalog {
     private(set) var selectable: [Voice]
 
     private let baseURL: URL
+    private let userId: @Sendable () -> String?
     private let session: URLSession
     private let defaults: UserDefaults
 
     init(baseURL: URL,
+         userId: @escaping @Sendable () -> String?,
          session: URLSession = .shared,
          defaults: UserDefaults = .standard) {
         self.baseURL = baseURL
+        self.userId = userId
         self.session = session
         self.defaults = defaults
         self.selectable = Self.decodeServed(from: defaults) ?? Voice.seed
@@ -50,7 +53,9 @@ final class VoiceCatalog {
     }
 
     private func fetch() async -> [Voice]? {
+        guard let user = userId(), !user.isEmpty else { return nil }
         var request = URLRequest(url: baseURL.appendingPathComponent("tts/voices"))
+        request.setValue(user, forHTTPHeaderField: "X-User-ID")
         request.timeoutInterval = 15
         guard let (data, response) = try? await session.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200,

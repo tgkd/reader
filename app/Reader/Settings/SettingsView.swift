@@ -74,7 +74,10 @@ struct SettingsView: View {
             isSubscribed = await app.services.isSubscribed()
             for await active in app.services.entitlementUpdates() { isSubscribed = active }
         }
-        .task { await app.services.voiceCatalog.refresh() }
+        .task(id: isSubscribed) {
+            guard isSubscribed else { return }
+            await app.services.voiceCatalog.refresh()
+        }
         .onDisappear { demo.stop() }
         .sheet(isPresented: $showingAbout) {
             AboutView()

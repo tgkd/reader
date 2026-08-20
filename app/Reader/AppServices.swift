@@ -30,7 +30,8 @@ final class AppServices {
 
     init() {
         fixtures = FixtureTTSService()
-        voiceCatalog = VoiceCatalog(baseURL: AppServices.workerBaseURL)
+        voiceCatalog = VoiceCatalog(baseURL: AppServices.workerBaseURL,
+                                    userId: { AppServices.userId })
 
         let store = DiskAudioStore()
         audioStore = store
