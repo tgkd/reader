@@ -1,28 +1,33 @@
 import Foundation
 
-public struct Voice: Identifiable, Codable, Equatable, Hashable {
+public struct Voice: Identifiable, Codable, Equatable, Hashable, Sendable {
     public let id: String
     public let name: String
-    public let isPremade: Bool
 
-    public init(id: String, name: String, isPremade: Bool) {
+    public init(id: String, name: String) {
         self.id = id
         self.name = name
-        self.isPremade = isPremade
     }
 
-    public static let shizuka = Voice(id: "WQz3clzUdMqvBf0jswZQ", name: "Shizuka", isPremade: false)
+    public static let shizuka = Voice(id: "WQz3clzUdMqvBf0jswZQ", name: "Shizuka")
 
-    public static let george = Voice(id: "JBFqnCBsd6RMkjVDRZzb", name: "George", isPremade: true)
+    public static let george = Voice(id: "JBFqnCBsd6RMkjVDRZzb", name: "George")
 
-    public static let catalog: [Voice] = [
+    public static let seed: [Voice] = [
         shizuka,
-        Voice(id: "deKmbWEKZdwxcKxxcfvP", name: "Maiko", isPremade: false),
-        Voice(id: "17ljzcHzSunXNkdixIEa", name: "Hirokoji", isPremade: false),
-        Voice(id: "Mv8AjrYZCBkdsmDHNwcB", name: "Ishibashi", isPremade: false),
-        Voice(id: "ss9cJxDAEMXP4wfQ3GPr", name: "Daisuke", isPremade: false),
+        Voice(id: "deKmbWEKZdwxcKxxcfvP", name: "Maiko"),
+        Voice(id: "17ljzcHzSunXNkdixIEa", name: "Hirokoji"),
+        Voice(id: "3JDquces8E8bkmvbh6Bc", name: "Otani"),
+        Voice(id: "T7yYq3WpB94yAuOXraRi", name: "Konoha"),
+    ]
+
+    public static let retired: [Voice] = [
+        Voice(id: "Mv8AjrYZCBkdsmDHNwcB", name: "Ishibashi"),
+        Voice(id: "ss9cJxDAEMXP4wfQ3GPr", name: "Daisuke"),
         george,
     ]
+
+    public static let allKnown: [Voice] = seed + retired
 }
 
 public enum SynthesisLimits {

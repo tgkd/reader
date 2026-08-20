@@ -20,6 +20,7 @@ struct RootView: View {
         .environment(\.theme, app.theme)
         .tint(app.theme.accent)
         .onOpenURL { app.importFile($0) }
+        .task { await app.services.voiceCatalog.refresh() }
         .preferredColorScheme(app.themeName.isDark ? .dark : .light)
         .animation(.easeInOut(duration: 0.25), value: app.route)
         .animation(.easeInOut(duration: 0.25), value: app.themeName)

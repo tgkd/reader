@@ -22,6 +22,7 @@ final class AppServices {
 
     private static func rateKey(_ voice: Voice) -> String { "measuredSecondsPerChar.\(voice.id)" }
     let fixtures: FixtureTTSService
+    let voiceCatalog: VoiceCatalog
     let audioStore: GeneratedAudioStore
     let library: LibraryStore
     let libraryWasCreated: Bool
@@ -29,6 +30,7 @@ final class AppServices {
 
     init() {
         fixtures = FixtureTTSService()
+        voiceCatalog = VoiceCatalog(baseURL: AppServices.workerBaseURL)
 
         let store = DiskAudioStore()
         audioStore = store
@@ -88,7 +90,8 @@ final class AppServices {
     func purgeAudio(for document: Document) async {
         for normalized in Self.purgeableTexts(of: document, in: library.all()) {
             let segments = Chunker.split(normalized, maxChars: SynthesisLimits.maxRequestChars)
-            for voice in Voice.catalog {
+            for id in voiceCatalog.knownIDs {
+                let voice = Voice(id: id, name: "")
                 for key in SynthesisRequest(text: normalized, voice: voice).cacheKeyCandidates {
                     await synthesis.cancelAndWait(key)
                     audioStore.remove(key)

@@ -133,7 +133,7 @@ final class AppModel {
         }
         if defaults.object(forKey: Self.furiganaKey) != nil { showFurigana = defaults.bool(forKey: Self.furiganaKey) }
         if let raw = defaults.string(forKey: Self.voiceKey),
-           let v = Voice.catalog.first(where: { $0.id == raw }) { narrationVoice = v }
+           let v = services.voiceCatalog.voice(id: raw) { narrationVoice = v }
         services.narrationVoice = narrationVoice
     }
 

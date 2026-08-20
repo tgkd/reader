@@ -22,9 +22,11 @@ mkdirSync(OUT, { recursive: true });
 const TEXT = readFileSync((process.env.PROBE_TEXT ?? ''), 'utf8')
   .normalize('NFKC');                       // exactly what the app sends
 const VOICE = 'WQz3clzUdMqvBf0jswZQ';
+const MODEL = process.env.PROBE_MODEL ?? 'eleven_v3';
 const MP3 = 16000;
 const RUNS = 5;
 
+console.log(`model ${MODEL}`);
 console.log(`text ${[...TEXT].length} chars, ${(TEXT.match(/ /g) ?? []).length} spaces after NFKC`);
 console.log(`${RUNS} runs x ~851 credits = ~${RUNS * 851} credits (~$${(RUNS * 851 * 0.00015).toFixed(2)})\n`);
 
@@ -34,7 +36,7 @@ for (let run = 1; run <= RUNS; run++) {
     `https://api.elevenlabs.io/v1/text-to-speech/${VOICE}/stream/with-timestamps?output_format=mp3_44100_128`, {
       method: 'POST', headers: { 'xi-api-key': KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        text: TEXT, model_id: 'eleven_v3', language_code: 'ja',
+        text: TEXT, model_id: MODEL, language_code: 'ja',
         voice_settings: { stability: 0.65, similarity_boost: 0.75, style: 0.0,
                           use_speaker_boost: true, speed: 1.0 },
       }),

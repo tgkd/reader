@@ -260,15 +260,21 @@ PDFKit / networking live in the `app/` target only.
   via the `TTS_MODEL` var), so narration is re-modelled or retuned **without an App Store
   release**. `stream` stays client-sent
   because it declares "I can consume NDJSON" — a fact about the client, not config — and the Worker
-  defaults it too. The Worker allow-lists `voice_id` against the same six ids as `Voice.catalog`;
-  adding a voice needs BOTH. An explicitly-sent `model_id` still wins server-side, for builds
-  shipped before the move — don't "clean that up" until those age out.
+  defaults it too. **The Worker also OWNS the voice line-up** (2026-08-20): `TTS_VOICES` in
+  `src/tts.ts` is the one definition, the allow-list is derived from it, and `GET /tts/voices`
+  serves the selectable subset — so adding or retiring a voice is a deploy, not an App Store
+  release. The client keeps `Voice.seed` only as an offline fallback. A `retired` voice stays
+  allow-listed forever: the cache key includes the voice, so de-listing one would strand paid
+  audio. An explicitly-sent `model_id` still wins server-side, for builds shipped before the
+  move — don't "clean that up" until those age out.
 - **Every `SynthesisRequest` must carry the selected narration voice** (`services.narrationVoice`,
   mirrored from `AppModel`) — the voice is the only thing besides the text in `ContentKey`, so a
   defaulted request silently misses the cache and re-bills synthesis. Current sites: `ReaderModel`
   (eager probe + synth), `AppServices.firstChapterKey` (library ↓ badge; memoized, invalidated on
-  voice change), `purgeAudio` (sweeps ALL `Voice.catalog` voices **x** every key a probe can
-  resolve, i.e. `cacheKeyCandidates` — anything `loadAllowingLegacyModel` finds must be reclaimable).
+  voice change), `purgeAudio` (sweeps `VoiceCatalog.knownIDs` — an append-only union of
+  `Voice.allKnown` and every id ever served — **x** every key a probe can resolve, i.e.
+  `cacheKeyCandidates`; anything `loadAllowingLegacyModel` finds must be reclaimable. It must
+  never depend on the network: purge runs on swipe-to-delete, possibly offline).
 - **The model is NOT in `ContentKey`, and audio outlives model changes.** It used to be, back when
   the app chose it; keying on something the client can't see would make its own cache unnameable,
   and every default change silently re-billed users for chapters they'd already paid for. Builds
@@ -281,16 +287,24 @@ PDFKit / networking live in the `app/` target only.
 - **Narration is Japanese-native by construction, and the Worker's request says so.** The default
   voice is a native JA library voice (an English voice speaking Japanese inherits its phonology:
   English accent + flattened pitch accent, unrecoverable by any parameter), and the Worker pins
-  `language_code: "ja"` — without it the multilingual pipeline resolves kanji through *Chinese*
-  (日本橋 romanizes as "Ri Ben Qiao"). `voice_settings` are sent explicitly so a shared-library
+  `language_code: "ja"` — it was pinned because without it the multilingual pipeline resolved kanji
+  through *Chinese* (日本橋 as "Ri Ben Qiao"). Treat that as why it exists, not as a guarantee it
+  still provides: ElevenLabs documents `language_code` as unsupported on `eleven_multilingual_v2`,
+  and a 2026-08-20 probe read it correctly with AND without the flag (on kana-rich text, the
+  friendly case). Still sent — accepted and free if ignored — but not the defense it reads as. `voice_settings` are sent explicitly so a shared-library
   voice's own saved settings don't decide delivery; they are deliberately NOT in `ContentKey`, so
   retuning them does not invalidate paid audio. **Never send
   `apply_language_text_normalization`** — it is an LLM pass that speaks its own reasoning aloud
   ("Wait, let me redo this properly: …"), 4x duration, one char absorbing 15 s of alignment
   (measured 2026-07-29). The Worker builds the upstream body field by field so it cannot reappear;
   `test/tts.test.ts` there and `WorkerTTSServiceTests` here both assert it stays off the wire.
-  The default model is `eleven_flash_v2_5`; `eleven_v3` must never be it (see
-  `docs/2026-08-03-findings.md`).
+  The default model is `eleven_multilingual_v2` (since 2026-08-20): `eleven_flash_v2_5` reports
+  `can_use_style`/`can_use_speaker_boost` false and SILENTLY DISCARDED two of the five pinned
+  `voice_settings`, and `apply_text_normalization` is Enterprise-only there. `ttsVoiceSettings`
+  now shapes the settings per model so that can't recur. Costs ~2.44x per audio hour. `eleven_v3`
+  is still not the default — its alignment defect has fallen below the client's 1 s guard but not
+  vanished (see `docs/2026-08-03-findings.md` and
+  `.claude/notes/investigations/2026-08-20-elevenlabs-model-and-voice-audit.md`).
 - **Theme via the SwiftUI Environment, not props** — four themes (paper / white / sepia / night).
   Native controls pick up the theme accent from the root-level `.tint` in `RootView` (never
   system blue).
@@ -355,7 +369,7 @@ screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 Simulator
   Swipe-to-delete a row also purges its
   cached narration (`AppServices.purgeAudio`). Settings has a "clear audio cache" control
   (`audioStore.clear()` / `totalBytes()`). Reading font/size/orientation/furigana + theme + the
-  narration voice (by `Voice.catalog` id, falling back to Shizuka) persist via `UserDefaults` in
+  narration voice (by id, resolved through `VoiceCatalog`, falling back to Shizuka) persist via `UserDefaults` in
   `AppModel`. Voice samples in Settings synthesize one fixed sentence per voice through the normal
   gated TTS path and cache content-addressed — first listen bills, replays are free.
 - **Local purchase testing:** `Reader.storekit` is wired into the scheme (run from Xcode, no sandbox

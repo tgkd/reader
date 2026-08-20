@@ -48,7 +48,7 @@ struct SettingsView: View {
 
                 if isSubscribed {
                     sectionHeader(L10n.settingsVoice)
-                    ForEach(Voice.catalog) { voice in
+                    ForEach(app.services.voiceCatalog.selectable) { voice in
                         voiceRow(voice)
                     }
                     Text(L10n.settingsVoiceNote)
@@ -74,6 +74,7 @@ struct SettingsView: View {
             isSubscribed = await app.services.isSubscribed()
             for await active in app.services.entitlementUpdates() { isSubscribed = active }
         }
+        .task { await app.services.voiceCatalog.refresh() }
         .onDisappear { demo.stop() }
         .sheet(isPresented: $showingAbout) {
             AboutView()
