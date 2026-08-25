@@ -62,6 +62,8 @@ final class RubyScrollView: UIScrollView, UIScrollViewDelegate {
     private var lastCrossAxis: CGFloat = -1
     private var chapterID: UUID?
     private var pendingAnchor: Int?
+    private var lastActiveIndex: Int?
+    private var userParked = false
 
     private let readingInset: CGFloat = 30
     private let columnEndInset: CGFloat = 24
@@ -107,8 +109,13 @@ final class RubyScrollView: UIScrollView, UIScrollViewDelegate {
         onVisibleToken(token)
     }
 
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        userParked = true
+        stopFollowing()
+    }
+
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if !decelerate { reportVisibleToken() }
+        reportVisibleToken()
     }
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { reportVisibleToken() }
@@ -133,6 +140,11 @@ final class RubyScrollView: UIScrollView, UIScrollViewDelegate {
         if !sameChapter { pendingAnchor = initialToken }
         self.chapterID = chapterID
         content.keepsPlaceAcrossReflow = sameChapter
+        if !sameChapter { userParked = false }
+        if activeIndex != lastActiveIndex {
+            lastActiveIndex = activeIndex
+            userParked = false
+        }
 
         let orientationChanged = (self.vertical != vertical)
         self.vertical = vertical
@@ -236,7 +248,7 @@ final class RubyScrollView: UIScrollView, UIScrollViewDelegate {
     }
 
     private func ensureFollowing() {
-        guard content.activeLineCenter() != nil else { return }
+        guard !userParked, content.activeLineCenter() != nil else { return }
         if UIAccessibility.isReduceMotionEnabled { jumpToActive(); return }
         settledFrames = 0
         guard followLink == nil else { return }
@@ -301,7 +313,13 @@ private final class FollowTarget: NSObject {
     }
 }
 
+final class TiledTextLayer: CATiledLayer {
+    override class func fadeDuration() -> CFTimeInterval { 0 }
+}
+
 final class RubyContentView: UIView {
+    override class var layerClass: AnyClass { TiledTextLayer.self }
+
     var onTapToken: (Int) -> Void = { _ in }
     var onTapBackground: () -> Void = {}
 
@@ -329,12 +347,18 @@ final class RubyContentView: UIView {
     private var reflowAnchor: Int?
 
     private let highlightLayer = CAShapeLayer()
+    private let drawLock = NSLock()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         isOpaque = false
         contentMode = .redraw
+        if let tiled = layer as? TiledTextLayer {
+            tiled.levelsOfDetail = 1
+            tiled.levelsOfDetailBias = 0
+            tiled.tileSize = CGSize(width: 512, height: 512)
+        }
         highlightLayer.actions = ["path": NSNull()]
         layer.addSublayer(highlightLayer)
         isAccessibilityElement = true
@@ -452,8 +476,10 @@ final class RubyContentView: UIView {
         attributed = out
         tokenRanges = ranges
         framesetter = CTFramesetterCreateWithAttributedString(out)
+        drawLock.lock()
         ctFrame = nil
         frameSize = .zero
+        drawLock.unlock()
 
         accessibilityLabel = spans.map(\.surface).joined()
     }
@@ -477,8 +503,10 @@ final class RubyContentView: UIView {
             ? [kCTFrameProgressionAttributeName: CTFrameProgression.rightToLeft.rawValue] as CFDictionary
             : nil
         let f = CTFramesetterCreateFrame(framesetter, CFRangeMake(0, 0), path, frameAttrs)
+        drawLock.lock()
         ctFrame = f
         frameSize = bounds.size
+        drawLock.unlock()
         lines = (CTFrameGetLines(f) as? [CTLine]) ?? []
         lineOrigins = [CGPoint](repeating: .zero, count: lines.count)
         if !lines.isEmpty { CTFrameGetLineOrigins(f, CFRangeMake(0, 0), &lineOrigins) }
@@ -503,17 +531,23 @@ final class RubyContentView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         highlightLayer.frame = bounds
+        _ = currentFrame()
         setNeedsDisplay()
         updateHighlight()
     }
 
     override func draw(_ rect: CGRect) {
-        guard let ctx = UIGraphicsGetCurrentContext(), let frame = currentFrame() else { return }
+        drawLock.lock()
+        let frame = ctFrame
+        let height = frameSize.height
+        let ink = inkColor.cgColor
+        guard let ctx = UIGraphicsGetCurrentContext(), let frame else { drawLock.unlock(); return }
         ctx.textMatrix = .identity
-        ctx.translateBy(x: 0, y: bounds.height)
+        ctx.translateBy(x: 0, y: height)
         ctx.scaleBy(x: 1, y: -1)
-        ctx.setFillColor(inkColor.cgColor)
+        ctx.setFillColor(ink)
         CTFrameDraw(frame, ctx)
+        drawLock.unlock()
     }
 
     private func updateHighlight() {

@@ -11,6 +11,10 @@ public protocol LibraryStore {
 public extension LibraryStore {
     @discardableResult
     func flush() -> Bool { true }
+
+    func current(_ document: Document) -> Document {
+        all().first { $0.id == document.id } ?? document
+    }
 }
 
 public protocol GeneratedAudioStore {

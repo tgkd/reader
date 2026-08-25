@@ -17,7 +17,9 @@ struct ReaderView: View {
                 if let model {
                     surface(model, safeArea: geo.safeAreaInsets)
                     VStack(spacing: 0) { topBar(model); Spacer() }
-                    VStack(spacing: 0) { Spacer(); transport(model, width: geo.size.width) }
+                    if model.audioState != .locked {
+                        VStack(spacing: 0) { Spacer(); transport(model, width: geo.size.width) }
+                    }
                 } else {
                     ProgressView().tint(theme.muted)
                 }
@@ -75,7 +77,9 @@ struct ReaderView: View {
                     fontScale: app.readingSize.scale,
                     showFurigana: app.showFurigana,
                     topInset: 64 + safeArea.top,
-                    bottomInset: 88 + safeArea.bottom,
+                    bottomInset: model.audioState == .locked
+                        ? safeArea.bottom
+                        : 88 + safeArea.bottom,
                     initialToken: model.initialToken,
                     onTapToken: { model.tapToken($0) },
                     onTapBackground: { model.toggleChrome() },

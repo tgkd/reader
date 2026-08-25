@@ -10,7 +10,7 @@ final class ReaderModel {
     enum LoadState: Equatable { case loading, ready, failed(String) }
     enum AudioState: Equatable { case locked, idle, synthesizing, ready, notGenerated, failed(String) }
 
-    let document: Document
+    private(set) var document: Document
     private let services: AppServices
 
     private(set) var loadState: LoadState = .loading
@@ -29,6 +29,7 @@ final class ReaderModel {
     private(set) var chapterIndex = 0
     private(set) var initialToken: Int?
     private var visibleToken: Int?
+    private var visibleTokenChapter: Int?
     var chaptersVisible = false
 
     private(set) var entry: DictionaryEntry?
@@ -124,7 +125,10 @@ final class ReaderModel {
         chapterTokens = (Normalize.nfkc(text), tokens)
         setTimeline(SpanTimeline(untimedTokens: tokens))
         initialToken = savedToken()
-        visibleToken = initialToken
+        if visibleTokenChapter != chapterIndex {
+            visibleToken = initialToken
+            visibleTokenChapter = chapterIndex
+        }
         loadState = .ready
 
         let request = SynthesisRequest(text: text, voice: services.narrationVoice)
@@ -725,6 +729,7 @@ final class ReaderModel {
         var doc = document
         doc.progress = progress
         services.library.save(doc)
+        document = doc
     }
 
     @discardableResult
@@ -744,6 +749,7 @@ final class ReaderModel {
         var doc = document
         doc.progress = stored
         services.library.save(doc)
+        document = doc
         return true
     }
 

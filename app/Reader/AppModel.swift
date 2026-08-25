@@ -138,7 +138,7 @@ final class AppModel {
     }
 
     func cycleTheme() { themeName = themeName.next }
-    func open(_ document: Document) { route = .reader(document) }
+    func open(_ document: Document) { route = .reader(services.library.current(document)) }
     func backToLibrary() { route = .library }
 
     func importFile(_ url: URL) {
