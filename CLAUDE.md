@@ -132,11 +132,21 @@ PDFKit / networking live in the `app/` target only.
   the moving highlight is a separate `CAShapeLayer` fill so advancing it never repaints the chapter.
   During playback a display-link follow eases `contentOffset` directly (never
   `setContentOffset(animated:)`) to keep the active LINE at screen center, clamped at chapter
-  ends; it yields to manual drags, honors Reduce Motion, and stops itself when settled.
+  ends; it honors Reduce Motion, and stops itself when settled. It yields to manual drags via a
+  `userParked` latch set in `scrollViewWillBeginDragging` and released only when `activeIndex` next
+  moves (or the chapter changes) — guarding merely on `isDragging`/`isDecelerating` is NOT enough,
+  because the link then resumes the instant deceleration ends and hauls the reader back to the
+  highlighted line. Measured before the latch: a 10356 pt pull, on any chapter that had ever been
+  played, since `activeIndex` is cleared only in `openChapter` and so survives pause.
   **`LoadState` (the always-available reading surface) is split from `AudioState`** (the gated synth
   lifecycle: `.locked`/`.idle`/`.synthesizing`/`.ready`/`.notGenerated`/`.failed`). Progress
   writeback goes through `ReadingProgressResolver` (tested), never per frame; free (no-audio)
-  reading persists at least the chapter position.
+  reading persists at least the chapter position. **Open a book through
+  `services.library.current(document)`, never from the `Document` a view is holding** —
+  `RootView` animates the route for 0.25 s, so `LibraryView.onAppear` reloads the list BEFORE the
+  departing reader's `.onDisappear` writes, and the list's copy is then one save stale; that is the
+  "resume is always one position behind" bug. `ReadingProgress` also stores ONE position per book,
+  so moving to another chapter overwrites the previous chapter's offset — by design, not a bug.
 
 - **Chrome (iOS 26 Liquid Glass):** no bars — the reader header is floating glass (circle back
   button, title capsule with chapter subtitle that IS the chapter selector, toggle cluster) and
@@ -172,7 +182,8 @@ PDFKit / networking live in the `app/` target only.
   (`PasteTextView` → `AppModel.importPastedText` — no file; title defaults to the first line;
   never reads `UIPasteboard` programmatically, avoiding the iOS paste banner).
   One `Chapter` per spine item / PDF page (pasted text = one chapter), then any oversized chapter
-  is split into ≤ `Chapter.maxRenderableChars` (~4k) sub-chapters (see the invariant below).
+  is split into ≤ `Chapter.maxRenderableChars` (~4k) sub-chapters at sentence boundaries, titled
+  `"<title> (n)"` (see the invariant below).
 
 - **OCR (cloud-only, subscriber-gated):** pages/spine items with no text layer are OCR'd via
   `WorkerOCRService` → Worker `/pdf/ocr` → Cloudflare AI Gateway. The app posts only
@@ -221,11 +232,21 @@ PDFKit / networking live in the `app/` target only.
   token whose remainder is not kana (掻 ruby'd か inside 掻き立て) is still dropped whole — and the
   join is gated on that SAME composition test, so a refused annotation never costs a lemma or a
   highlight boundary either (ruby 茶碗 over the tokens 御茶 + 碗 leaves both tokens standing).
-- **One CoreText surface per chapter, so chapters are capped at `Chapter.maxRenderableChars` (~4k).**
-  A larger chapter exceeds the platform's max layer/texture size and renders BLANK (and tokenizing +
-  laying it out janks the main thread). Import splits oversized chapters into sub-chapters at
-  paragraph boundaries (reusing `Chunker`); measured on-simulator — do not raise the cap without
-  re-measuring across font sizes.
+- **One CoreText frame per chapter, rasterized through a `CATiledLayer`.** The cap
+  (`Chapter.maxRenderableChars`, ~4k) does NOT keep the surface under the platform texture limit,
+  and never did: measured 2026-08-25, a 4k chapter is 999x44664 px in yokogaki (999x60859 at the
+  large size) and 25311x2100 in tategaki (36333x2100), against a 16384 px limit — a 180-300 MB
+  backing store. 1000 chars is the only cap that fits, with 6.7% to spare. So the cap is a
+  *layout/tokenize* budget, not a texture guard; the texture guard is the tiled layer.
+  `RubyContentView` therefore draws with `CTFrameDraw` into each tile's translated context —
+  pixel-identical to drawing the whole frame in both orientations (0 differing pixels of 210800),
+  and 0.77 ms per tile, off the main thread. **Do not "optimize" that into per-line `CTLineDraw`:**
+  it matches exactly in yokogaki but diverges 16.8% in tategaki, because vertical progression lives
+  in the frame, not the line (`CulledLineDrawProbeTests` pins both halves). `ctFrame`/`frameSize`
+  are read on tile threads, so every mutation of them takes `drawLock`. Import splits oversized
+  chapters at SENTENCE boundaries (`Chunker` breaks on 。！？!? and newline; a single sentence longer
+  than the cap is hard-split, which real prose never triggers). Raising the cap costs main-thread
+  layout, not blank pages; lowering it re-keys `ContentKey` and strands paid audio.
 - **Reader text carries an explicit per-run color; the highlight is a separate `CAShapeLayer`.**
   Don't reintroduce `kCTForegroundColorFromContext` for the base runs — a ruby annotation corrupts
   the context fill, which reads fine in paper/sepia but renders black-on-black in the night theme.
