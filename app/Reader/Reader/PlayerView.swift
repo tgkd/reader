@@ -17,7 +17,7 @@ struct PlayerView: View {
             case .ready: self = .ready
             case .synthesizing: self = .synthesizing
             case .locked: self = .locked
-            case .idle, .notGenerated, .failed: self = .preAudio
+            case .idle, .notGenerated, .interrupted, .failed: self = .preAudio
             }
         }
     }
@@ -102,6 +102,7 @@ struct PlayerView: View {
         case .synthesizing: return L10n.readerGenerating + ", " + percentLabel
         case .locked: return L10n.readerSubscribeTitle
         case .notGenerated: return L10n.readerNotGeneratedTitle
+        case .interrupted: return L10n.readerInterrupted
         case .failed(let msg): return msg
         case .idle: return ""
         }
@@ -228,6 +229,8 @@ struct PlayerView: View {
                     Text(msg)
                 } else if model.audioState == .notGenerated {
                     Text(L10n.readerNotGeneratedTitle)
+                } else if model.audioState == .interrupted {
+                    Text(L10n.readerInterrupted)
                 } else if model.audioState == .idle {
                     Text(L10n.readerIdleEstimate(model.estimatedNarrationMinutes))
                 }

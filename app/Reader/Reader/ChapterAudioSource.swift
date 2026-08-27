@@ -17,6 +17,11 @@ final class ChapterAudioSource: NSObject, AVAssetResourceLoaderDelegate {
         return data.count
     }
 
+    var bytes: Data {
+        lock.lock(); defer { lock.unlock() }
+        return data
+    }
+
     init(expectedBytes: Int) {
         self.estimatedLength = max(expectedBytes, 1)
         self.url = URL(string: "\(Self.scheme)://chapter.mp3")!

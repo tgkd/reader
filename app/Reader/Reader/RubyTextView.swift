@@ -109,6 +109,15 @@ final class RubyScrollView: UIScrollView, UIScrollViewDelegate {
         onVisibleToken(token)
     }
 
+    private func pushVisibleRect() {
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        content.setVisibleRect(convert(bounds, to: content))
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        pushVisibleRect()
+    }
+
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         userParked = true
         stopFollowing()
@@ -214,7 +223,7 @@ final class RubyScrollView: UIScrollView, UIScrollViewDelegate {
                     nextButton.center = CGPoint(x: bounds.width / 2, y: contentH - band / 2)
                 }
             }
-            content.setNeedsDisplay()
+            pushVisibleRect()
         }
 
         if !didPlaceInitialOffset {
@@ -313,13 +322,7 @@ private final class FollowTarget: NSObject {
     }
 }
 
-final class TiledTextLayer: CATiledLayer {
-    override class func fadeDuration() -> CFTimeInterval { 0 }
-}
-
 final class RubyContentView: UIView {
-    override class var layerClass: AnyClass { TiledTextLayer.self }
-
     var onTapToken: (Int) -> Void = { _ in }
     var onTapBackground: () -> Void = {}
 
@@ -349,16 +352,20 @@ final class RubyContentView: UIView {
     private let highlightLayer = CAShapeLayer()
     private let drawLock = NSLock()
 
+    private struct TileKey: Hashable { let col: Int; let row: Int }
+
+    private static let tileSide: CGFloat = 512
+    private let tileQueue = DispatchQueue(label: "app.reader.text-tiles", qos: .userInitiated)
+    private var tileLayers: [TileKey: CALayer] = [:]
+    private var tileGeneration = 0
+    private var tiledSize: CGSize = .zero
+    private var visibleRect: CGRect = .zero
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         isOpaque = false
         contentMode = .redraw
-        if let tiled = layer as? TiledTextLayer {
-            tiled.levelsOfDetail = 1
-            tiled.levelsOfDetailBias = 0
-            tiled.tileSize = CGSize(width: 512, height: 512)
-        }
         highlightLayer.actions = ["path": NSNull()]
         layer.addSublayer(highlightLayer)
         isAccessibilityElement = true
@@ -400,7 +407,7 @@ final class RubyContentView: UIView {
         }
         if structureChanged || inkChanged {
             rebuild()
-            setNeedsDisplay()
+            invalidateTiles()
         }
         self.activeIndex = activeIndex
         updateHighlight()
@@ -532,22 +539,103 @@ final class RubyContentView: UIView {
         super.layoutSubviews()
         highlightLayer.frame = bounds
         _ = currentFrame()
-        setNeedsDisplay()
+        if tiledSize != bounds.size {
+            tiledSize = bounds.size
+            invalidateTiles()
+        } else {
+            refreshTiles()
+        }
         updateHighlight()
     }
 
-    override func draw(_ rect: CGRect) {
-        drawLock.lock()
-        let frame = ctFrame
-        let height = frameSize.height
+    func setVisibleRect(_ rect: CGRect) {
+        visibleRect = rect
+        refreshTiles()
+    }
+
+    private func invalidateTiles() {
+        tileGeneration &+= 1
+        tileLayers.values.forEach { $0.removeFromSuperlayer() }
+        tileLayers.removeAll()
+        refreshTiles()
+    }
+
+    private func refreshTiles() {
+        let side = Self.tileSide
+        guard bounds.width > 1, bounds.height > 1, !visibleRect.isEmpty,
+              let frame = currentFrame() else { return }
+
+        let margin = vertical
+            ? visibleRect.insetBy(dx: -side, dy: 0)
+            : visibleRect.insetBy(dx: 0, dy: -side)
+        let area = margin.intersection(bounds)
+        guard !area.isNull, !area.isEmpty else { return }
+
+        let firstCol = max(0, Int(floor(area.minX / side)))
+        let lastCol = Int(ceil(area.maxX / side)) - 1
+        let firstRow = max(0, Int(floor(area.minY / side)))
+        let lastRow = Int(ceil(area.maxY / side)) - 1
+        guard lastCol >= firstCol, lastRow >= firstRow else { return }
+
+        let canvasHeight = bounds.height
         let ink = inkColor.cgColor
-        guard let ctx = UIGraphicsGetCurrentContext(), let frame else { drawLock.unlock(); return }
-        ctx.textMatrix = .identity
-        ctx.translateBy(x: 0, y: height)
-        ctx.scaleBy(x: 1, y: -1)
-        ctx.setFillColor(ink)
-        CTFrameDraw(frame, ctx)
-        drawLock.unlock()
+        let displayScale = traitCollection.displayScale
+        let scale = displayScale > 0 ? displayScale : (window?.screen.scale ?? 2)
+        let generation = tileGeneration
+
+        var wanted = Set<TileKey>()
+        for row in firstRow...lastRow {
+            for col in firstCol...lastCol {
+                let key = TileKey(col: col, row: row)
+                wanted.insert(key)
+                guard tileLayers[key] == nil else { continue }
+                let rect = CGRect(x: CGFloat(col) * side, y: CGFloat(row) * side,
+                                  width: side, height: side)
+                tileLayers[key] = makeTileLayer(rect)
+                renderTile(key: key, rect: rect, frame: frame, canvasHeight: canvasHeight,
+                           ink: ink, scale: scale, generation: generation)
+            }
+        }
+        for (key, layer) in tileLayers where !wanted.contains(key) {
+            layer.removeFromSuperlayer()
+            tileLayers[key] = nil
+        }
+    }
+
+    private func makeTileLayer(_ rect: CGRect) -> CALayer {
+        let tile = CALayer()
+        tile.frame = rect
+        tile.contentsGravity = .resize
+        tile.actions = ["contents": NSNull(), "position": NSNull(), "bounds": NSNull()]
+        layer.insertSublayer(tile, below: highlightLayer)
+        return tile
+    }
+
+    private func renderTile(key: TileKey, rect: CGRect, frame: CTFrame, canvasHeight: CGFloat,
+                            ink: CGColor, scale: CGFloat, generation: Int) {
+        let side = Self.tileSide
+        tileQueue.async { [weak self] in
+            let pixels = Int((side * scale).rounded())
+            guard pixels > 0,
+                  let ctx = CGContext(data: nil, width: pixels, height: pixels,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                          | CGBitmapInfo.byteOrder32Little.rawValue)
+            else { return }
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.textMatrix = .identity
+            ctx.translateBy(x: -rect.minX, y: -(canvasHeight - rect.minY - side))
+            ctx.setFillColor(ink)
+            CTFrameDraw(frame, ctx)
+            guard let image = ctx.makeImage() else { return }
+            DispatchQueue.main.async {
+                guard let self, self.tileGeneration == generation,
+                      let tile = self.tileLayers[key] else { return }
+                tile.contentsScale = scale
+                tile.contents = image
+            }
+        }
     }
 
     private func updateHighlight() {

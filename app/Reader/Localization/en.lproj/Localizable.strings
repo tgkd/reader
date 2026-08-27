@@ -97,6 +97,7 @@
 "reader.failed.network" = "Can’t reach the narration server — check your connection";
 "reader.failed.subscription" = "Subscription required";
 "reader.failed.allowance" = "You’ve used this month’s narration. Chapters you’ve already generated still play.";
+"reader.interrupted" = "Generation stopped when the app went to the background — tap play to pick it up";
 "reader.nextChapter" = "Next Chapter";
 
 /* Reader — subscription gate (no active `reader Pro` entitlement) */

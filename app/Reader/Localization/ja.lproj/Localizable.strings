@@ -95,6 +95,7 @@
 "reader.failed.network" = "サーバーに接続できません。通信環境をご確認ください";
 "reader.failed.subscription" = "サブスクリプションが必要です";
 "reader.failed.allowance" = "今月の読み上げ生成を使い切りました。生成済みの章は引き続き再生できます";
+"reader.interrupted" = "アプリが背面に回ったため生成が中断しました。再生ボタンで続きから";
 "reader.nextChapter" = "次の章へ";
 
 /* リーダー — 購読ゲート（reader Pro 未加入） */

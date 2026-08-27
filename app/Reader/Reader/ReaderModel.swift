@@ -8,7 +8,9 @@ import struct ReaderCore.Document
 @Observable
 final class ReaderModel {
     enum LoadState: Equatable { case loading, ready, failed(String) }
-    enum AudioState: Equatable { case locked, idle, synthesizing, ready, notGenerated, failed(String) }
+    enum AudioState: Equatable {
+        case locked, idle, synthesizing, ready, notGenerated, interrupted, failed(String)
+    }
 
     private(set) var document: Document
     private let services: AppServices
@@ -49,6 +51,8 @@ final class ReaderModel {
     nonisolated(unsafe) private var mediaResetObserver: NSObjectProtocol?
     private var wasPlayingBeforeInterruption = false
     private var isSwitchingChapter = false
+    private var backgroundedDuringSynthesis = false
+    private var chapterAudioIsPartial = false
     private var chapterTokens: (text: String, tokens: [Token])?
     private var rawChapterTokens: [Chapter.ID: DocumentLexicon.ChapterTokens] = [:]
     private var loadGeneration = 0
@@ -201,8 +205,10 @@ final class ReaderModel {
         switch audioState {
         case .ready: play(); return
         case .synthesizing, .locked: return
-        case .idle, .notGenerated, .failed: break
+        case .idle, .notGenerated, .interrupted, .failed: break
         }
+        if chapterAudioIsPartial { teardownPlayer() }
+        backgroundedDuringSynthesis = false
         synthesisProgress = 0
         audioState = .synthesizing
         chromeVisible = true
@@ -259,7 +265,7 @@ final class ReaderModel {
                 }
                 defer {
                     services.synthesisStream.unsubscribe(key)
-                    if progressive != nil { abortProgressivePlayback() }
+                    if progressive != nil { endProgressivePlayback() }
                 }
                 synth = try await services.synthesis.task(for: request).value
                 endSynthesisProgress(success: true)
@@ -270,10 +276,12 @@ final class ReaderModel {
                 progressive = nil
             } catch is CancellationError {
                 endSynthesisProgress(success: false)
+                discardPartialAudio()
                 if gen == loadGeneration { audioState = .idle }
                 return false
             } catch let e as URLError where e.code == .cancelled {
                 endSynthesisProgress(success: false)
+                discardPartialAudio()
                 if gen == loadGeneration { audioState = .idle }
                 return false
             } catch is FixtureTTSService.FixtureError {
@@ -286,11 +294,13 @@ final class ReaderModel {
                 return false
             } catch is URLError {
                 endSynthesisProgress(success: false)
-                if gen == loadGeneration { audioState = .failed(L10n.readerFailedNetwork) }
+                if gen == loadGeneration { audioState = stateAfterSynthesisFailure(L10n.readerFailedNetwork) }
                 return false
             } catch {
                 endSynthesisProgress(success: false)
-                if gen == loadGeneration { audioState = .failed(error.localizedDescription) }
+                if gen == loadGeneration {
+                    audioState = stateAfterSynthesisFailure(error.localizedDescription)
+                }
                 return false
             }
         }
@@ -595,6 +605,36 @@ final class ReaderModel {
         teardownPlayer()
     }
 
+    private func endProgressivePlayback() {
+        guard let p = progressive, p.isPlaying, player != nil, audioSource === p.source else {
+            abortProgressivePlayback()
+            return
+        }
+        let received = p.source.bytes
+        guard !received.isEmpty else {
+            abortProgressivePlayback()
+            return
+        }
+        swapInExactAudio(received)
+        refreshTimings(p.alignment)
+        let audioSeconds = Double(received.count) / Self.mp3BytesPerSecond
+        duration = audioSeconds
+        generatedTime = audioSeconds
+        currentTime = min(currentTime, audioSeconds)
+        watchForStalledEnd(audioSeconds)
+        chapterAudioIsPartial = true
+        progressive = nil
+    }
+
+    private func discardPartialAudio() {
+        if chapterAudioIsPartial { teardownPlayer() }
+    }
+
+    private func stateAfterSynthesisFailure(_ message: String) -> AudioState {
+        if chapterAudioIsPartial { return .ready }
+        return backgroundedDuringSynthesis ? .interrupted : .failed(message)
+    }
+
     private func refreshTimings(_ alignment: ReaderCore.Alignment) {
         guard let tokens = tokensForSynthesizedText() else { return }
         timeline = SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: alignment))
@@ -616,6 +656,7 @@ final class ReaderModel {
         audioSource = nil
         player = nil
         lastAdvance = nil
+        chapterAudioIsPartial = false
     }
 
     private func seekPlayer(to t: Double) {
@@ -733,6 +774,43 @@ final class ReaderModel {
         if !persistProgress() { persistChapterPosition() }
     }
 
+    func sceneDidEnterBackground() {
+        saveProgressOnLeave()
+        if audioState == .synthesizing { backgroundedDuringSynthesis = true }
+    }
+
+    func reconcileOnForeground() async {
+        guard audioState == .synthesizing || audioState == .interrupted else { return }
+        let gen = loadGeneration
+        let request = SynthesisRequest(text: currentChapter?.text ?? "",
+                                       voice: services.narrationVoice)
+        let key = request.cacheKey
+
+        if let (cachedKey, cached) = services.audioStore.loadAllowingLegacyModel(request) {
+            discardPartialAudio()
+            switch await buildPlayback(from: cached, gen: gen) {
+            case .ready:
+                endSynthesisProgress(success: true)
+                audioState = .ready
+            case .undecodable:
+                services.audioStore.remove(cachedKey)
+            case .aborted:
+                break
+            }
+            return
+        }
+
+        if services.synthesis.isSynthesizing(key) {
+            if audioState == .interrupted { startAudio() }
+            return
+        }
+
+        if audioState == .synthesizing {
+            endSynthesisProgress(success: false)
+            audioState = stateAfterSynthesisFailure(L10n.readerFailedNetwork)
+        }
+    }
+
     func noteVisibleToken(_ index: Int) { visibleToken = index }
 
     private func savedToken() -> Int? {
@@ -842,6 +920,14 @@ final class ReaderModel {
         player?.pause()
         currentTime = duration
         activeIndex = highlightIndex(at: duration)
+        guard !chapterAudioIsPartial else {
+            persistProgress()
+            teardownPlayer()
+            audioState = .interrupted
+            nowPlaying.deactivate()
+            deactivateSession()
+            return
+        }
         persistProgress(completed: true)
         if canGoToNextChapter, nextChapterAudioCached {
             let assertion = BackgroundAssertion(name: "chapter-advance")

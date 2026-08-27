@@ -48,7 +48,11 @@ struct ReaderView: View {
         }
         .onDisappear { model?.stop() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background { model?.saveProgressOnLeave() }
+            switch phase {
+            case .background: model?.sceneDidEnterBackground()
+            case .active: Task { await model?.reconcileOnForeground() }
+            default: break
+            }
         }
         .onChange(of: app.entitlementTick) { _, _ in
             Task { await model?.load() }

@@ -139,7 +139,21 @@ PDFKit / networking live in the `app/` target only.
   highlighted line. Measured before the latch: a 10356 pt pull, on any chapter that had ever been
   played, since `activeIndex` is cleared only in `openChapter` and so survives pause.
   **`LoadState` (the always-available reading surface) is split from `AudioState`** (the gated synth
-  lifecycle: `.locked`/`.idle`/`.synthesizing`/`.ready`/`.notGenerated`/`.failed`). Progress
+  lifecycle: `.locked`/`.idle`/`.synthesizing`/`.ready`/`.notGenerated`/`.interrupted`/`.failed`).
+  **A suspension is not a failure.** Being killed mid-generation by the app going to the background
+  arrives as a `URLError` like any other, and rendering that as terminal `.failed` was the "synthesis
+  error on unlock" bug; `ReaderModel` records that it was backgrounded while `.synthesizing` and
+  routes those through `stateAfterSynthesisFailure` to `.interrupted`, leaving a real network
+  failure looking like one. On return, `ReaderView`'s `scenePhase == .active` branch reconciles
+  before anything is shown: cache first (the run may have completed), then re-attach to a task
+  `SynthesisCoordinator` still holds. **Narration already delivered is kept, not discarded.** If
+  playback had started, the partial is handed to `swapInExactAudio` — NOT sealed in place, because
+  the advertised `contentLength` was an estimate for the whole chapter made before the first byte
+  arrived, and a player that believes the track is longer than it is stalls at the truncated end
+  (`MEDIA_PLAYBACK_STALL`) instead of firing `didPlayToEndTime`. Rebuilt at its true length it
+  reaches a real end, lands in `.interrupted`, and neither auto-advances nor marks the chapter
+  read. It is never saved: a truncated stream must not cache under a key promising a whole chapter.
+  Progress
   writeback goes through `ReadingProgressResolver` (tested), never per frame; free (no-audio)
   reading persists at least the chapter position. **Open a book through
   `services.library.current(document)`, never from the `Document` a view is holding** —
@@ -232,18 +246,33 @@ PDFKit / networking live in the `app/` target only.
   token whose remainder is not kana (掻 ruby'd か inside 掻き立て) is still dropped whole — and the
   join is gated on that SAME composition test, so a refused annotation never costs a lemma or a
   highlight boundary either (ruby 茶碗 over the tokens 御茶 + 碗 leaves both tokens standing).
-- **One CoreText frame per chapter, rasterized through a `CATiledLayer`.** The cap
+- **One CoreText frame per chapter, rasterized through tiles this app owns.** The cap
   (`Chapter.maxRenderableChars`, ~4k) does NOT keep the surface under the platform texture limit,
   and never did: measured 2026-08-25, a 4k chapter is 999x44664 px in yokogaki (999x60859 at the
   large size) and 25311x2100 in tategaki (36333x2100), against a 16384 px limit — a 180-300 MB
   backing store. 1000 chars is the only cap that fits, with 6.7% to spare. So the cap is a
-  *layout/tokenize* budget, not a texture guard; the texture guard is the tiled layer.
+  *layout/tokenize* budget, not a texture guard; the texture guard is the tiling.
   `RubyContentView` therefore draws with `CTFrameDraw` into each tile's translated context —
   pixel-identical to drawing the whole frame in both orientations (0 differing pixels of 210800),
-  and 0.77 ms per tile, off the main thread. **Do not "optimize" that into per-line `CTLineDraw`:**
+  and ~1.7 ms per tile, off the main thread. **Do not "optimize" that into per-line `CTLineDraw`:**
   it matches exactly in yokogaki but diverges 16.8% in tategaki, because vertical progression lives
-  in the frame, not the line (`CulledLineDrawProbeTests` pins both halves). `ctFrame`/`frameSize`
-  are read on tile threads, so every mutation of them takes `drawLock`. Import splits oversized
+  in the frame, not the line (`CulledLineDrawProbeTests` pins both halves).
+  **The tiles are NOT a `CATiledLayer` and must never go back to being one** (2026-08-27): CA draws
+  such a layer on `CAImageProviderThread` and commits a CATransaction there, and that commit
+  flushes pending layout for the WHOLE layer tree — including the SwiftUI host this view lives in.
+  SwiftUI then runs `DisplayList.ViewUpdater` off the main actor and traps in its own
+  `MainActor.assumeIsolated`. It crashed on any hard scrub, with no frame of ours anywhere on the
+  stack: TestFlight 1.10 (76) on iOS 27.0 and the iOS 26.5 simulator both, and the same race left
+  chapters blank when it landed the other way. Tiles are therefore plain `CALayer`s inserted below
+  `highlightLayer`; each is rendered into a raw `CGContext` on a private serial queue and its
+  `contents` assigned on the main thread. That context already has a bottom-left origin, so the
+  `translateBy(0,h)`/`scaleBy(1,-1)` flip the old `draw(_:)` needed for UIKit's flipped context is
+  gone — the tile transform is exactly the one `CulledLineDrawProbeTests` measures.
+  `RubyScrollView.scrollViewDidScroll` decides which tiles are wanted, with one tile of margin
+  along the scroll axis ONLY: margin on both axes costs >100 MB of backing store at @3x. The
+  `CTFrame` and ink colour are captured on the main actor when a tile is scheduled, so the render
+  queue never reads mutable state, and `tileGeneration` discards tiles that land after a reflow.
+  Import splits oversized
   chapters at SENTENCE boundaries (`Chunker` breaks on 。！？!? and newline; a single sentence longer
   than the cap is hard-split, which real prose never triggers). Raising the cap costs main-thread
   layout, not blank pages; lowering it re-keys `ContentKey` and strands paid audio.
