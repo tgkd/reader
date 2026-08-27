@@ -9,14 +9,14 @@ final class AudioCacheTests: XCTestCase {
         var calls: Counter? = nil
         func synthesize(_ request: SynthesisRequest) async throws -> SynthesizedAudio {
             calls?.increment()
-            if let failOn, request.text == failOn { throw FakeError.failed }
+            if let failOn, request.text.value == failOn { throw FakeError.failed }
             if slowByMillis > 0 { try await Task.sleep(nanoseconds: slowByMillis * 1_000_000) }
-            let chars = request.text.map(String.init)
+            let chars = request.text.value.map(String.init)
             let starts = chars.indices.map(Double.init)
             let ends = chars.indices.map { Double($0 + 1) }
-            return SynthesizedAudio(audio: Data(request.text.utf8),
+            return SynthesizedAudio(audio: Data(request.text.value.utf8),
                                     alignment: Alignment(characters: chars, startTimes: starts, endTimes: ends),
-                                    text: request.text)
+                                    text: request.text.value)
         }
     }
     private enum FakeError: Error { case failed }
@@ -31,13 +31,13 @@ final class AudioCacheTests: XCTestCase {
         let recorder: RuleRecorder
         func synthesize(_ request: SynthesisRequest) async throws -> SynthesizedAudio {
             recorder.record(request.pronunciation)
-            let chars = request.text.map(String.init)
+            let chars = request.text.value.map(String.init)
             return SynthesizedAudio(
-                audio: Data(request.text.utf8),
+                audio: Data(request.text.value.utf8),
                 alignment: Alignment(characters: chars,
                                      startTimes: chars.indices.map(Double.init),
                                      endTimes: chars.indices.map { Double($0 + 1) }),
-                text: request.text)
+                text: request.text.value)
         }
     }
 
@@ -63,7 +63,7 @@ final class AudioCacheTests: XCTestCase {
             AppServices.purgeableTexts(of: original, in: [original, reimported]), [],
             "deleting the stale copy must not reclaim audio the new one still keys to")
         XCTAssertEqual(AppServices.purgeableTexts(of: original, in: [original]),
-                       [Normalize.nfkc(text)])
+                       [CanonicalText(text)])
     }
 
     func testPurgeScopeIsDeduplicatedAndRespectsOtherBooks() {
@@ -73,12 +73,12 @@ final class AudioCacheTests: XCTestCase {
         ])
         let other = Document(title: "b", chapters: [Chapter(text: shared)])
         XCTAssertEqual(AppServices.purgeableTexts(of: doc, in: [doc, other]),
-                       [Normalize.nfkc(mine)])
+                       [CanonicalText(mine)])
     }
 
     func testDiskStoreSaveLoadHasRemove() {
         let store = DiskAudioStore()
-        let key = SynthesisRequest(text: "ねこ-\(UUID().uuidString)").cacheKey
+        let key = SynthesisRequest(text: "ねこ-\(UUID().uuidString)", voice: .shizuka).cacheKey
         XCTAssertFalse(store.has(key))
         XCTAssertNil(store.load(key))
 
@@ -101,7 +101,7 @@ final class AudioCacheTests: XCTestCase {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("NarrationTests-\(UUID().uuidString)")
         let store = DiskAudioStore(dir: dir)
-        let key = SynthesisRequest(text: "ねこ-\(UUID().uuidString)").cacheKey
+        let key = SynthesisRequest(text: "ねこ-\(UUID().uuidString)", voice: .shizuka).cacheKey
         let old = SynthesizedAudio(audio: Data([0x49, 0x44, 0x33, 0x04]),
                                    alignment: Alignment(characters: ["旧"], startTimes: [0], endTimes: [1]),
                                    text: "旧")
@@ -126,7 +126,7 @@ final class AudioCacheTests: XCTestCase {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("NarrationTests-\(UUID().uuidString)")
         let store = DiskAudioStore(dir: dir)
-        let key = SynthesisRequest(text: "ねこ-\(UUID().uuidString)").cacheKey
+        let key = SynthesisRequest(text: "ねこ-\(UUID().uuidString)", voice: .shizuka).cacheKey
         let old = SynthesizedAudio(audio: Data([0x49, 0x44, 0x33, 0x04]),
                                    alignment: Alignment(characters: ["旧"], startTimes: [0], endTimes: [1]),
                                    text: "旧")
@@ -155,8 +155,10 @@ final class AudioCacheTests: XCTestCase {
                                      alignment: Alignment(characters: ["あ"], startTimes: [0], endTimes: [1]),
                                      text: "あ")
         let before = store.totalBytes()
-        store.save(audio, for: SynthesisRequest(text: "a-\(UUID().uuidString)").cacheKey)
-        store.save(audio, for: SynthesisRequest(text: "b-\(UUID().uuidString)").cacheKey)
+        store.save(audio, for: SynthesisRequest(text: "a-\(UUID().uuidString)",
+                                               voice: .shizuka).cacheKey)
+        store.save(audio, for: SynthesisRequest(text: "b-\(UUID().uuidString)",
+                                               voice: .shizuka).cacheKey)
         XCTAssertGreaterThan(store.totalBytes(), before)
 
         store.clear()
@@ -170,16 +172,44 @@ final class AudioCacheTests: XCTestCase {
         let segments = Chunker.split(Normalize.nfkc(text), maxChars: 5)
         XCTAssertGreaterThan(segments.count, 1, "text must split into multiple segments")
 
-        let result = try await chunking.synthesize(SynthesisRequest(text: text))
+        let result = try await chunking.synthesize(SynthesisRequest(text: text, voice: .shizuka))
 
         XCTAssertEqual(result.text, Normalize.nfkc(text))
         for segment in segments {
-            XCTAssertFalse(store.has(SynthesisRequest(text: segment).cacheKey),
+            XCTAssertFalse(store.has(SynthesisRequest(text: segment, voice: .shizuka).cacheKey),
                            "segment entry should be pruned after stitch")
         }
-        XCTAssertTrue(store.has(SynthesisRequest(text: text).cacheKey),
+        XCTAssertTrue(store.has(SynthesisRequest(text: text, voice: .shizuka).cacheKey),
                       "the whole chapter must be cached before the segments are pruned")
         XCTAssertEqual(store.count, 1)
+    }
+
+    func testTheChunkedPathNormalizesTheChapterExactlyOnce() async throws {
+        let store = MemoryAudioStore()
+        let chunking = ChunkingTTSService(inner: FakeTTS(), store: store,
+                                          maxChars: 8, maxConcurrent: 2)
+        let text = "ﾊﾞｽに乗った。ﾊﾟﾝを買った。"
+        let canonical = Normalize.nfkc(text)
+        XCTAssertGreaterThan(Chunker.split(canonical, maxChars: 8).count, 1,
+                             "text must split into multiple segments")
+
+        let result = try await chunking.synthesize(SynthesisRequest(text: text, voice: .shizuka))
+
+        XCTAssertEqual(Array(result.text.utf8), Array(canonical.utf8),
+                       "compare bytes: String == is canonical equivalence and passes either way")
+        XCTAssertTrue(store.has(SynthesisRequest(text: text, voice: .shizuka).cacheKey))
+        XCTAssertEqual(store.count, 1)
+    }
+
+    func testPurgeLooksUpTheKeyTheReaderWrote() {
+        let text = "ﾊﾞｽに乗った。"
+        let doc = Document(title: "book", chapters: [Chapter(text: text)])
+        let reader = SynthesisRequest(text: text, voice: .shizuka).cacheKey
+        let purged = AppServices.purgeableTexts(of: doc, in: [doc]).map {
+            SynthesisRequest(canonical: $0, voice: .shizuka).cacheKey
+        }
+        XCTAssertEqual(purged, [reader],
+                       "audio the reader can find must be audio swipe-to-delete can reclaim")
     }
 
     /// A chapter split across requests must still be read with the book's own readings. Every
@@ -199,7 +229,7 @@ final class AudioCacheTests: XCTestCase {
         XCTAssertGreaterThan(segments.count, 1, "text must split into multiple segments")
 
         _ = try await chunking.synthesize(
-            SynthesisRequest(text: text, pronunciation: rules))
+            SynthesisRequest(text: text, voice: .shizuka, pronunciation: rules))
 
         XCTAssertEqual(recorder.seen.count, segments.count)
         for sent in recorder.seen {
@@ -216,12 +246,12 @@ final class AudioCacheTests: XCTestCase {
 
         let chunking = ChunkingTTSService(inner: FakeTTS(calls: calls), store: store,
                                           maxChars: 5, maxConcurrent: 2)
-        let result = try await chunking.synthesize(SynthesisRequest(text: text))
+        let result = try await chunking.synthesize(SynthesisRequest(text: text, voice: .shizuka))
 
         XCTAssertEqual(calls.value, 1, "identical segments must coalesce into one billed request")
         XCTAssertEqual(result.text, Normalize.nfkc(text))
         XCTAssertEqual(result.alignment.characters.count, Normalize.nfkc(text).count)
-        XCTAssertTrue(store.has(SynthesisRequest(text: text).cacheKey))
+        XCTAssertTrue(store.has(SynthesisRequest(text: text, voice: .shizuka).cacheKey))
     }
 
     func testPartialFailureKeepsCachedSegmentsForRetry() async {
@@ -233,12 +263,12 @@ final class AudioCacheTests: XCTestCase {
         let chunking = ChunkingTTSService(inner: FakeTTS(failOn: segments.last!),
                                           store: store, maxChars: 5, maxConcurrent: 1)
         do {
-            _ = try await chunking.synthesize(SynthesisRequest(text: text))
+            _ = try await chunking.synthesize(SynthesisRequest(text: text, voice: .shizuka))
             XCTFail("synthesis should have thrown on the failing segment")
         } catch {}
 
-        XCTAssertTrue(store.has(SynthesisRequest(text: segments.first!).cacheKey))
-        XCTAssertFalse(store.has(SynthesisRequest(text: segments.last!).cacheKey))
+        XCTAssertTrue(store.has(SynthesisRequest(text: segments.first!, voice: .shizuka).cacheKey))
+        XCTAssertFalse(store.has(SynthesisRequest(text: segments.last!, voice: .shizuka).cacheKey))
     }
 
     func testConcurrentSiblingsStillCacheWhenAnotherSegmentFails() async {
@@ -250,13 +280,13 @@ final class AudioCacheTests: XCTestCase {
         let chunking = ChunkingTTSService(inner: FakeTTS(failOn: segments.first!, slowByMillis: 120),
                                           store: store, maxChars: 5, maxConcurrent: 2)
         do {
-            _ = try await chunking.synthesize(SynthesisRequest(text: text))
+            _ = try await chunking.synthesize(SynthesisRequest(text: text, voice: .shizuka))
             XCTFail("synthesis should have thrown on the failing segment")
         } catch {}
 
-        XCTAssertTrue(store.has(SynthesisRequest(text: segments[1]).cacheKey),
+        XCTAssertTrue(store.has(SynthesisRequest(text: segments[1], voice: .shizuka).cacheKey),
                       "an in-flight sibling must finish and cache — it may already have been billed")
-        XCTAssertFalse(store.has(SynthesisRequest(text: segments.first!).cacheKey))
+        XCTAssertFalse(store.has(SynthesisRequest(text: segments.first!, voice: .shizuka).cacheKey))
     }
 
     private func sampleAudio(_ text: String = "あ") -> SynthesizedAudio {
@@ -278,7 +308,7 @@ final class AudioCacheTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let store = DiskAudioStore(dir: dir)
-        store.save(sampleAudio(), for: SynthesisRequest(text: "excluded").cacheKey)
+        store.save(sampleAudio(), for: SynthesisRequest(text: "excluded", voice: .shizuka).cacheKey)
 
         XCTAssertTrue(store.isExcludedFromBackup)
         XCTAssertEqual(
@@ -293,17 +323,17 @@ final class AudioCacheTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let store = DiskAudioStore(dir: dir)
-        store.save(sampleAudio(), for: SynthesisRequest(text: "cleared").cacheKey)
+        store.save(sampleAudio(), for: SynthesisRequest(text: "cleared", voice: .shizuka).cacheKey)
         XCTAssertGreaterThan(store.totalBytes(), 0)
 
         store.clear()
 
         XCTAssertEqual(store.totalBytes(), 0, "the user's manual clear must actually free the space")
-        XCTAssertFalse(store.has(SynthesisRequest(text: "cleared").cacheKey))
+        XCTAssertFalse(store.has(SynthesisRequest(text: "cleared", voice: .shizuka).cacheKey))
         XCTAssertTrue(store.isExcludedFromBackup, "clearing must not re-admit the store to backup")
         // And the store stays usable afterwards rather than needing a relaunch.
-        store.save(sampleAudio(), for: SynthesisRequest(text: "after-clear").cacheKey)
-        XCTAssertTrue(store.has(SynthesisRequest(text: "after-clear").cacheKey))
+        store.save(sampleAudio(), for: SynthesisRequest(text: "after-clear", voice: .shizuka).cacheKey)
+        XCTAssertTrue(store.has(SynthesisRequest(text: "after-clear", voice: .shizuka).cacheKey))
     }
 
     /// The update that moves narration out of Caches must bring the existing narration with it.

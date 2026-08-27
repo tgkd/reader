@@ -274,6 +274,69 @@ final class PronunciationLexiconTests: XCTestCase {
                        "the one-character alias would still match 響 inside other words")
     }
 
+    func testAStandaloneKanjiTokenGetsAContextualBase() {
+        let lex = PronunciationLexicon.build(
+            text: "この糸は己のものだ。",
+            readings: [reading(4, "己", "おれ")],
+            tokens: [Token(surface: "この"), Token(surface: "糸"), Token(surface: "は"),
+                     Token(surface: "己"), Token(surface: "の"), Token(surface: "もの"),
+                     Token(surface: "だ"), Token(surface: "。")])
+
+        XCTAssertEqual(lex.rules, [PronunciationRule(surface: "己の", reading: "おれの")],
+                       "the token IS the kanji, so promotion to it yields nothing; the base has to "
+                           + "widen past the token before it can be sent at all")
+    }
+
+    func testTheContextualBaseIsTheShortestOneThatWorks() {
+        let lex = PronunciationLexicon.build(
+            text: "静かな家に住む。",
+            readings: [reading(3, "家", "うち")],
+            tokens: [Token(surface: "静か"), Token(surface: "な"), Token(surface: "家"),
+                     Token(surface: "に"), Token(surface: "住む"), Token(surface: "。")])
+
+        XCTAssertEqual(lex.rules.map(\.surface), ["家に"],
+                       "widening stops as soon as the base is sendable, and a tie goes to the "
+                           + "window headed by the token the book actually vouched for")
+    }
+
+    func testAContextualBaseCarriesABoundReading() {
+        let lex = PronunciationLexicon.build(
+            text: "詩人面をしたい。",
+            readings: [reading(2, "面", "づら")],
+            tokens: [Token(surface: "詩人"), Token(surface: "面"), Token(surface: "を"),
+                     Token(surface: "し"), Token(surface: "たい"), Token(surface: "。")])
+
+        XCTAssertEqual(lex.rules, [PronunciationRule(surface: "面を", reading: "づらを")],
+                       "づら exists only bound; the phrase is the smallest thing that can carry it")
+    }
+
+    func testAContextualBaseStillNeedsEveryOccurrenceAnnotated() {
+        let lex = PronunciationLexicon.build(
+            text: "己のものだ。己のものだ。",
+            readings: [reading(0, "己", "おれ")],
+            tokens: [Token(surface: "己"), Token(surface: "の"), Token(surface: "もの"),
+                     Token(surface: "だ"), Token(surface: "。"),
+                     Token(surface: "己"), Token(surface: "の"), Token(surface: "もの"),
+                     Token(surface: "だ"), Token(surface: "。")])
+
+        XCTAssertTrue(lex.rules.isEmpty)
+        XCTAssertEqual(lex.rejected.first(where: { $0.surface == "己の" })?.rejection,
+                       .unannotatedOccurrence(count: 1),
+                       "a rule replaces every literal match, so the book must vouch for every one")
+    }
+
+    func testAContextualBaseIsNotBuiltWhereTheBookSaidNothing() {
+        let lex = PronunciationLexicon.build(
+            text: "この糸は己のものだ。",
+            readings: [],
+            tokens: [Token(surface: "この"), Token(surface: "糸"), Token(surface: "は"),
+                     Token(surface: "己"), Token(surface: "の"), Token(surface: "もの"),
+                     Token(surface: "だ"), Token(surface: "。")])
+
+        XCTAssertTrue(lex.rules.isEmpty)
+        XCTAssertTrue(lex.rejected.isEmpty)
+    }
+
     func testAComposedRuleStillNeedsEveryOccurrenceAnnotated() {
         let lex = PronunciationLexicon.build(
             text: "響け。響け。",

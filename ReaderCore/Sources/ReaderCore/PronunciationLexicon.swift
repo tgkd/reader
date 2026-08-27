@@ -53,10 +53,13 @@ public enum PronunciationLexicon {
                               isFlattened: Bool,
                               corroborate: (String) -> String? ) -> Lexicon {
         let parts = texts.map { part -> (normalized: String, spans: [Span], valid: [SourceReading]) in
-            let valid = regrouped(part.readings.validated(against: part.text))
-            var spans = normalizedSpans(valid, in: part.text)
+            let projection = SourceReadingProjection(text: part.text, readings: part.readings)
+            let valid = regrouped(projection.readings)
+            var spans = projection.spans(of: valid).map {
+                Span(start: $0.start, surface: $0.surface, reading: $0.reading)
+            }
             if let tokens = part.tokens {
-                spans = merging(spans, tokenSpans(part.readings, tokens: tokens, text: part.text))
+                spans = merging(spans, tokenSpans(projection, tokens: tokens))
             }
             return (Normalize.nfkc(part.text), spans, valid)
         }
@@ -177,42 +180,61 @@ public enum PronunciationLexicon {
     /// token is `響け → ひびけ` — two characters, kana, and something the gates below can judge on
     /// its merits. Additive: the per-annotation spans stay, so nothing that used to be admitted
     /// stops being admitted.
-    private static func tokenSpans(_ readings: [SourceReading],
-                                   tokens: [Token],
-                                   text: String) -> [Span] {
-        let book = SourceReadingOverlay.bookReadings(readings, tokens: tokens, text: text)
+    private static func tokenSpans(_ projection: SourceReadingProjection,
+                                   tokens: [Token]) -> [Span] {
+        let book = projection.bookReadings(of: tokens)
+        var starts: [Int] = []
+        var cursor = 0
+        for token in tokens {
+            starts.append(cursor)
+            cursor += token.surface.count
+        }
+
         var spans: [Span] = []
-        var offset = 0
         for (i, token) in tokens.enumerated() {
-            let start = offset
-            offset += token.surface.count
             guard let reading = book[i] else { continue }
-            spans.append(Span(start: start, surface: token.surface,
+            spans.append(Span(start: starts[i], surface: token.surface,
                               reading: Normalize.nfkc(reading)))
+            guard token.surface.count == 1,
+                  let wider = contextualSpan(projection, tokens: tokens, starts: starts, around: i)
+            else { continue }
+            spans.append(wider)
         }
         return spans
+    }
+
+    static let maxContextTokens = 2
+    static let maxContextChars = 8
+
+    private static func contextualSpan(_ projection: SourceReadingProjection,
+                                       tokens: [Token],
+                                       starts: [Int],
+                                       around index: Int) -> Span? {
+        var best: Span?
+        let first = max(0, index - maxContextTokens)
+        let last = min(tokens.count - 1, index + maxContextTokens)
+        for lo in stride(from: index, through: first, by: -1) {
+            for hi in index...last {
+                let surface = tokens[lo...hi].map(\.surface).joined()
+                guard surface.count > 1, surface.count <= maxContextChars,
+                      !surface.contains(where: { $0.isWhitespace || $0.isNewline }),
+                      let reading = projection.bookReading(of: tokens, covering: lo...hi,
+                                                           startingAt: starts[lo]),
+                      isKana(reading) else { continue }
+                let normalized = Normalize.nfkc(reading)
+                guard normalized != Normalize.nfkc(surface) else { continue }
+                if best == nil || surface.count < best!.surface.count {
+                    best = Span(start: starts[lo], surface: surface, reading: normalized)
+                }
+            }
+        }
+        return best
     }
 
     private static func merging(_ spans: [Span], _ others: [Span]) -> [Span] {
         func key(_ s: Span) -> String { "\(s.start)\u{1}\(s.surface)\u{1}\(s.reading)" }
         var seen = Set(spans.map(key))
         return spans + others.filter { seen.insert(key($0)).inserted }
-    }
-
-    private static func normalizedSpans(_ readings: [SourceReading], in text: String) -> [Span] {
-        let raw = Array(text)
-        var cache: [Int: Int] = [:]
-        func normalizedOffset(_ rawOffset: Int) -> Int {
-            if let hit = cache[rawOffset] { return hit }
-            let n = Normalize.nfkc(String(raw[0..<rawOffset])).count
-            cache[rawOffset] = n
-            return n
-        }
-        return readings.map {
-            Span(start: normalizedOffset($0.start),
-                 surface: Normalize.nfkc($0.surface),
-                 reading: Normalize.nfkc($0.reading))
-        }
     }
 
     private static func occurrencesOf(_ needle: String, in haystack: String) -> [Int] {

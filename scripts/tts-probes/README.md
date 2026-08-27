@@ -37,8 +37,14 @@ TEST_RUNNER_YOMI_EPUB=<book.epub> xcodebuild test -project app/Reader.xcodeproj 
   -derivedDataPath app/build -only-testing:ReaderTests/RealBookLexiconProbe
 ```
 
-The `TEST_RUNNER_` prefix is load-bearing. Without it the variable never reaches the test
-process, the probe skips, and the run still reports success.
+The `TEST_RUNNER_` prefix used to be load-bearing, and **on Xcode 27 it no longer works at all**:
+measured 2026-08-27, the variable does not reach the test process, `RealBookLexiconProbe` and
+`RealBookRubyProbe` both `XCTSkip`, and the run still reports **TEST SUCCEEDED**. A skipped probe
+is indistinguishable from a passing one unless you read the log for `Test skipped`.
+
+Until the injection is fixed, drive these probes from a test that reads the bundled books through
+`StarterLibrary` instead of an environment variable — `RubyCoverageProbe` does that and runs
+without any env at all.
 
 ## What each one settles
 
@@ -94,6 +100,38 @@ script will happily print a verdict from one.
 the one hole in the inertness argument above, and it is closed with a decoy long enough to be
 unmistakable in the duration, plus a control proving the decoy is audible when its surface really
 is present.
+
+**`build-model-demo`** + **`render-model-demo`** — the listening harness. Nine texts (eight
+recorded misreadings from `docs/2026-08-03-findings.md` §4, plus 200 characters of continuous
+prose) x five configurations: `multilingual_v2` as production sends it, the same plus the alias
+lexicon, `v3_conversational` (0.5x, never auditioned), `eleven_v3`, and `flash_v2_5` as the audio
+older users already have cached. Everything but the model and the dictionary matches production.
+`build-` spends money and writes `audio/` + `cases.json`; `render-` turns that JSON into
+`index.html` and is free, so the page can be reshaped without re-billing. Measurements alone
+cannot answer whether narration got BETTER — that needs ears, and this is what they listen to.
+
+First run, 2026-08-26: `eleven_v3` cleared all eight short cases (max 0.050 s undescribed) and
+then left **1.952 s undescribed on the 200-character prose sample** — above the client's 1.0 s
+guard, i.e. a chapter the app would refuse after paying for it. Length and blanks trigger the
+defect; names never did.
+
+**`build-ruby-loss-demo`** + **`build-ruby-ctx-arm`** + **`render-ruby-loss-demo`** +
+**`render-ruby-verdict`** + **`transcribe-arms.py`** — the harness that settled whether publisher
+ruby the lexicon *cannot* send is audibly lost, and whether a contextual base fixes it. `build-` takes
+the `LOSSJSON` dump from `RubyCoverageProbe` and synthesizes two arms per case (production, and the
+same sentence with the target replaced by its kana); `build-ruby-ctx-arm` adds a third arm through a
+real ElevenLabs dictionary of contextual bases plus a phrase-level reference; `render-` are free and
+reshape the pages without re-billing. `transcribe-arms.py` runs Whisper large-v3 locally over every
+clip.
+
+First run, 2026-08-27, 36 sampled cases: **33 of 35 valid pairs audibly different**, so the tail is
+real. With contextual bases, the reading appeared where it had been absent in **28 of 28** cases that
+needed it, and **nothing was broken** — 30 cases decided by transcript comparison, 6 by ear.
+
+Two things that made the transcription usable. Whisper is a **differential instrument**: one model
+mistakes three clips of one sentence the same way, so a difference between transcripts is evidence
+about pronunciation even when no transcript is correct. And the hiragana `initial_prompt` is
+load-bearing — without it Whisper normalizes to kanji and erases exactly what is being measured.
 
 **`archive-dictionaries`** — cleanup. Dictionaries cannot be deleted, only archived, and an
 archived one 404s at synthesis, so archive nothing that anything might still pin.

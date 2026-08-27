@@ -21,7 +21,8 @@ final class LegacyModelCacheTests: XCTestCase {
         XCTAssertEqual(request.cacheKeyCandidates.first, request.cacheKey)
         XCTAssertEqual(request.legacyCacheKeys,
                        LegacyAudioCache.modelIDs.map {
-                           ContentKey(text: request.text, voice: Voice.shizuka.id, legacyModel: $0)
+                           ContentKey(canonical: request.text, voice: Voice.shizuka.id,
+                                      legacyModel: $0)
                        })
     }
 

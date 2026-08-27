@@ -12,7 +12,7 @@ final class FixtureTTSService: TTSService {
     }
 
     func synthesize(_ request: SynthesisRequest) async throws -> SynthesizedAudio {
-        guard let m = match(text: request.text, voiceId: request.voice.id),
+        guard let m = match(text: request.text.value, voiceId: request.voice.id),
               let mp3 = Bundle.main.url(forResource: m.name, withExtension: "mp3"),
               let audio = try? Data(contentsOf: mp3) else {
             throw FixtureError.notGenerated

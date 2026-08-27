@@ -13,11 +13,16 @@ public struct SynthesizedAudio: Equatable {
 }
 
 public struct SynthesisRequest: Equatable {
-    public let text: String
+    public let text: CanonicalText
     public let voice: Voice
     public let pronunciation: [PronunciationRule]
 
-    public init(text: String, voice: Voice = .shizuka,
+    public init(text: String, voice: Voice,
+                pronunciation: [PronunciationRule] = []) {
+        self.init(canonical: CanonicalText(text), voice: voice, pronunciation: pronunciation)
+    }
+
+    public init(canonical text: CanonicalText, voice: Voice,
                 pronunciation: [PronunciationRule] = []) {
         self.text = text
         self.voice = voice
@@ -25,12 +30,12 @@ public struct SynthesisRequest: Equatable {
     }
 
     public var cacheKey: ContentKey {
-        ContentKey(text: text, voice: voice.id)
+        ContentKey(canonical: text, voice: voice.id)
     }
 
     public var legacyCacheKeys: [ContentKey] {
         LegacyAudioCache.modelIDs.map {
-            ContentKey(text: text, voice: voice.id, legacyModel: $0)
+            ContentKey(canonical: text, voice: voice.id, legacyModel: $0)
         }
     }
 

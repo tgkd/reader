@@ -76,30 +76,33 @@ final class AppServices {
         Purchases.configure(withAPIKey: key)
     }
 
-    nonisolated static func purgeableTexts(of document: Document, in all: [Document]) -> [String] {
+    nonisolated static func purgeableTexts(of document: Document,
+                                           in all: [Document]) -> [CanonicalText] {
         let stillReferenced = Set(
             all.filter { $0.id != document.id }
                .flatMap(\.chapters)
-               .map { Normalize.nfkc($0.text) }
+               .map { CanonicalText($0.text) }
         )
-        var seen = Set<String>()
+        var seen = Set<CanonicalText>()
         return document.chapters
-            .map { Normalize.nfkc($0.text) }
+            .map { CanonicalText($0.text) }
             .filter { !stillReferenced.contains($0) && seen.insert($0).inserted }
     }
 
     func purgeAudio(for document: Document) async {
-        for normalized in Self.purgeableTexts(of: document, in: library.all()) {
-            let segments = Chunker.split(normalized, maxChars: SynthesisLimits.maxRequestChars)
+        for canonical in Self.purgeableTexts(of: document, in: library.all()) {
+            let segments = Chunker.split(canonical.value, maxChars: SynthesisLimits.maxRequestChars)
             for id in voiceCatalog.knownIDs {
                 let voice = Voice(id: id, name: "")
-                for key in SynthesisRequest(text: normalized, voice: voice).cacheKeyCandidates {
+                for key in SynthesisRequest(canonical: canonical, voice: voice).cacheKeyCandidates {
                     await synthesis.cancelAndWait(key)
                     audioStore.remove(key)
                 }
                 if segments.count > 1 {
                     for segment in segments {
-                        for key in SynthesisRequest(text: segment, voice: voice).cacheKeyCandidates {
+                        let request = SynthesisRequest(
+                            canonical: CanonicalText(alreadyCanonical: segment), voice: voice)
+                        for key in request.cacheKeyCandidates {
                             audioStore.remove(key)
                         }
                     }

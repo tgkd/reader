@@ -18,7 +18,7 @@ final class RealBookLexiconProbe: XCTestCase {
         print("LEX chapters \(chapters.count), readings \(readings), "
               + "flattened \(flattened), repaired \(repaired)")
 
-        let lex = await DocumentLexicon.build(for: doc, using: TokenizerWorker())
+        let lex = await DocumentLexicon.build(for: doc, using: TokenizerWorker()).lexicon
 
         let occurrences = { (surface: String) -> Int in
             chapters.reduce(0) { total, c in

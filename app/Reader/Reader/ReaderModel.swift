@@ -50,6 +50,7 @@ final class ReaderModel {
     private var wasPlayingBeforeInterruption = false
     private var isSwitchingChapter = false
     private var chapterTokens: (text: String, tokens: [Token])?
+    private var rawChapterTokens: [Chapter.ID: DocumentLexicon.ChapterTokens] = [:]
     private var loadGeneration = 0
 
     init(document: Document, services: AppServices) {
@@ -157,17 +158,38 @@ final class ReaderModel {
 
     private func pronunciationRules() async -> [PronunciationRule] {
         if let bookLexicon { return bookLexicon }
-        let rules = await DocumentLexicon.build(for: document,
-                                                using: services.tokenizerWorker).rules
-        bookLexicon = rules
-        return rules
+        let built = await DocumentLexicon.build(for: document,
+                                                using: services.tokenizerWorker,
+                                                seeded: rawChapterTokens)
+        rawChapterTokens = built.rawTokensByChapterID
+        bookLexicon = built.lexicon.rules
+        return built.lexicon.rules
     }
 
     private func tokenizeWithSourceReadings(_ text: String) async -> [Token]? {
+        guard let raw = await rawTokens(for: text) else { return nil }
+        return pageTokens(from: raw, text: text)
+    }
+
+    private func rawTokens(for text: String) async -> [Token]? {
+        let normalized = Normalize.nfkc(text)
+        let annotated = currentChapter.map { $0.text == text && !$0.sourceReadings.isEmpty } ?? false
+        if annotated, let chapter = currentChapter,
+           let retained = rawChapterTokens[chapter.id], retained.normalizedText == normalized {
+            return retained.tokens
+        }
         guard let tokens = await services.tokenizerWorker.tokenize(text) else { return nil }
+        if annotated, let chapter = currentChapter {
+            rawChapterTokens[chapter.id] = DocumentLexicon.ChapterTokens(normalizedText: normalized,
+                                                                         tokens: tokens)
+        }
+        return tokens
+    }
+
+    private func pageTokens(from raw: [Token], text: String) -> [Token] {
         guard let chapter = currentChapter, !chapter.sourceReadings.isEmpty,
-              chapter.text == text else { return tokens }
-        return SourceReadingOverlay.apply(chapter.sourceReadings, to: tokens, text: text)
+              chapter.text == text else { return raw }
+        return SourceReadingOverlay.apply(chapter.sourceReadings, to: raw, text: text)
     }
 
     func startAudio() {
@@ -227,7 +249,7 @@ final class ReaderModel {
                 }
             }
             do {
-                beginSynthesisProgress(charCount: request.text.count)
+                beginSynthesisProgress(charCount: request.text.value.count)
                 // Only stream when this reader is the one about to start the task. SynthesisStream
                 // keeps no replay buffer, so joining a run somebody else started delivers the
                 // middle of the chapter as if it were the beginning — play the finished audio
@@ -464,10 +486,10 @@ final class ReaderModel {
     }
 
     private func beginProgressivePlayback(key: ContentKey, request: SynthesisRequest, gen: Int) {
-        let seconds = Double(request.text.count) / Self.charsPerSecondOfSpeech
+        let seconds = Double(request.text.value.count) / Self.charsPerSecondOfSpeech
         progressive = Progressive(
             source: ChapterAudioSource(expectedBytes: Int(seconds * Self.bytesPerSecondOfAudio)),
-            totalChars: Normalize.nfkc(request.text).count)
+            totalChars: request.text.value.count)
         generatedTime = 0
         services.synthesisStream.subscribe(key) { [weak self] audio, alignment in
             MainActor.assumeIsolated { self?.appendStreamed(audio, alignment, gen: gen) }

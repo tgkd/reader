@@ -278,7 +278,7 @@ final class WorkerTTSServiceTests: XCTestCase {
                                     httpVersion: nil, headerFields: nil)!, body)
         }
         do {
-            _ = try await makeService().synthesize(SynthesisRequest(text: "あ"))
+            _ = try await makeService().synthesize(SynthesisRequest(text: "あ", voice: .shizuka))
             XCTFail("expected the request to fail")
         } catch let error as WorkerTTSService.WorkerError {
             guard case .allowanceExhausted(let remaining, let limit) = error else {
@@ -299,7 +299,7 @@ final class WorkerTTSServiceTests: XCTestCase {
                              httpVersion: nil, headerFields: nil)!, Data("not json".utf8))
         }
         do {
-            _ = try await makeService().synthesize(SynthesisRequest(text: "あ"))
+            _ = try await makeService().synthesize(SynthesisRequest(text: "あ", voice: .shizuka))
             XCTFail("expected the request to fail")
         } catch let error as WorkerTTSService.WorkerError {
             XCTAssertEqual(error, .http(402))
@@ -315,7 +315,7 @@ final class WorkerTTSServiceTests: XCTestCase {
                              httpVersion: nil, headerFields: nil)!, Data())
         }
         do {
-            _ = try await makeService().synthesize(SynthesisRequest(text: "あ"))
+            _ = try await makeService().synthesize(SynthesisRequest(text: "あ", voice: .shizuka))
             XCTFail("expected the request to fail")
         } catch let error as WorkerTTSService.WorkerError {
             XCTAssertEqual(error, .subscriptionRequired)

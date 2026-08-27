@@ -274,7 +274,22 @@ PDFKit / networking live in the `app/` target only.
   they don't. The Worker re-validates every rule (kana-only, ≥2 chars, must occur in the
   submitted text, capped) because they are spent against our own account, and resolves the
   surviving set to a pinned locator by canonical hash, so the same text resolves to the same
-  dictionary on every device. Note the occurrence filter runs BEFORE the hash, so identity is
+  dictionary on every device.
+  **A rule's base does not have to be a WORD — it has to be a string whose reading the book
+  vouches for at every occurrence** (2026-08-27). That is why `tokenSpans` widens a
+  single-character annotation past its own token: `己 → おれ` cannot be sent (≥2 chars, and a
+  one-character alias is unsafe as a substring — 橋 inside 日本橋), but `己の → おれの` can, and
+  widening also makes the string rare enough that its only occurrence is the annotated one. The
+  composition is annotations plus literal kana ONLY: filling an unannotated kanji from MeCab and
+  calling it vouched is not proof. Shortest window wins, ties go to the window headed by the
+  annotated token, and the existing gates do the vouching — `unannotatedOccurrence` already IS
+  the "every literal match must agree" check, so nothing was relaxed to make this work. Measured
+  over the eight starter books: rules cover 79% of the sites where MeCab disagrees with the book,
+  up from 44%. Bound readings (`面 → づら`, which exists only inside 横っ面) are legitimate phrase
+  rules, not an excluded class. Still unmeasured, and the reason not to widen further: ElevenLabs'
+  precedence among OVERLAPPING rules is undocumented, and the lexicon already emits overlapping
+  pairs today (飛込 ⊂ 飛込ん, ご馳走 ⊂ 馳走). See
+  `.claude/notes/investigations/2026-08-27-ruby-lexicon-coverage.md`. Note the occurrence filter runs BEFORE the hash, so identity is
   currently per CHAPTER, not per book — deterministic and correct, but it mints one
   undeletable dictionary per chapter read (§11 of the findings doc, incl. the fix). The model,
   `language_code` and the five `voice_settings` live in aiwork's `src/tts.ts` (model overridable

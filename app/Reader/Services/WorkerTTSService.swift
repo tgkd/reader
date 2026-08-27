@@ -97,7 +97,7 @@ final class WorkerTTSService: TTSService {
     }
 
     func synthesize(_ request: SynthesisRequest) async throws -> SynthesizedAudio {
-        let text = Normalize.nfkc(request.text)
+        let text = request.text.value
 
         var req = URLRequest(url: baseURL.appendingPathComponent("tts/aligned"))
         req.httpMethod = "POST"

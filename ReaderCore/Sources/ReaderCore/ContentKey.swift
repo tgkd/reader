@@ -5,11 +5,19 @@ public struct ContentKey: Hashable, CustomStringConvertible {
     public let value: String
 
     public init(text: String, voice: String) {
-        self.init(payload: "\(voice)\u{1f}\(Normalize.nfkc(text))")
+        self.init(canonical: CanonicalText(text), voice: voice)
     }
 
     public init(text: String, voice: String, legacyModel: String) {
-        self.init(payload: "\(legacyModel)\u{1f}\(voice)\u{1f}\(Normalize.nfkc(text))")
+        self.init(canonical: CanonicalText(text), voice: voice, legacyModel: legacyModel)
+    }
+
+    public init(canonical text: CanonicalText, voice: String) {
+        self.init(payload: "\(voice)\u{1f}\(text.value)")
+    }
+
+    public init(canonical text: CanonicalText, voice: String, legacyModel: String) {
+        self.init(payload: "\(legacyModel)\u{1f}\(voice)\u{1f}\(text.value)")
     }
 
     private init(payload: String) {
