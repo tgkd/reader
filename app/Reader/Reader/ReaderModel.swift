@@ -35,6 +35,8 @@ final class ReaderModel {
     var chaptersVisible = false
 
     private(set) var entry: DictionaryEntry?
+    private(set) var lookupChoices: [LookupChoice] = []
+    private(set) var selectedChoice: String = ""
     var sheetVisible = false
 
     private var player: AVPlayer?
@@ -986,17 +988,30 @@ final class ReaderModel {
             isWord: { [weak self] in self?.hasWordChar($0) ?? false },
             info: { [weak self] in self?.services.dictionary.surfaceInfo($0) ?? nil }
         )
-        if let compound = candidates.first, !compound.isSeed,
-           let found = services.dictionary.lookup(dictionaryForm: compound.surface, reading: nil) {
-            entry = found
-            sheetVisible = true
-            return
-        }
         let lemma = span.dictionaryForm ?? span.surface
-        entry = services.dictionary.lookup(dictionaryForm: lemma, reading: span.reading)
-            ?? DictionaryEntry(id: -1, word: span.surface, reading: span.reading ?? "",
-                               senses: [Sense(glosses: [L10n.dictNotFound], partsOfSpeech: ["—"])])
+        let choices = candidates.map { candidate in
+            LookupChoice(surface: candidate.surface,
+                         query: candidate.isSeed ? lemma : candidate.surface,
+                         reading: candidate.isSeed ? span.reading : nil)
+        }
+        lookupChoices = choices.isEmpty
+            ? [LookupChoice(surface: span.surface, query: lemma, reading: span.reading)]
+            : choices
+        resolve(lookupChoices[0])
         sheetVisible = true
+    }
+
+    func selectChoice(_ surface: String) {
+        guard surface != selectedChoice,
+              let choice = lookupChoices.first(where: { $0.surface == surface }) else { return }
+        resolve(choice)
+    }
+
+    private func resolve(_ choice: LookupChoice) {
+        selectedChoice = choice.surface
+        entry = services.dictionary.lookup(dictionaryForm: choice.query, reading: choice.reading)
+            ?? DictionaryEntry(id: -1, word: choice.surface, reading: choice.reading ?? "",
+                               senses: [Sense(glosses: [L10n.dictNotFound], partsOfSpeech: ["—"])])
     }
 
     func pronounceEntry() {

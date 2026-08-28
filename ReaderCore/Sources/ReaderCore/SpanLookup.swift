@@ -104,3 +104,15 @@ public func spanLookupCandidates(
 
     return promoted + [seed] + demoted
 }
+
+public struct LookupChoice: Equatable, Sendable {
+    public let surface: String
+    public let query: String
+    public let reading: String?
+
+    public init(surface: String, query: String, reading: String?) {
+        self.surface = surface
+        self.query = query
+        self.reading = reading
+    }
+}

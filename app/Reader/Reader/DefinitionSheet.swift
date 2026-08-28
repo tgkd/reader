@@ -13,6 +13,8 @@ struct DefinitionSheet: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
 
+                if model.lookupChoices.count > 1 { choiceRow }
+
                 Text(posLabel)
                     .font(.system(size: 12.5).italic()).foregroundStyle(theme.muted)
                     .padding(.top, 10)
@@ -65,6 +67,27 @@ struct DefinitionSheet: View {
             Text(entry?.reading ?? "")
                 .font(app.readingFont.font(14)).foregroundStyle(theme.muted).tracking(1)
         }
+    }
+
+    private var choiceRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.lookupChoices, id: \.surface) { choice in
+                    let isSelected = choice.surface == model.selectedChoice
+                    Button { model.selectChoice(choice.surface) } label: {
+                        Text(choice.surface)
+                            .font(app.readingFont.font(15))
+                            .foregroundStyle(isSelected ? theme.onAccent : theme.ink)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(isSelected ? theme.accent : theme.soft)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.top, 14)
     }
 
     private var posLabel: String {
