@@ -981,6 +981,17 @@ final class ReaderModel {
 
     func tapToken(_ i: Int) {
         guard let span = timeline[i], hasWordChar(span.surface) else { return }
+        let candidates = spanLookupCandidates(
+            spans: timeline.spans, at: i,
+            isWord: { [weak self] in self?.hasWordChar($0) ?? false },
+            info: { [weak self] in self?.services.dictionary.surfaceInfo($0) ?? nil }
+        )
+        if let compound = candidates.first, !compound.isSeed,
+           let found = services.dictionary.lookup(dictionaryForm: compound.surface, reading: nil) {
+            entry = found
+            sheetVisible = true
+            return
+        }
         let lemma = span.dictionaryForm ?? span.surface
         entry = services.dictionary.lookup(dictionaryForm: lemma, reading: span.reading)
             ?? DictionaryEntry(id: -1, word: span.surface, reading: span.reading ?? "",

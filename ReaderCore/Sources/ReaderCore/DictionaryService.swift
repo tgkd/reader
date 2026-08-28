@@ -47,4 +47,9 @@ public struct Example: Equatable {
 
 public protocol DictionaryService {
     func lookup(dictionaryForm: String, reading: String?) -> DictionaryEntry?
+    func surfaceInfo(_ surface: String) -> SurfaceInfo?
+}
+
+public extension DictionaryService {
+    func surfaceInfo(_ surface: String) -> SurfaceInfo? { nil }
 }

@@ -17,6 +17,32 @@ final class SQLiteDictionaryService: DictionaryService {
 
     deinit { sqlite3_close(db) }
 
+    func surfaceInfo(_ surface: String) -> SurfaceInfo? {
+        guard !surface.isEmpty else { return nil }
+        let rows = query("""
+            SELECT w.word AS word, w.priority_rank AS rank, m.part_of_speech AS pos
+            FROM words w LEFT JOIN meanings m ON m.word_id = w.id
+            WHERE w.word = ?1 OR w.reading = ?1 OR w.reading_hiragana = ?1;
+            """, [.text(surface)])
+        guard !rows.isEmpty else { return nil }
+
+        var rank = 999
+        var hasExpression = false
+        var hasNonExpression = false
+        var matchedWord = false
+        for r in rows {
+            if r.text("word") == surface { matchedWord = true }
+            rank = min(rank, r.int("rank") ?? 999)
+            guard let pos = r.text("pos"), !pos.isEmpty else { continue }
+            let codes = pos.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            if codes.contains("exp") { hasExpression = true } else { hasNonExpression = true }
+        }
+        return SurfaceInfo(priorityRank: rank, matchedWord: matchedWord,
+                           matchedReadingOnly: !matchedWord,
+                           hasExpressionSense: hasExpression,
+                           hasNonExpressionSense: hasNonExpression)
+    }
+
     func lookup(dictionaryForm: String, reading: String?) -> DictionaryEntry? {
         let readingHira = reading ?? ""
 
