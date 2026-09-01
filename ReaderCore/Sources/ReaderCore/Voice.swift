@@ -31,7 +31,8 @@ public struct Voice: Identifiable, Codable, Equatable, Hashable, Sendable {
 }
 
 public enum SynthesisLimits {
-    public static let maxRequestChars = 4_500
+    public static let maxRequestChars = 1_500
+    public static let servedRange = 500...5_000
 }
 
 public enum LegacyAudioCache {

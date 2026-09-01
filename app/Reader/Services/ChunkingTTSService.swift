@@ -1,94 +1,109 @@
 import Foundation
+import os
 import ReaderCore
 
 final class ChunkingTTSService: TTSService {
     private let inner: TTSService
     private let store: GeneratedAudioStore?
-    private let maxChars: Int?
-    private let maxConcurrent: Int
+    private let maxChars: @Sendable () -> Int
+    private let onChunk: (@Sendable (ContentKey, Data, Alignment) -> Void)?
 
     init(inner: TTSService, store: GeneratedAudioStore?,
-         maxChars: Int? = nil, maxConcurrent: Int = 2) {
+         maxChars: @escaping @Sendable () -> Int = { VoiceCatalog.maxRequestChars() },
+         onChunk: (@Sendable (ContentKey, Data, Alignment) -> Void)? = nil) {
         self.inner = inner
         self.store = store
         self.maxChars = maxChars
-        self.maxConcurrent = max(1, maxConcurrent)
+        self.onChunk = onChunk
     }
 
     func synthesize(_ request: SynthesisRequest) async throws -> SynthesizedAudio {
         let text = request.text.value
-        let segments = Chunker.split(text, maxChars: maxChars ?? SynthesisLimits.maxRequestChars)
+        let segments = Chunker.split(text, maxChars: maxChars())
         if segments.count <= 1 { return try await withBackoff { try await self.inner.synthesize(request) } }
 
-        let ordered = try await synthesizeSegments(segments, voice: request.voice,
-                                                   pronunciation: request.pronunciation)
+        WorkerTTSService.log.info("""
+            [yomi] chapter.begin parent=\(request.cacheKey.value.prefix(12), privacy: .public) \
+            chars=\(text.count, privacy: .public) segments=\(segments.count, privacy: .public) \
+            sizes=\(segments.map(\.count).description, privacy: .public)
+            """)
+        let ordered = try await synthesizeSegments(segments, request: request)
         let stitched = AlignmentStitcher.stitch(ordered)
         store?.save(stitched, for: request.cacheKey)
         if store?.has(request.cacheKey) != false {
             for segment in segments {
-                store?.remove(SynthesisRequest(canonical: CanonicalText(alreadyCanonical: segment),
-                                               voice: request.voice).cacheKey)
+                store?.remove(segmentRequest(segment, request).cacheKey)
             }
         }
         return stitched
     }
 
+    private func segmentRequest(_ text: String, _ request: SynthesisRequest) -> SynthesisRequest {
+        SynthesisRequest(canonical: CanonicalText(alreadyCanonical: text),
+                         voice: request.voice, pronunciation: request.pronunciation)
+    }
+
     private func synthesizeSegments(_ segments: [String],
-                                    voice: Voice,
-                                    pronunciation: [PronunciationRule]) async throws -> [SynthesizedAudio] {
-        var distinct: [String] = []
-        var slot: [String: Int] = [:]
-        for segment in segments where slot[segment] == nil {
-            slot[segment] = distinct.count
-            distinct.append(segment)
-        }
-        var results = [SynthesizedAudio?](repeating: nil, count: distinct.count)
-        var failure: Error?
+                                    request: SynthesisRequest) async throws -> [SynthesizedAudio] {
+        var ordered: [SynthesizedAudio] = []
+        var billed: [String: SynthesizedAudio] = [:]
+        var offset = 0.0
 
-        await withTaskGroup(of: (Int, Result<SynthesizedAudio, Error>).self) { group in
-            var dispatched = 0
-            func dispatchNext() {
-                guard dispatched < distinct.count, failure == nil else { return }
-                let i = dispatched
-                let text = distinct[i]
-                dispatched += 1
-                group.addTask {
-                    do {
-                        return (i, .success(try await self.synthesizeSegment(
-                            text, voice: voice, pronunciation: pronunciation)))
-                    }
-                    catch { return (i, .failure(error)) }
-                }
+        for segment in segments {
+            let audio: SynthesizedAudio
+            if let done = billed[segment] {
+                audio = done
+                publish(done.audio, done.alignment, to: request.cacheKey, at: offset)
+            } else {
+                audio = try await synthesizeSegment(segment, request: request, at: offset,
+                                                    index: ordered.count, of: segments.count)
+                billed[segment] = audio
             }
-            for _ in 0..<min(maxConcurrent, distinct.count) { dispatchNext() }
-            while let (i, result) = await group.next() {
-                switch result {
-                case .success(let audio): results[i] = audio
-                case .failure(let error): if failure == nil { failure = error }
-                }
-                dispatchNext()
-            }
+            ordered.append(audio)
+            offset += audio.stitchAdvance
         }
-        if let failure { throw failure }
-
-        let assembled = results.compactMap { $0 }
-        guard assembled.count == distinct.count else { throw WorkerTTSService.WorkerError.badResponse }
-        let ordered = segments.compactMap { slot[$0].map { assembled[$0] } }
-        guard ordered.count == segments.count else { throw WorkerTTSService.WorkerError.badResponse }
         return ordered
     }
 
-    private func synthesizeSegment(_ text: String, voice: Voice,
-                                   pronunciation: [PronunciationRule]) async throws -> SynthesizedAudio {
-        let request = SynthesisRequest(canonical: CanonicalText(alreadyCanonical: text),
-                                       voice: voice, pronunciation: pronunciation)
+    private func synthesizeSegment(_ text: String, request: SynthesisRequest,
+                                   at offset: Double, index: Int, of total: Int) async throws -> SynthesizedAudio {
+        let segment = segmentRequest(text, request)
         // Rules are deliberately absent from the key: a segment cached before the book had a
         // lexicon must still be found, exactly as at chapter level.
-        let key = request.cacheKey
-        if let cached = store?.load(key) { return cached }
-        let audio = try await withBackoff { try await self.inner.synthesize(request) }
+        let key = segment.cacheKey
+        let cachedAlready = store?.has(key) ?? false
+        WorkerTTSService.log.info("""
+            [yomi] segment.begin \(index, privacy: .public)/\(total, privacy: .public) \
+            key=\(key.value.prefix(12), privacy: .public) chars=\(text.count, privacy: .public) \
+            offset=\(offset, privacy: .public) cached=\(cachedAlready, privacy: .public)
+            """)
+        if let cached = store?.load(key) {
+            publish(cached.audio, cached.alignment, to: request.cacheKey, at: offset)
+            return cached
+        }
+        let parent = request.cacheKey
+        let sink = onChunk.map { publish -> SynthesisChunkForwarding.Sink in
+            { data, alignment in publish(parent, data, alignment.shifted(by: offset)) }
+        }
+        let audio = try await SynthesisChunkForwarding.$sink.withValue(sink) {
+            try await withBackoff { try await self.inner.synthesize(segment) }
+        }
+        WorkerTTSService.log.info("""
+            [yomi] segment.innerReturned \(index, privacy: .public)/\(total, privacy: .public) \
+            bytes=\(audio.audio.count, privacy: .public)
+            """)
         store?.save(audio, for: key)
+        let landed = store?.has(key) ?? false
+        WorkerTTSService.log.info("""
+            [yomi] segment.cacheSave \(index, privacy: .public)/\(total, privacy: .public) \
+            landed=\(landed, privacy: .public)
+            """)
         return audio
+    }
+
+    private func publish(_ audio: Data, _ alignment: Alignment,
+                         to key: ContentKey, at offset: Double) {
+        onChunk?(key, audio, alignment.shifted(by: offset))
     }
 
     private func withBackoff(_ op: () async throws -> SynthesizedAudio) async throws -> SynthesizedAudio {

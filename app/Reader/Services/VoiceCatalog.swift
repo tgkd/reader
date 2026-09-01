@@ -7,6 +7,7 @@ import ReaderCore
 final class VoiceCatalog {
     private static let servedKey = "reader.voiceCatalog.served"
     private static let knownKey = "reader.voiceCatalog.known"
+    private static let limitKey = "reader.voiceCatalog.maxRequestChars"
 
     private(set) var selectable: [Voice]
 
@@ -28,12 +29,20 @@ final class VoiceCatalog {
     }
 
     func refresh() async {
-        guard let served = await fetch(), !served.isEmpty else { return }
-        selectable = served
-        if let data = try? JSONEncoder().encode(served) {
+        guard let catalog = await fetch(), !catalog.voices.isEmpty else { return }
+        selectable = catalog.voices
+        if let data = try? JSONEncoder().encode(catalog.voices) {
             defaults.set(data, forKey: Self.servedKey)
         }
-        remember(served.map(\.id))
+        if let limit = catalog.maxRequestChars, SynthesisLimits.servedRange.contains(limit) {
+            defaults.set(limit, forKey: Self.limitKey)
+        }
+        remember(catalog.voices.map(\.id))
+    }
+
+    nonisolated static func maxRequestChars(_ defaults: UserDefaults = .standard) -> Int {
+        let served = defaults.integer(forKey: limitKey)
+        return SynthesisLimits.servedRange.contains(served) ? served : SynthesisLimits.maxRequestChars
     }
 
     func voice(id: String) -> Voice? {
@@ -52,7 +61,7 @@ final class VoiceCatalog {
         defaults.set(Array(merged).sorted(), forKey: Self.knownKey)
     }
 
-    private func fetch() async -> [Voice]? {
+    private func fetch() async -> ServedCatalog? {
         guard let user = userId(), !user.isEmpty else { return nil }
         var request = URLRequest(url: baseURL.appendingPathComponent("tts/voices"))
         request.setValue(user, forHTTPHeaderField: "X-User-ID")
@@ -61,7 +70,8 @@ final class VoiceCatalog {
               (response as? HTTPURLResponse)?.statusCode == 200,
               let decoded = try? JSONDecoder().decode(ServedCatalog.self, from: data)
         else { return nil }
-        return decoded.voices.filter { !$0.id.isEmpty && !$0.name.isEmpty }
+        return ServedCatalog(voices: decoded.voices.filter { !$0.id.isEmpty && !$0.name.isEmpty },
+                             maxRequestChars: decoded.maxRequestChars)
     }
 
     private static func decodeServed(from defaults: UserDefaults) -> [Voice]? {
@@ -74,5 +84,11 @@ final class VoiceCatalog {
 
     private struct ServedCatalog: Decodable {
         let voices: [Voice]
+        let maxRequestChars: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case voices
+            case maxRequestChars = "max_request_chars"
+        }
     }
 }

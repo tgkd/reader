@@ -167,7 +167,7 @@ final class AudioCacheTests: XCTestCase {
 
     func testChunkedSynthesisPrunesPerSegmentEntries() async throws {
         let store = MemoryAudioStore()
-        let chunking = ChunkingTTSService(inner: FakeTTS(), store: store, maxChars: 5, maxConcurrent: 2)
+        let chunking = ChunkingTTSService(inner: FakeTTS(), store: store, maxChars: { 5 })
         let text = "あいうえおかきくけこさしすせそたちつてと"
         let segments = Chunker.split(Normalize.nfkc(text), maxChars: 5)
         XCTAssertGreaterThan(segments.count, 1, "text must split into multiple segments")
@@ -187,7 +187,7 @@ final class AudioCacheTests: XCTestCase {
     func testTheChunkedPathNormalizesTheChapterExactlyOnce() async throws {
         let store = MemoryAudioStore()
         let chunking = ChunkingTTSService(inner: FakeTTS(), store: store,
-                                          maxChars: 8, maxConcurrent: 2)
+                                          maxChars: { 8 })
         let text = "ﾊﾞｽに乗った。ﾊﾟﾝを買った。"
         let canonical = Normalize.nfkc(text)
         XCTAssertGreaterThan(Chunker.split(canonical, maxChars: 8).count, 1,
@@ -221,7 +221,7 @@ final class AudioCacheTests: XCTestCase {
         let recorder = RuleRecorder()
         let chunking = ChunkingTTSService(inner: RecordingTTS(recorder: recorder),
                                           store: MemoryAudioStore(),
-                                          maxChars: 5, maxConcurrent: 2)
+                                          maxChars: { 5 })
         let text = "あいうえおかきくけこさしすせそたちつてと"
         let rules = [PronunciationRule(surface: "甲乙", reading: "こうおつ"),
                      PronunciationRule(surface: "丙丁", reading: "へいてい")]
@@ -245,7 +245,7 @@ final class AudioCacheTests: XCTestCase {
         XCTAssertEqual(segments, ["あいう。", "あいう。", "あいう。"])
 
         let chunking = ChunkingTTSService(inner: FakeTTS(calls: calls), store: store,
-                                          maxChars: 5, maxConcurrent: 2)
+                                          maxChars: { 5 })
         let result = try await chunking.synthesize(SynthesisRequest(text: text, voice: .shizuka))
 
         XCTAssertEqual(calls.value, 1, "identical segments must coalesce into one billed request")
@@ -261,7 +261,7 @@ final class AudioCacheTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(segments.count, 2)
 
         let chunking = ChunkingTTSService(inner: FakeTTS(failOn: segments.last!),
-                                          store: store, maxChars: 5, maxConcurrent: 1)
+                                          store: store, maxChars: { 5 })
         do {
             _ = try await chunking.synthesize(SynthesisRequest(text: text, voice: .shizuka))
             XCTFail("synthesis should have thrown on the failing segment")
@@ -271,22 +271,25 @@ final class AudioCacheTests: XCTestCase {
         XCTAssertFalse(store.has(SynthesisRequest(text: segments.last!, voice: .shizuka).cacheKey))
     }
 
-    func testConcurrentSiblingsStillCacheWhenAnotherSegmentFails() async {
+    func testAFailingSegmentStopsTheOnesAfterItFromBeingBilled() async {
         let store = MemoryAudioStore()
+        let calls = Counter()
         let text = "あいうえおかきくけこさしすせそ"
         let segments = Chunker.split(Normalize.nfkc(text), maxChars: 5)
         XCTAssertGreaterThanOrEqual(segments.count, 3)
 
-        let chunking = ChunkingTTSService(inner: FakeTTS(failOn: segments.first!, slowByMillis: 120),
-                                          store: store, maxChars: 5, maxConcurrent: 2)
+        let chunking = ChunkingTTSService(inner: FakeTTS(failOn: segments[1], calls: calls),
+                                          store: store, maxChars: { 5 })
         do {
             _ = try await chunking.synthesize(SynthesisRequest(text: text, voice: .shizuka))
             XCTFail("synthesis should have thrown on the failing segment")
         } catch {}
 
-        XCTAssertTrue(store.has(SynthesisRequest(text: segments[1], voice: .shizuka).cacheKey),
-                      "an in-flight sibling must finish and cache — it may already have been billed")
-        XCTAssertFalse(store.has(SynthesisRequest(text: segments.first!, voice: .shizuka).cacheKey))
+        XCTAssertEqual(calls.value, 2, "segments after the failure must not be billed")
+        XCTAssertTrue(store.has(SynthesisRequest(text: segments[0], voice: .shizuka).cacheKey),
+                      "a segment that succeeded before the failure stays cached for the retry")
+        XCTAssertFalse(store.has(SynthesisRequest(text: segments[1], voice: .shizuka).cacheKey))
+        XCTAssertFalse(store.has(SynthesisRequest(text: segments[2], voice: .shizuka).cacheKey))
     }
 
     private func sampleAudio(_ text: String = "あ") -> SynthesizedAudio {

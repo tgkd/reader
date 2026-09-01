@@ -37,12 +37,13 @@ final class AppServices {
         audioStore = store
 
         let stream = synthesisStream
+        let publish: @Sendable (ContentKey, Data, Alignment) -> Void = { key, audio, alignment in
+            stream.publish(key, audio: audio, alignment: alignment)
+        }
         let worker = WorkerTTSService(
             baseURL: AppServices.workerBaseURL, userId: { AppServices.userId },
-            onChunk: { key, audio, alignment in
-                stream.publish(key, audio: audio, alignment: alignment)
-            })
-        tts = ChunkingTTSService(inner: worker, store: store)
+            onChunk: publish)
+        tts = ChunkingTTSService(inner: worker, store: store, onChunk: publish)
         synthesis = SynthesisCoordinator(tts: tts, store: store)
 
         let libraryStore = DiskLibraryStore(starter: [])
