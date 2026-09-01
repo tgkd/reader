@@ -50,6 +50,17 @@ public enum Furigana {
         }
     }
 
+    public static func hasWordCharacter(_ s: String) -> Bool {
+        s.unicodeScalars.contains { sc in
+            let v = sc.value
+            return (0x3041...0x3096).contains(v)
+                || (0x30A1...0x30FA).contains(v)
+                || isIdeograph(sc)
+                || (0x0030...0x0039).contains(v)
+                || (0x0041...0x005A).contains(v) || (0x0061...0x007A).contains(v)
+        }
+    }
+
     public static func isIdeograph(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
         case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF,

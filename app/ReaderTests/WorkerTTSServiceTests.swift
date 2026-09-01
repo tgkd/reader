@@ -39,6 +39,31 @@ final class WorkerTTSServiceTests: XCTestCase {
         return out
     }
 
+    private func streamed(_ text: String, endTimes: [Double], audioBytesPerChunk: Int) -> Data {
+        var out = Data()
+        let slice = Data(repeating: 0x55, count: audioBytesPerChunk)
+        for (i, ch) in text.enumerated() {
+            let start = i == 0 ? 0 : endTimes[i - 1]
+            let line = """
+            {"audio_base64":"\(slice.base64EncodedString())",\
+            "alignment":{"characters":["\(ch)"],\
+            "character_start_times_seconds":[\(start)],\
+            "character_end_times_seconds":[\(endTimes[i])]}}
+
+            """
+            out.append(Data(line.utf8))
+        }
+        return out
+    }
+
+    private func response(_ body: Data) -> @Sendable (URLRequest) throws -> (HTTPURLResponse, Data) {
+        { request in
+            let resp = HTTPURLResponse(url: request.url!, statusCode: 200,
+                                       httpVersion: nil, headerFields: nil)!
+            return (resp, body)
+        }
+    }
+
     private func alignedResponse(_ text: String = "あ", audioBytesPerChunk: Int = 8_000)
         -> @Sendable (URLRequest) throws -> (HTTPURLResponse, Data) {
         let body = streamed(text, audioBytesPerChunk: audioBytesPerChunk)
@@ -147,6 +172,90 @@ final class WorkerTTSServiceTests: XCTestCase {
         }
     }
 
+    func testRejectsAGenerationThatStoppedTimingSpeech() async {
+        MockURLProtocol.handler = response(
+            streamed("吾輩は猫", endTimes: [0.5, 1.0, 1.0, 1.0], audioBytesPerChunk: 4_000))
+        do {
+            _ = try await makeService().synthesize(
+                SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+            XCTFail("Expected a truncated generation to throw")
+        } catch let error as WorkerTTSService.WorkerError {
+            guard case .truncatedGeneration(let untimed) = error else {
+                return XCTFail("Expected .truncatedGeneration, got \(error)")
+            }
+            XCTAssertEqual(untimed, 2)
+        } catch {
+            XCTFail("Expected a WorkerError, got \(error)")
+        }
+    }
+
+    func testAcceptsAFlatTailThatCarriesNoSpeech() async throws {
+        MockURLProtocol.handler = response(
+            streamed("吾輩は。」", endTimes: [0.5, 1.0, 1.5, 1.5, 1.5], audioBytesPerChunk: 8_000))
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: "吾輩は。」", voice: .shizuka))
+        XCTAssertEqual(out.alignment.untimedTrailingCharacters, 2)
+        XCTAssertEqual(out.alignment.untimedTrailingSpeech, 0)
+    }
+
+    func testAcceptsCompleteAudioWithTrailingSilenceTheAlignmentDoesNotDescribe() async throws {
+        MockURLProtocol.handler = response(
+            streamed("吾輩は猫", endTimes: [0.03, 0.06, 0.09, 0.12], audioBytesPerChunk: 8_000))
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+        XCTAssertEqual(out.audioSeconds - (out.alignment.endTimes.last ?? 0), 1.88, accuracy: 0.01)
+    }
+
+    func testAcceptsAnAlignmentSlightlyAheadOfItsAudio() async throws {
+        MockURLProtocol.handler = response(
+            streamed("吾輩は猫", endTimes: [0.3, 0.6, 0.9, 1.05], audioBytesPerChunk: 4_000))
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+        XCTAssertEqual(out.audioSeconds - (out.alignment.endTimes.last ?? 0), -0.05, accuracy: 0.001)
+    }
+
+    func testRejectsAnAlignmentAheadOfItsAudioBeyondTheTolerance() async {
+        MockURLProtocol.handler = response(
+            streamed("吾輩は猫", endTimes: [0.4, 0.8, 1.2, 1.5], audioBytesPerChunk: 4_000))
+        do {
+            _ = try await makeService().synthesize(
+                SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+            XCTFail("Expected an alignment ahead of the audio to throw")
+        } catch let error as WorkerTTSService.WorkerError {
+            guard case .audioAlignmentMismatch(let seconds) = error else {
+                return XCTFail("Expected .audioAlignmentMismatch, got \(error)")
+            }
+            XCTAssertEqual(seconds, -0.5, accuracy: 0.001)
+        } catch {
+            XCTFail("Expected a WorkerError, got \(error)")
+        }
+    }
+
+    func testAcceptsTrailingAudioJustInsideTheTolerance() async throws {
+        MockURLProtocol.handler = response(
+            streamed("吾輩は猫", endTimes: [0.15, 0.3, 0.45, 0.6], audioBytesPerChunk: 12_000))
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+        XCTAssertEqual(out.audioSeconds - (out.alignment.endTimes.last ?? 0), 2.4, accuracy: 0.001)
+    }
+
+    func testRejectsTrailingAudioBeyondTheTolerance() async {
+        MockURLProtocol.handler = response(
+            streamed("吾輩は猫", endTimes: [0.1, 0.2, 0.3, 0.4], audioBytesPerChunk: 12_000))
+        do {
+            _ = try await makeService().synthesize(
+                SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+            XCTFail("Expected unexplained trailing audio to throw")
+        } catch let error as WorkerTTSService.WorkerError {
+            guard case .audioAlignmentMismatch(let seconds) = error else {
+                return XCTFail("Expected .audioAlignmentMismatch, got \(error)")
+            }
+            XCTAssertEqual(seconds, 2.6, accuracy: 0.001)
+        } catch {
+            XCTFail("Expected a WorkerError, got \(error)")
+        }
+    }
+
     func testRejectsMultiCharacterAlignmentElements() async {
         let body = """
         {"audio_base64":"\(Data([0x55]).base64EncodedString())",\
@@ -235,9 +344,27 @@ final class WorkerTTSServiceTests: XCTestCase {
         XCTAssertEqual(try sentBody()["voice_id"] as? String, Voice.george.id)
     }
 
-    func testChunkCapHoldsForEveryModelTheWorkerMayPick() {
-        XCTAssertLessThan(SynthesisLimits.maxRequestChars, 5_000)
-        XCTAssertLessThanOrEqual(Chapter.maxRenderableChars, SynthesisLimits.maxRequestChars)
+    func testTheFallbackCapStaysWellBelowTheMeasuredTruncationCeiling() {
+        let slowestCharsPerSecond = 3.6
+        let earliestObservedCut = 534.3
+        let predicted = Double(SynthesisLimits.maxRequestChars) / slowestCharsPerSecond
+        XCTAssertLessThan(predicted, earliestObservedCut * 0.8)
+    }
+
+    func testADisplayedChapterAlwaysFitsInOneRequest() {
+        XCTAssertLessThanOrEqual(Chapter.renderableHardMax, SynthesisLimits.maxRequestChars)
+        XCTAssertLessThanOrEqual(Chapter.maxRenderableChars, Chapter.renderableHardMax)
+    }
+
+    func testAServedLimitIsHonouredOnlyInsideTheSanityRange() {
+        let key = "reader.voiceCatalog.maxRequestChars"
+        let defaults = UserDefaults(suiteName: "cap-\(UUID().uuidString)")!
+
+        defaults.set(50_000, forKey: key)
+        XCTAssertEqual(VoiceCatalog.maxRequestChars(defaults), SynthesisLimits.maxRequestChars)
+
+        defaults.set(4_500, forKey: key)
+        XCTAssertEqual(VoiceCatalog.maxRequestChars(defaults), 4_500)
     }
 
     func testOmitsPronunciationRulesWhenTheBookHasNone() async throws {

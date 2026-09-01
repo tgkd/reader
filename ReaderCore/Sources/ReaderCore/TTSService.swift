@@ -5,6 +5,10 @@ public struct SynthesizedAudio: Equatable {
     public let alignment: Alignment
     public let text: String
 
+    public var audioSeconds: Double { NarrationAudio.seconds(bytes: audio.count) }
+
+    public var stitchAdvance: Double { max(audioSeconds, alignment.endTimes.max() ?? 0) }
+
     public init(audio: Data, alignment: Alignment, text: String) {
         self.audio = audio
         self.alignment = alignment

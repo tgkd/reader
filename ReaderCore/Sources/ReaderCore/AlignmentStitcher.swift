@@ -19,7 +19,7 @@ public enum AlignmentStitcher {
             endTimes.append(contentsOf: a.endTimes.map { $0 + offset })
             audio.append(seg.audio)
             text += seg.text
-            offset += a.endTimes.max() ?? 0
+            offset += seg.stitchAdvance
         }
 
         return SynthesizedAudio(

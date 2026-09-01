@@ -1,4 +1,5 @@
 import Foundation
+import os
 import ReaderCore
 
 final class WorkerTTSService: TTSService {
@@ -10,6 +11,7 @@ final class WorkerTTSService: TTSService {
         case truncatedStream
         case misalignedStream
         case audioAlignmentMismatch(seconds: Double)
+        case truncatedGeneration(untimedCharacters: Int)
 
         var errorDescription: String? {
             switch self {
@@ -20,6 +22,7 @@ final class WorkerTTSService: TTSService {
             case .truncatedStream: return "Narration ended early"
             case .misalignedStream: return "Narration timings didn't match the text"
             case .audioAlignmentMismatch: return "Narration timings didn't match the audio"
+            case .truncatedGeneration: return "Narration stopped before the end of the chapter"
             }
         }
     }
@@ -68,8 +71,10 @@ final class WorkerTTSService: TTSService {
         }
     }
 
-    private static let mp3BytesPerSecond = 16_000.0
-    private static let alignmentAudioTolerance = 1.0
+    static let log = Logger(subsystem: "app.reader.app", category: "narration")
+
+    private static let alignmentAheadTolerance = 0.1
+    private static let trailingAudioTolerance = 2.5
 
     private let baseURL: URL
     private let userId: @Sendable () -> String?
@@ -123,22 +128,44 @@ final class WorkerTTSService: TTSService {
 
         let (audio, alignment) = try await accumulate(bytes, expecting: text.count,
                                                       key: request.cacheKey)
-        guard !audio.isEmpty else { throw WorkerError.badResponse }
+        let audioSeconds = NarrationAudio.seconds(bytes: audio.count)
+        let describedSeconds = alignment.endTimes.last ?? 0
+        let delta = audioSeconds - describedSeconds
+        func reject(_ error: WorkerError) -> WorkerError {
+            Self.log.error("""
+                [yomi] synthesis rejected: \(String(describing: error), privacy: .public) \
+                chars=\(text.count, privacy: .public) \
+                labels=\(alignment.characters.count, privacy: .public) \
+                bytes=\(audio.count, privacy: .public) \
+                audioSeconds=\(audioSeconds, privacy: .public) \
+                alignEnd=\(describedSeconds, privacy: .public) \
+                delta=\(delta, privacy: .public) \
+                untimedTail=\(alignment.untimedTrailingCharacters, privacy: .public) \
+                untimedSpeech=\(alignment.untimedTrailingSpeech, privacy: .public)
+                """)
+            return error
+        }
+        guard !audio.isEmpty else { throw reject(.badResponse) }
         guard !alignment.characters.isEmpty,
               alignment.startTimes.count == alignment.characters.count,
               alignment.endTimes.count == alignment.characters.count else {
-            throw WorkerError.badResponse
+            throw reject(.badResponse)
         }
         guard alignment.characters.joined() == text,
               alignment.characters.allSatisfy({ $0.count == 1 }) else {
-            throw WorkerError.misalignedStream
+            throw reject(.misalignedStream)
         }
-        let audioSeconds = Double(audio.count) / Self.mp3BytesPerSecond
-        let describedSeconds = alignment.endTimes.last ?? 0
-        let delta = audioSeconds - describedSeconds
-        guard abs(delta) <= Self.alignmentAudioTolerance else {
-            throw WorkerError.audioAlignmentMismatch(seconds: delta)
+        guard alignment.untimedTrailingSpeech == 0 else {
+            throw reject(.truncatedGeneration(
+                untimedCharacters: alignment.untimedTrailingCharacters))
         }
+        guard delta >= -Self.alignmentAheadTolerance, delta <= Self.trailingAudioTolerance else {
+            throw reject(.audioAlignmentMismatch(seconds: delta))
+        }
+        Self.log.info("""
+            [yomi] synthesis ok chars=\(text.count, privacy: .public) \
+            audioSeconds=\(audioSeconds, privacy: .public) delta=\(delta, privacy: .public)
+            """)
         return SynthesizedAudio(audio: audio, alignment: alignment, text: text)
     }
 
@@ -152,8 +179,11 @@ final class WorkerTTSService: TTSService {
         let decoder = JSONDecoder()
 
         for try await line in bytes.lines {
-            guard !line.isEmpty, let data = line.data(using: .utf8),
-                  let chunk = try? decoder.decode(TimestampedAudio.self, from: data) else { continue }
+            guard !line.isEmpty, let data = line.data(using: .utf8) else { continue }
+            guard let chunk = try? decoder.decode(TimestampedAudio.self, from: data) else {
+                Self.log.error("[yomi] undecodable NDJSON line: \(line.prefix(400), privacy: .public)")
+                continue
+            }
             let slice = Data(base64Encoded: chunk.audioBase64) ?? Data()
             audio.append(slice)
             if let a = chunk.alignment {
@@ -162,11 +192,21 @@ final class WorkerTTSService: TTSService {
                 endTimes.append(contentsOf: a.endTimes)
             }
             onProgress?(Double(characters.count) / Double(max(characterCount, 1)))
-            onChunk?(key, slice, chunk.alignment
-                     ?? Alignment(characters: [], startTimes: [], endTimes: []))
+            let delivered = chunk.alignment ?? Alignment(characters: [], startTimes: [], endTimes: [])
+            if let forward = SynthesisChunkForwarding.sink {
+                forward(slice, delivered)
+            } else {
+                onChunk?(key, slice, delivered)
+            }
         }
 
-        guard characters.count >= characterCount else { throw WorkerError.truncatedStream }
+        guard characters.count >= characterCount else {
+            Self.log.error("""
+                [yomi] truncated stream: labels=\(characters.count, privacy: .public) \
+                expected=\(characterCount, privacy: .public) bytes=\(audio.count, privacy: .public)
+                """)
+            throw WorkerError.truncatedStream
+        }
         return (audio, Alignment(characters: characters, startTimes: startTimes, endTimes: endTimes))
     }
 }

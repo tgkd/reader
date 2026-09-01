@@ -294,11 +294,20 @@ final class ReaderModel {
                 endSynthesisProgress(success: false)
                 if gen == loadGeneration { audioState = .locked }
                 return false
-            } catch is URLError {
+            } catch let error as URLError {
+                WorkerTTSService.log.error("""
+                    [yomi] synthesis URLError \(error.code.rawValue, privacy: .public) \
+                    \(String(reflecting: error), privacy: .public)
+                    """)
                 endSynthesisProgress(success: false)
                 if gen == loadGeneration { audioState = stateAfterSynthesisFailure(L10n.readerFailedNetwork) }
                 return false
             } catch {
+                WorkerTTSService.log.error("""
+                    [yomi] synthesis threw: \(String(reflecting: error), privacy: .public) \
+                    partial=\(self.chapterAudioIsPartial, privacy: .public) \
+                    backgrounded=\(self.backgroundedDuringSynthesis, privacy: .public)
+                    """)
                 endSynthesisProgress(success: false)
                 if gen == loadGeneration {
                     audioState = stateAfterSynthesisFailure(error.localizedDescription)
@@ -342,7 +351,7 @@ final class ReaderModel {
         source.append(synth.audio)
         source.finish()
         attachPlayer(to: source)
-        let audioSeconds = Double(synth.audio.count) / Self.mp3BytesPerSecond
+        let audioSeconds = Double(synth.audio.count) / NarrationAudio.mp3BytesPerSecond
         duration = max(timeline.duration, audioSeconds)
         watchForStalledEnd(audioSeconds)
         recordMeasuredRate()
@@ -452,7 +461,6 @@ final class ReaderModel {
 
     private static let charsPerSecondOfSpeech = 3.5
     private static let bytesPerSecondOfAudio = 20_000.0
-    private static let mp3BytesPerSecond = 16_000.0
     private static let headStartSeconds = 4.0
     private static let timelineRefreshSeconds = 2.0
     private static let estimateEvidenceSeconds = 25.0
@@ -514,7 +522,7 @@ final class ReaderModel {
         p.characters.append(contentsOf: alignment.characters)
         p.startTimes.append(contentsOf: alignment.startTimes)
         p.endTimes.append(contentsOf: alignment.endTimes)
-        generatedTime = Double(p.source.byteCount) / Self.mp3BytesPerSecond
+        generatedTime = Double(p.source.byteCount) / NarrationAudio.mp3BytesPerSecond
         if p.totalChars > 0 {
             synthesisProgress = min(1, Double(p.describedChars) / Double(p.totalChars))
         }
@@ -553,7 +561,7 @@ final class ReaderModel {
         guard gen == loadGeneration, progressive != nil else { return }
         swapInExactAudio(synth.audio)
         refreshTimings(synth.alignment)
-        let audioSeconds = Double(synth.audio.count) / Self.mp3BytesPerSecond
+        let audioSeconds = Double(synth.audio.count) / NarrationAudio.mp3BytesPerSecond
         duration = max(timeline.duration, audioSeconds)
         generatedTime = duration
         // The bytes, not the alignment, decide where the playhead can actually reach: the response
@@ -619,7 +627,7 @@ final class ReaderModel {
         }
         swapInExactAudio(received)
         refreshTimings(p.alignment)
-        let audioSeconds = Double(received.count) / Self.mp3BytesPerSecond
+        let audioSeconds = Double(received.count) / NarrationAudio.mp3BytesPerSecond
         duration = audioSeconds
         generatedTime = audioSeconds
         currentTime = min(currentTime, audioSeconds)
@@ -1030,14 +1038,7 @@ final class ReaderModel {
     }
 
     private func hasWordChar(_ s: String) -> Bool {
-        s.unicodeScalars.contains { sc in
-            let v = sc.value
-            return (0x3041...0x3096).contains(v)
-                || (0x30A1...0x30FA).contains(v)
-                || Furigana.isIdeograph(sc)
-                || (0x0030...0x0039).contains(v)
-                || (0x0041...0x005A).contains(v) || (0x0061...0x007A).contains(v)
-        }
+        Furigana.hasWordCharacter(s)
     }
 }
 

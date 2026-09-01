@@ -17,6 +17,26 @@ public struct Alignment: Codable, Equatable {
         self.endTimes = endTimes
     }
 
+    public var untimedTrailingCharacters: Int {
+        guard characters.count == endTimes.count, !endTimes.isEmpty else { return 0 }
+        var k = endTimes.count
+        while k > 0, endTimes[k - 1] <= (k >= 2 ? endTimes[k - 2] : 0) + 1e-9 { k -= 1 }
+        return endTimes.count - k
+    }
+
+    public var untimedTrailingSpeech: Int {
+        let n = untimedTrailingCharacters
+        guard n > 0 else { return 0 }
+        return characters.suffix(n).filter(Furigana.hasWordCharacter).count
+    }
+
+    public func shifted(by seconds: Double) -> Alignment {
+        guard seconds != 0 else { return self }
+        return Alignment(characters: characters,
+                         startTimes: startTimes.map { $0 + seconds },
+                         endTimes: endTimes.map { $0 + seconds })
+    }
+
     func startTime(at i: Int) -> Double {
         guard !startTimes.isEmpty else { return 0 }
         return startTimes[min(max(i, 0), startTimes.count - 1)]

@@ -29,15 +29,41 @@ final class AlignmentStitcherTests: XCTestCase {
         XCTAssertEqual(out.alignment.characters.count, out.alignment.endTimes.count)
     }
 
-    func testSecondSegmentTimesOffsetByFirstSpokenLength() {
+    private func silence(seconds: Double) -> [UInt8] {
+        [UInt8](repeating: 0, count: Int(seconds * NarrationAudio.mp3BytesPerSecond))
+    }
+
+    func testSecondSegmentTimesOffsetByFirstAudioDuration() {
         let a = segment(chars: ["A", "B"], starts: [0.0, 0.4], ends: [0.4, 0.8],
-                        audio: [0], text: "AB")
+                        audio: silence(seconds: 0.8), text: "AB")
         let b = segment(chars: ["C", "D"], starts: [0.0, 0.5], ends: [0.5, 1.0],
-                        audio: [0], text: "CD")
+                        audio: silence(seconds: 1.0), text: "CD")
         let out = AlignmentStitcher.stitch([a, b])
 
         XCTAssertEqual(out.alignment.startTimes, [0.0, 0.4, 0.8, 1.3])
         XCTAssertEqual(out.alignment.endTimes, [0.4, 0.8, 1.3, 1.8])
+    }
+
+    func testTrailingAudioBeyondTheAlignmentStillOffsetsTheNextSegment() {
+        let a = segment(chars: ["A", "B"], starts: [0.0, 0.4], ends: [0.4, 0.8],
+                        audio: silence(seconds: 2.68), text: "AB")
+        let b = segment(chars: ["C"], starts: [0.0], ends: [0.5],
+                        audio: silence(seconds: 0.5), text: "C")
+        let out = AlignmentStitcher.stitch([a, b])
+
+        XCTAssertEqual(out.alignment.startTimes[2], 2.68, accuracy: 1e-9)
+        XCTAssertEqual(out.alignment.endTimes[2], 3.18, accuracy: 1e-9)
+    }
+
+    func testAlignmentOverrunningItsAudioKeepsTheJoinMonotonic() {
+        let a = segment(chars: ["A"], starts: [0.0], ends: [1.5],
+                        audio: silence(seconds: 0.8), text: "A")
+        let b = segment(chars: ["B"], starts: [0.0], ends: [0.5],
+                        audio: silence(seconds: 0.5), text: "B")
+        let out = AlignmentStitcher.stitch([a, b])
+
+        XCTAssertEqual(out.alignment.startTimes[1], 1.5, accuracy: 1e-9)
+        XCTAssertGreaterThanOrEqual(out.alignment.startTimes[1], out.alignment.endTimes[0])
     }
 
     func testTimesAreMonotonicNonDecreasingAcrossJoin() {

@@ -31,3 +31,5 @@ scripts/tts-probes/out/
 
 # Per-project session memory (handoffs, decisions, investigations)
 .claude/notes/
+.claude/duck/
+.claude/settings.local.json
