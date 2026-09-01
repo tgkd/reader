@@ -23,9 +23,11 @@ a `!` cannot be mangled by a shell:
 
 | variable | used by |
 |---|---|
-| `PROBE_TEXT` | a chapter to synthesize — `model-alignment-repeat`, `lexicon-end-to-end`, `lexicon-excerpt`, `build-sync-viewer` |
+| `PROBE_TEXT` | a chapter to synthesize — `model-alignment-repeat`, `lexicon-end-to-end`, `lexicon-excerpt`, `build-sync-viewer`, `v3-conversational-compare` |
 | `PROBE_RULES` | a JSON array of `{string_to_replace, alias}` — `lexicon-end-to-end` |
 | `PROBE_OUT` | where audio and pages are written |
+| `PROBE_VOICE` | voice id to narrate with — `v3-conversational-compare` |
+| `PROBE_RENDER_ONLY` | rebuild a probe's page from audio already on disk, spending nothing — `v3-conversational-compare` |
 | `AIWORK_DEV_VARS` | path to aiwork's `.dev.vars` — `gateway-management` only |
 
 To get a real rule set out of a real book, run the app-target probe and keep the `LEXJSON`
@@ -132,6 +134,35 @@ Two things that made the transcription usable. Whisper is a **differential instr
 mistakes three clips of one sentence the same way, so a difference between transcripts is evidence
 about pronunciation even when no transcript is correct. And the hiragana `initial_prompt` is
 load-bearing — without it Whisper normalizes to kanji and erases exactly what is being measured.
+
+**`v3-conversational-compare`** — whether `eleven_v3_conversational` can replace `eleven_v3`, which
+is what `TTS_MODEL` names today. It costs half as much per character ($0.05 against $0.10), and the
+question was whether the reader can use it at all: it is documented as tuned for realtime
+conversation, and the whole one-chapter-one-request rule was derived from v3's own alignment
+defects. Measured over 989 characters of book prose, one request each: it accepts
+`with-timestamps` and describes every character, its unlabelled tail is 0.022 s against v3's
+0.076 s, it speaks at the same pace (6.70 against 6.54 chars/s), and it generates 3.6x faster
+(16.2 s against 58.1 s of wall time for ~150 s of speech). Nothing there says how it *reads* —
+that is the listening page it writes, which drives a per-character highlight off each model's own
+alignment so a sync difference is visible rather than argued about.
+
+**And the page immediately found one, which is why conversational is not a recommendation.** Over
+one run of four short quoted lines (`その曲、やめて` / `え?` / `ダフニスとクロエ。嫌い` /
+`あ、すみません`), conversational's alignment places `ダフニスとクロエ。嫌い` at 46.40-47.15 s —
+a window that is a measured 0.60 s of SILENCE in its own audio (pauses at 45.46-45.86,
+46.46-47.06, 49.18-49.80; the line is really spoken in the 47.06-49.18 run) — and gives
+`あ、すみません` 0.28 s for nine characters. From there the alignment runs ~2.3 s ahead of the
+audio and reabsorbs the error across the following 128-character paragraph, which it starts at
+47.52 s against a real 49.80 s and still ends within 0.16 s of the truth. A highlight driven by
+it leads by two seconds and then slides back — visible on the page, and the reason this was not
+caught by the tail measurement, which only looks at the END of the request.
+
+v3's alignment over the same four lines is exact: every line boundary lands within ~0.1 s of a
+real pause (`ダフニスとクロエ。嫌い` 45.88-47.68 against a speech run of 45.96-47.68). So on this
+sample the cheaper model buys its half-price and 3.6x speed with the defect the expensive one no
+longer has, mid-chapter rather than at the tail. Also still unmeasured: the truncation ceiling
+(v3 stops at a measured 546-556 s regardless of submitted length; `TTS_MAX_REQUEST_CHARS` simply
+assumes the same 1500 for conversational) and behaviour on name-dense text.
 
 **`archive-dictionaries`** — cleanup. Dictionaries cannot be deleted, only archived, and an
 archived one 404s at synthesis, so archive nothing that anything might still pin.
