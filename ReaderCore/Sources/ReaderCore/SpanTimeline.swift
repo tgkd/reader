@@ -30,6 +30,27 @@ public struct SpanTimeline: Equatable {
     }
 }
 
+public struct TimelineRefreshPolicy: Equatable, Sendable {
+    public let batchSeconds: Double
+    public let safetySeconds: Double
+
+    public init(batchSeconds: Double, safetySeconds: Double) {
+        self.batchSeconds = batchSeconds
+        self.safetySeconds = safetySeconds
+    }
+
+    public func shouldRebuild(alignedTime: Double,
+                              builtTo: Double,
+                              timedExtent: Double,
+                              playhead: Double,
+                              rate: Double) -> Bool {
+        guard alignedTime > builtTo else { return false }
+        if alignedTime - builtTo >= batchSeconds { return true }
+        guard rate > 0 else { return false }
+        return (timedExtent - playhead) / rate < safetySeconds
+    }
+}
+
 public extension SpanTimeline {
     init(untimedTokens tokens: [Token]) {
         self.init(tokens.enumerated().map { i, t in

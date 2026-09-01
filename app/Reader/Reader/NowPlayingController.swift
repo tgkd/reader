@@ -10,6 +10,8 @@ final class NowPlayingController {
     var onSeek: ((Double) -> Void)?
     var onNextChapter: (() -> Void)?
     var onPreviousChapter: (() -> Void)?
+    var onPlaybackRate: ((Double) -> Void)?
+    var supportedPlaybackRates: [Double] = []
 
     private var tokens: [(MPRemoteCommand, Any)] = []
 
@@ -40,6 +42,19 @@ final class NowPlayingController {
         }
         center.changePlaybackPositionCommand.isEnabled = true
         tokens.append((center.changePlaybackPositionCommand, seekToken))
+
+        let rates = supportedPlaybackRates
+        guard !rates.isEmpty else { return }
+        center.changePlaybackRateCommand.supportedPlaybackRates = rates.map { NSNumber(value: $0) }
+        let rateToken = center.changePlaybackRateCommand.addTarget { [weak self] event in
+            guard let e = event as? MPChangePlaybackRateCommandEvent else { return .commandFailed }
+            let rate = Double(e.playbackRate)
+            guard rates.contains(rate) else { return .commandFailed }
+            Task { @MainActor in self?.onPlaybackRate?(rate) }
+            return .success
+        }
+        center.changePlaybackRateCommand.isEnabled = true
+        tokens.append((center.changePlaybackRateCommand, rateToken))
     }
 
     func deactivate() {

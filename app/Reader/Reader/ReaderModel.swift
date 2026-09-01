@@ -25,7 +25,9 @@ final class ReaderModel {
     private(set) var isPlaying = false
     private(set) var synthesisProgress: Double = 0
 
-    var speed: Double = 1.0
+    static let supportedSpeeds: [Double] = [0.75, 1.0, 1.25, 1.5]
+
+    private(set) var speed: Double = 1.0
     var chromeVisible = true
 
     private(set) var chapterIndex = 0
@@ -83,6 +85,8 @@ final class ReaderModel {
         nowPlaying.onPause = { [weak self] in self?.pause() }
         nowPlaying.onTogglePlayPause = { [weak self] in self?.togglePlay() }
         nowPlaying.onSeek = { [weak self] t in self?.seek(to: t) }
+        nowPlaying.supportedPlaybackRates = Self.supportedSpeeds
+        nowPlaying.onPlaybackRate = { [weak self] r in self?.setSpeed(r) }
         nowPlaying.onNextChapter = { [weak self] in
             guard let self else { return }
             Task { await self.remoteOpenChapter(1) }
@@ -463,6 +467,9 @@ final class ReaderModel {
     private static let bytesPerSecondOfAudio = 20_000.0
     private static let headStartSeconds = 4.0
     private static let timelineRefreshSeconds = 2.0
+    private static let timelineSafetySeconds = 1.5
+    private static let timelineRefresh = TimelineRefreshPolicy(
+        batchSeconds: timelineRefreshSeconds, safetySeconds: timelineSafetySeconds)
     private static let estimateEvidenceSeconds = 25.0
     private static let estimateRefreshSeconds = 20.0
     private static let stallWindowSeconds = 2.5
@@ -529,7 +536,11 @@ final class ReaderModel {
 
         if !p.isPlaying {
             if generatedTime >= Self.headStartSeconds { startProgressivePlayback(p) }
-        } else if p.alignedTime - p.timelineBuiltTo >= Self.timelineRefreshSeconds {
+        } else if Self.timelineRefresh.shouldRebuild(alignedTime: p.alignedTime,
+                                                    builtTo: p.timelineBuiltTo,
+                                                    timedExtent: timeline.timedExtent,
+                                                    playhead: playerTime,
+                                                    rate: speed) {
             p.timelineBuiltTo = p.alignedTime
             refreshTimings(p.alignment)
             if p.alignedTime >= Self.estimateEvidenceSeconds,
@@ -726,6 +737,7 @@ final class ReaderModel {
     }
 
     func setSpeed(_ v: Double) {
+        guard Self.supportedSpeeds.contains(v) else { return }
         speed = v
         player?.defaultRate = Float(v)
         if isPlaying { player?.rate = Float(v) }
