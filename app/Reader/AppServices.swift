@@ -54,7 +54,7 @@ final class AppServices {
         dictionary = sqlite ?? MockDictionaryService.seeded()
     }
 
-    var narrationVoice: Voice = .shizuka {
+    var narrationVoice: Voice = .maiko {
         didSet { if narrationVoice != oldValue { contentKeyCache.removeAll() } }
     }
 

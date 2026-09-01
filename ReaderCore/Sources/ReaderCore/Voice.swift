@@ -9,13 +9,15 @@ public struct Voice: Identifiable, Codable, Equatable, Hashable, Sendable {
         self.name = name
     }
 
+    public static let maiko = Voice(id: "deKmbWEKZdwxcKxxcfvP", name: "Maiko")
+
     public static let shizuka = Voice(id: "WQz3clzUdMqvBf0jswZQ", name: "Shizuka")
 
     public static let george = Voice(id: "JBFqnCBsd6RMkjVDRZzb", name: "George")
 
     public static let seed: [Voice] = [
+        maiko,
         shizuka,
-        Voice(id: "deKmbWEKZdwxcKxxcfvP", name: "Maiko"),
         Voice(id: "17ljzcHzSunXNkdixIEa", name: "Hirokoji"),
         Voice(id: "3JDquces8E8bkmvbh6Bc", name: "Otani"),
         Voice(id: "T7yYq3WpB94yAuOXraRi", name: "Konoha"),

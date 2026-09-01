@@ -71,7 +71,7 @@ final class AppModel {
     var showFurigana: Bool = true {
         didSet { UserDefaults.standard.set(showFurigana, forKey: Self.furiganaKey) }
     }
-    var narrationVoice: Voice = .shizuka {
+    var narrationVoice: Voice = .maiko {
         didSet {
             UserDefaults.standard.set(narrationVoice.id, forKey: Self.voiceKey)
             services.narrationVoice = narrationVoice
@@ -128,7 +128,12 @@ final class AppModel {
         }
         if defaults.object(forKey: Self.furiganaKey) != nil { showFurigana = defaults.bool(forKey: Self.furiganaKey) }
         if let raw = defaults.string(forKey: Self.voiceKey),
-           let v = services.voiceCatalog.voice(id: raw) { narrationVoice = v }
+           let v = services.voiceCatalog.voice(id: raw) {
+            narrationVoice = v
+        } else {
+            narrationVoice = services.libraryWasCreated ? .maiko : .shizuka
+            defaults.set(narrationVoice.id, forKey: Self.voiceKey)
+        }
         services.narrationVoice = narrationVoice
     }
 

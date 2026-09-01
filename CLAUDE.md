@@ -452,8 +452,11 @@ screenshots — see `scripts/uitest/README.md` (incl. the Xcode-26+/27 Simulator
   Swipe-to-delete a row also purges its
   cached narration (`AppServices.purgeAudio`). Settings has a "clear audio cache" control
   (`audioStore.clear()` / `totalBytes()`). Reading font/size/orientation/furigana + theme + the
-  narration voice (by id, resolved through `VoiceCatalog`, falling back to Shizuka) persist via `UserDefaults` in
-  `AppModel`. Voice samples in Settings synthesize one fixed sentence per voice through the normal
+  narration voice (by id, resolved through `VoiceCatalog`) persist via `UserDefaults` in
+  `AppModel`. The default is **Maiko**, and only for a FRESH install: `AppModel.init` pins the
+  voice on first launch — Maiko when `libraryWasCreated`, Shizuka (the default before
+  2026-09-01) otherwise — and writes it, because moving an existing install onto a new default
+  would re-key `ContentKey` and re-bill every chapter already paid for. Voice samples in Settings synthesize one fixed sentence per voice through the normal
   gated TTS path and cache content-addressed — first listen bills, replays are free.
 - **Local purchase testing:** `Reader.storekit` is wired into the scheme (run from Xcode, no sandbox
   account needed). The paywall is crash-guarded when RevenueCat is unconfigured. The RevenueCat key
