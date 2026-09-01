@@ -33,6 +33,60 @@ public enum Chunker {
         return segments
     }
 
+    public static func splitForReading(_ text: String, target: Int, hardMax: Int) -> [String] {
+        precondition(target > 0 && hardMax >= target, "hardMax must be at least target")
+        if text.isEmpty { return [] }
+        if text.count <= hardMax { return [text] }
+
+        var units: [String] = []
+        for paragraph in paragraphUnits(text) {
+            if paragraph.count <= hardMax { units.append(paragraph); continue }
+            for sentence in sentenceUnits(paragraph) {
+                if sentence.count <= hardMax { units.append(sentence) }
+                else { units.append(contentsOf: hardSplit(sentence, maxChars: hardMax)) }
+            }
+        }
+
+        var blocks: [String] = []
+        var current = ""
+        for unit in units {
+            if !current.isEmpty && current.count + unit.count > hardMax {
+                blocks.append(current); current = ""
+            }
+            current += unit
+            if current.count >= target { blocks.append(current); current = "" }
+        }
+        if !current.isEmpty {
+            if let last = blocks.last, last.count + current.count <= hardMax {
+                blocks[blocks.count - 1] = last + current
+            } else {
+                blocks.append(current)
+            }
+        }
+        return blocks
+    }
+
+    private static func paragraphUnits(_ text: String) -> [String] {
+        var units: [String] = []
+        var unit = ""
+        var sawBreak = false
+        for ch in text {
+            if ch == "\n" {
+                unit.append(ch)
+                sawBreak = true
+                continue
+            }
+            if sawBreak, !unit.isEmpty {
+                units.append(unit)
+                unit = ""
+            }
+            sawBreak = false
+            unit.append(ch)
+        }
+        if !unit.isEmpty { units.append(unit) }
+        return units
+    }
+
     private static func sentenceUnits(_ text: String) -> [String] {
         let terminators: Set<Character> = ["。", "！", "？", "!", "?", "\n"]
         var units: [String] = []

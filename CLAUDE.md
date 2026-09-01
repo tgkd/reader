@@ -66,11 +66,16 @@ PDFKit / networking live in the `app/` target only.
   at all. Chunk timestamps are ABSOLUTE, so the client concatenates rather than stitches, and a
   short reassembly is rejected — a truncated stream is internally consistent and would
   otherwise cache as a complete chapter missing its tail) →
-  wrapped by `ChunkingTTSService` (splits chapters over `SynthesisLimits.maxRequestChars` — one
-  constant, held under `eleven_v3`'s 5k since the client no longer knows which model the Worker
-  picks and the models' limits differ 8x; in practice chapters are capped below it so the chunked
-  path never fires,
-  bounded concurrency ~2, exponential 429 backoff on **both** the chunked and single-request paths;
+  wrapped by `ChunkingTTSService` — **dormant by design since 2026-09-01**: a displayed chapter is
+  capped at `Chapter.renderableHardMax` (1400) which is below `SynthesisLimits.maxRequestChars`
+  (1500, or whatever `/tts/voices` serves for the configured model), so **one chapter is exactly one
+  request** and the chunked path never fires. That is not an optimization — `eleven_v3` ends every
+  request with 1.5-2.2 s of speech its alignment does not describe, so each extra request would put
+  another mid-chapter freeze of the highlight into the book. See
+  `.claude/notes/investigations/2026-09-01-v3-unlabelled-tail-and-one-request-per-chapter.md`.
+  If it does fire it is sequential and publishes under the PARENT key with a running
+  `SynthesizedAudio.stitchAdvance` offset, so what the reader streams equals what is sealed;
+  exponential 429 backoff on **both** the chunked and single-request paths;
   saves the whole chapter durably **before** pruning per-segment entries; then `AlignmentStitcher`
   stitches) → cached by `DiskAudioStore`, content-addressed by
   `ContentKey = sha256(voice + nfkc(text))`, so re-reads play offline for free.
@@ -196,8 +201,11 @@ PDFKit / networking live in the `app/` target only.
   (`PasteTextView` → `AppModel.importPastedText` — no file; title defaults to the first line;
   never reads `UIPasteboard` programmatically, avoiding the iOS paste banner).
   One `Chapter` per spine item / PDF page (pasted text = one chapter), then any oversized chapter
-  is split into ≤ `Chapter.maxRenderableChars` (~4k) sub-chapters at sentence boundaries, titled
-  `"<title> (n)"` (see the invariant below).
+  is split into sub-chapters of about `Chapter.maxRenderableChars` (1000, hard cap
+  `Chapter.renderableHardMax` 1400) by `Chunker.splitForReading`, titled `"<title> (n)"`.
+  It cuts at a **paragraph** boundary, falls back to a sentence, and hard-splits only a sentence
+  longer than the cap. A book chapter becomes several of ours — 47 → 149 on a Euphonium volume —
+  and that is deliberate: see the one-chapter-one-request invariant below.
 
 - **OCR (cloud-only, subscriber-gated):** pages/spine items with no text layer are OCR'd via
   `WorkerOCRService` → Worker `/pdf/ocr` → Cloudflare AI Gateway. The app posts only
@@ -246,12 +254,22 @@ PDFKit / networking live in the `app/` target only.
   token whose remainder is not kana (掻 ruby'd か inside 掻き立て) is still dropped whole — and the
   join is gated on that SAME composition test, so a refused annotation never costs a lemma or a
   highlight boundary either (ruby 茶碗 over the tokens 御茶 + 碗 leaves both tokens standing).
+- **A displayed chapter is exactly ONE TTS request** (2026-09-01). `Chapter.renderableHardMax`
+  (1400) must stay at or below `SynthesisLimits.maxRequestChars` (1500, or whatever `/tts/voices`
+  serves for the configured model), pinned by `testADisplayedChapterAlwaysFitsInOneRequest`.
+  The reason is `eleven_v3`: **every request ends with 1.5-2.2 s of speech its alignment does not
+  describe** (measured, RMS -45 dB to -11 dB past `endTimes.last`). At one request per chapter that
+  tail lands after the last sentence and nobody notices; split a chapter into N requests and N-1 of
+  those tails land mid-chapter, freezing the highlight for seconds at a time while words are spoken.
+  Raising the cap back re-creates that. See
+  `.claude/notes/investigations/2026-09-01-v3-unlabelled-tail-and-one-request-per-chapter.md`.
 - **One CoreText frame per chapter, rasterized through tiles this app owns.** The cap
-  (`Chapter.maxRenderableChars`, ~4k) does NOT keep the surface under the platform texture limit,
+  (`Chapter.maxRenderableChars`) does NOT keep the surface under the platform texture limit,
   and never did: measured 2026-08-25, a 4k chapter is 999x44664 px in yokogaki (999x60859 at the
   large size) and 25311x2100 in tategaki (36333x2100), against a 16384 px limit — a 180-300 MB
-  backing store. 1000 chars is the only cap that fits, with 6.7% to spare. So the cap is a
-  *layout/tokenize* budget, not a texture guard; the texture guard is the tiling.
+  backing store. 1000 chars is the only cap that fits, with 6.7% to spare — which the 2026-09-01
+  cap now satisfies for a different reason. So the cap is a *layout/tokenize* budget, not a texture
+  guard; the texture guard is the tiling.
   `RubyContentView` therefore draws with `CTFrameDraw` into each tile's translated context —
   pixel-identical to drawing the whole frame in both orientations (0 differing pixels of 210800),
   and ~1.7 ms per tile, off the main thread. **Do not "optimize" that into per-line `CTLineDraw`:**
@@ -272,10 +290,10 @@ PDFKit / networking live in the `app/` target only.
   along the scroll axis ONLY: margin on both axes costs >100 MB of backing store at @3x. The
   `CTFrame` and ink colour are captured on the main actor when a tile is scheduled, so the render
   queue never reads mutable state, and `tileGeneration` discards tiles that land after a reflow.
-  Import splits oversized
-  chapters at SENTENCE boundaries (`Chunker` breaks on 。！？!? and newline; a single sentence longer
-  than the cap is hard-split, which real prose never triggers). Raising the cap costs main-thread
-  layout, not blank pages; lowering it re-keys `ContentKey` and strands paid audio.
+  Import splits oversized chapters at PARAGRAPH boundaries, falling back to sentences
+  (`Chunker.splitForReading`; a single sentence longer than the cap is hard-split, which real prose
+  never triggers). Raising the cap costs main-thread layout AND re-creates the mid-chapter freeze
+  above; lowering it re-keys `ContentKey` and strands paid audio.
 - **Reader text carries an explicit per-run color; the highlight is a separate `CAShapeLayer`.**
   Don't reintroduce `kCTForegroundColorFromContext` for the base runs — a ruby annotation corrupts
   the context fill, which reads fine in paper/sepia but renders black-on-black in the night theme.

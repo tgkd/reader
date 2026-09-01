@@ -65,11 +65,14 @@ public struct Chapter: Identifiable, Codable, Equatable {
 }
 
 public extension Chapter {
-    static let maxRenderableChars = 4_000
+    static let maxRenderableChars = 1_000
+    static let renderableHardMax = 1_400
 
-    func splitToRenderable(maxChars: Int = maxRenderableChars) -> [Chapter] {
-        guard text.count > maxChars else { return [self] }
-        let parts = Chunker.split(text, maxChars: maxChars)
+    func splitToRenderable(maxChars: Int = maxRenderableChars,
+                           hardMax: Int = renderableHardMax) -> [Chapter] {
+        let cap = max(maxChars, hardMax)
+        guard text.count > cap else { return [self] }
+        let parts = Chunker.splitForReading(text, target: maxChars, hardMax: cap)
         guard parts.count > 1 else { return [self] }
         let readings = sourceReadings.validated(against: text)
         var cursor = 0

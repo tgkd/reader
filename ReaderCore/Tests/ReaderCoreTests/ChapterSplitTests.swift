@@ -15,9 +15,9 @@ final class ChapterSplitTests: XCTestCase {
         let text = String(repeating: para, count: 50)
         let ch = Chapter(title: "本文", text: text)
 
-        let parts = ch.splitToRenderable(maxChars: 300)
+        let parts = ch.splitToRenderable(maxChars: 300, hardMax: 420)
         XCTAssertGreaterThan(parts.count, 1, "an oversized chapter must split")
-        XCTAssertTrue(parts.allSatisfy { $0.text.count <= 300 },
+        XCTAssertTrue(parts.allSatisfy { $0.text.count <= 420 },
                       "each part must be within the cap; got \(parts.map(\.text.count))")
         XCTAssertEqual(parts.map(\.text).joined(), text)
         XCTAssertEqual(parts.first?.title, "本文 (1)")
@@ -26,7 +26,7 @@ final class ChapterSplitTests: XCTestCase {
 
     func testUntitledChapterStaysUntitledWhenSplit() {
         let text = String(repeating: "あいうえお。", count: 200)
-        let parts = Chapter(title: nil, text: text).splitToRenderable(maxChars: 200)
+        let parts = Chapter(title: nil, text: text).splitToRenderable(maxChars: 200, hardMax: 280)
         XCTAssertGreaterThan(parts.count, 1)
         XCTAssertNil(parts.first?.title)
     }
