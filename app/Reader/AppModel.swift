@@ -60,12 +60,7 @@ final class AppModel {
     }
 
     func readingOrientation(for document: Document) -> Orientation {
-        if let pinned = orientationOverrides[document.id.uuidString] { return pinned }
-        switch document.writingMode {
-        case .vertical:   return .tate
-        case .horizontal: return .yoko
-        case nil:         return readingOrientation
-        }
+        orientationOverrides[document.id.uuidString] ?? readingOrientation
     }
 
     func toggleReadingOrientation(for document: Document) {
