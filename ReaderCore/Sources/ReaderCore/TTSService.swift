@@ -1,18 +1,26 @@
 import Foundation
 
+public enum AlignmentSource: String, Codable, Sendable {
+    case provider
+    case forced
+}
+
 public struct SynthesizedAudio: Equatable {
     public let audio: Data
     public let alignment: Alignment
     public let text: String
+    public let alignmentSource: AlignmentSource
 
     public var audioSeconds: Double { NarrationAudio.seconds(bytes: audio.count) }
 
     public var stitchAdvance: Double { max(audioSeconds, alignment.endTimes.max() ?? 0) }
 
-    public init(audio: Data, alignment: Alignment, text: String) {
+    public init(audio: Data, alignment: Alignment, text: String,
+                alignmentSource: AlignmentSource = .provider) {
         self.audio = audio
         self.alignment = alignment
         self.text = text
+        self.alignmentSource = alignmentSource
     }
 }
 

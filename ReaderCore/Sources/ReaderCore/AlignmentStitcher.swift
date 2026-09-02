@@ -25,7 +25,8 @@ public enum AlignmentStitcher {
         return SynthesizedAudio(
             audio: audio,
             alignment: Alignment(characters: characters, startTimes: startTimes, endTimes: endTimes),
-            text: text
+            text: text,
+            alignmentSource: segments.allSatisfy { $0.alignmentSource == .forced } ? .forced : .provider
         )
     }
 }

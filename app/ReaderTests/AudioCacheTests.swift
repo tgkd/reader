@@ -122,6 +122,38 @@ final class AudioCacheTests: XCTestCase {
         try? FileManager.default.removeItem(at: dir)
     }
 
+
+    func testSidecarKeepsTheAlignmentSource() {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NarrationTests-\(UUID().uuidString)")
+        let store = DiskAudioStore(dir: dir)
+        let key = SynthesisRequest(text: "ねこ-\(UUID().uuidString)", voice: .shizuka).cacheKey
+        let forced = SynthesizedAudio(audio: Data([0x49, 0x44, 0x33, 0x04]),
+                                      alignment: Alignment(characters: ["猫"], startTimes: [0], endTimes: [1]),
+                                      text: "猫", alignmentSource: .forced)
+        store.save(forced, for: key)
+        XCTAssertEqual(store.load(key)?.alignmentSource, .forced)
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    func testASidecarWrittenBeforeTheSourceFieldLoadsAsProvider() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NarrationTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = DiskAudioStore(dir: dir)
+        let key = SynthesisRequest(text: "ねこ-\(UUID().uuidString)", voice: .shizuka).cacheKey
+        let legacy = """
+        {"text":"猫","alignment":{"characters":["猫"],\
+        "character_start_times_seconds":[0],"character_end_times_seconds":[1]}}
+        """
+        try Data(legacy.utf8).write(to: dir.appendingPathComponent("\(key.value).json"))
+        try Data([0x49, 0x44, 0x33, 0x04]).write(to: dir.appendingPathComponent("\(key.value).mp3"))
+        let loaded = store.load(key)
+        XCTAssertEqual(loaded?.text, "猫")
+        XCTAssertEqual(loaded?.alignmentSource, .provider)
+        try? FileManager.default.removeItem(at: dir)
+    }
+
     func testFailedReplacementKeepsThePreviouslyCommittedEntry() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("NarrationTests-\(UUID().uuidString)")

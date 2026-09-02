@@ -87,7 +87,11 @@ final class DiskAudioStore: GeneratedAudioStore {
         (try? dir.resourceValues(forKeys: [.isExcludedFromBackupKey]))?.isExcludedFromBackup == true
     }
 
-    private struct Sidecar: Codable { let text: String; let alignment: Alignment }
+    private struct Sidecar: Codable {
+        let text: String
+        let alignment: Alignment
+        let alignmentSource: AlignmentSource?
+    }
 
     private func mp3URL(_ key: ContentKey) -> URL { dir.appendingPathComponent("\(key.value).mp3") }
     private func jsonURL(_ key: ContentKey) -> URL { dir.appendingPathComponent("\(key.value).json") }
@@ -101,11 +105,13 @@ final class DiskAudioStore: GeneratedAudioStore {
         guard let audio = try? Data(contentsOf: mp3URL(key)),
               let data = try? Data(contentsOf: jsonURL(key)),
               let side = try? JSONDecoder().decode(Sidecar.self, from: data) else { return nil }
-        return SynthesizedAudio(audio: audio, alignment: side.alignment, text: side.text)
+        return SynthesizedAudio(audio: audio, alignment: side.alignment, text: side.text,
+                                alignmentSource: side.alignmentSource ?? .provider)
     }
 
     func save(_ audio: SynthesizedAudio, for key: ContentKey) {
-        guard let side = try? JSONEncoder().encode(Sidecar(text: audio.text, alignment: audio.alignment)) else { return }
+        guard let side = try? JSONEncoder().encode(Sidecar(text: audio.text, alignment: audio.alignment,
+                                                           alignmentSource: audio.alignmentSource)) else { return }
         writeLock.lock()
         defer { writeLock.unlock() }
         let stagedMP3 = mp3URL(key).appendingPathExtension("staging")

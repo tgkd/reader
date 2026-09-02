@@ -50,6 +50,10 @@ final class ReaderModel {
     private var endObservers: [NSObjectProtocol] = []
     private var endOfAudioObserver: Any?
     private var lastAdvance: (time: Double, at: Double)?
+    private var exactSwapObserver: Any?
+    private var pendingExactSwap: (audio: Data, audioSeconds: Double)?
+    private static let swapSilenceSeconds = 0.5
+    private static let swapLeadSeconds = 0.15
     nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
     nonisolated(unsafe) private var routeChangeObserver: NSObjectProtocol?
     nonisolated(unsafe) private var mediaResetObserver: NSObjectProtocol?
@@ -349,6 +353,7 @@ final class ReaderModel {
         }
         guard let tokens, gen == loadGeneration, !Task.isCancelled else { return .aborted }
         let alignment = synth.alignment.repairingCollapsedRuns(audioSeconds: synth.audioSeconds)
+        logChapterAlignment("loaded", synth, repairedTo: alignment.endTimes.last ?? 0)
         setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: alignment)))
 
         guard !synth.audio.isEmpty else { return .undecodable }
@@ -411,6 +416,42 @@ final class ReaderModel {
     /// `didPlayToEndTime`. Once synthesis seals, the real length is known, so the chapter finishes
     /// on the same item shape a cached chapter uses and completion has one implementation instead
     /// of two. The cost is a brief re-buffer, once, mid-chapter.
+    private func scheduleExactAudioSwap(_ audio: Data, alignment: ReaderCore.Alignment,
+                                        audioSeconds: Double) {
+        cancelPendingExactSwap()
+        let now = playerTime
+        guard let player, isPlaying,
+              let silence = alignment.nextSilence(after: now + Self.swapLeadSeconds,
+                                                  minimumSeconds: Self.swapSilenceSeconds),
+              silence.lowerBound + Self.swapLeadSeconds < audioSeconds - 1 else {
+            swapInExactAudio(audio)
+            watchForStalledEnd(audioSeconds)
+            return
+        }
+        let at = max(now + 0.05, silence.lowerBound + Self.swapLeadSeconds)
+        pendingExactSwap = (audio, audioSeconds)
+        exactSwapObserver = player.addBoundaryTimeObserver(
+            forTimes: [NSValue(time: CMTime(seconds: at, preferredTimescale: 600))], queue: .main
+        ) { [weak self] in
+            MainActor.assumeIsolated { self?.performPendingExactSwap() }
+        }
+    }
+
+    private func performPendingExactSwap() {
+        if let exactSwapObserver { player?.removeTimeObserver(exactSwapObserver) }
+        exactSwapObserver = nil
+        guard let pending = pendingExactSwap else { return }
+        pendingExactSwap = nil
+        swapInExactAudio(pending.audio)
+        watchForStalledEnd(pending.audioSeconds)
+    }
+
+    private func cancelPendingExactSwap() {
+        if let exactSwapObserver { player?.removeTimeObserver(exactSwapObserver) }
+        exactSwapObserver = nil
+        pendingExactSwap = nil
+    }
+
     private func swapInExactAudio(_ audio: Data) {
         guard let player, !audio.isEmpty else { return }
         let resumeAt = playerTime
@@ -569,16 +610,30 @@ final class ReaderModel {
         play()
     }
 
+    private func logChapterAlignment(_ event: String, _ synth: SynthesizedAudio, repairedTo: Double) {
+        let key = SynthesisRequest(text: synth.text, voice: services.narrationVoice).cacheKey.value.prefix(12)
+        let pauses = synth.alignment.pauseAttribution()
+        WorkerTTSService.log.info("""
+            [yomi] chapter \(event, privacy: .public) key=\(key, privacy: .public) \
+            chapter=\(self.chapterIndex, privacy: .public) voice=\(self.services.narrationVoice.id, privacy: .public) \
+            source=\(synth.alignmentSource.rawValue, privacy: .public) chars=\(synth.text.count, privacy: .public) \
+            audioSeconds=\(synth.audioSeconds, privacy: .public) \
+            delta=\(synth.audioSeconds - (synth.alignment.endTimes.last ?? 0), privacy: .public) \
+            repairedDelta=\(synth.audioSeconds - repairedTo, privacy: .public) \
+            collapsedRuns=\(synth.alignment.collapsedSpeechRuns.count, privacy: .public) \
+            pausesOnSpeech=\(pauses.onSpeech, privacy: .public) \
+            pausesOnPunctuation=\(pauses.onPunctuation, privacy: .public)
+            """)
+    }
+
     private func finishProgressivePlayback(with synth: SynthesizedAudio, gen: Int) {
         guard gen == loadGeneration, progressive != nil else { return }
-        swapInExactAudio(synth.audio)
-        refreshTimings(synth.alignment)
+        logChapterAlignment("sealed", synth, repairedTo: synth.alignment.endTimes.last ?? 0)
         let audioSeconds = Double(synth.audio.count) / NarrationAudio.mp3BytesPerSecond
+        refreshTimings(synth.alignment)
         duration = max(timeline.duration, audioSeconds)
         generatedTime = duration
-        // The bytes, not the alignment, decide where the playhead can actually reach: the response
-        // guard tolerates an alignment describing up to a second more audio than it shipped.
-        watchForStalledEnd(audioSeconds)
+        scheduleExactAudioSwap(synth.audio, alignment: synth.alignment, audioSeconds: audioSeconds)
         recordMeasuredRate()
         progressive = nil
         audioState = .ready
@@ -669,6 +724,7 @@ final class ReaderModel {
     }
 
     private func teardownPlayer() {
+        cancelPendingExactSwap()
         player?.pause()
         endObservers.forEach(NotificationCenter.default.removeObserver)
         endObservers = []
@@ -737,6 +793,7 @@ final class ReaderModel {
         player?.pause()
         isPlaying = false
         link.stop()
+        performPendingExactSwap()
         persistProgress()
         currentTime = playerTime
         activeIndex = highlightIndex(at: currentTime - outputLatency)
@@ -755,6 +812,7 @@ final class ReaderModel {
         guard player != nil, duration > 0 else { return }
         let limit = isGenerating ? min(duration, generatedTime) : duration
         let clamped = min(max(0, t), limit)
+        performPendingExactSwap()
         seekPlayer(to: clamped)
         lastAdvance = nil
         currentTime = clamped
@@ -933,6 +991,7 @@ final class ReaderModel {
     }
 
     private func handlePlaybackFinished(successfully: Bool) {
+        cancelPendingExactSwap()
         isPlaying = false
         link.stop()
         lastAdvance = nil

@@ -78,4 +78,17 @@ final class AlignmentStitcherTests: XCTestCase {
         }
         XCTAssertEqual(out.alignment.characters.count, 8)
     }
+
+    func testStitchIsForcedOnlyWhenEverySegmentIs() {
+        let forced = SynthesizedAudio(audio: Data([1]),
+                                      alignment: Alignment(characters: ["A"], startTimes: [0], endTimes: [0.5]),
+                                      text: "A", alignmentSource: .forced)
+        let provider = SynthesizedAudio(audio: Data([2]),
+                                        alignment: Alignment(characters: ["B"], startTimes: [0], endTimes: [0.5]),
+                                        text: "B")
+        XCTAssertEqual(AlignmentStitcher.stitch([forced, forced]).alignmentSource, .forced)
+        XCTAssertEqual(AlignmentStitcher.stitch([forced, provider]).alignmentSource, .provider)
+        XCTAssertEqual(AlignmentStitcher.stitch([provider]).alignmentSource, .provider)
+    }
+
 }

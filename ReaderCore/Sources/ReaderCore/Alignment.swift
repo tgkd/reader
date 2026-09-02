@@ -113,6 +113,31 @@ public struct Alignment: Codable, Equatable {
         return abs(audioSeconds - (endTimes.last ?? 0)) <= tolerance
     }
 
+    public func silences(minimumSeconds: Double) -> [ClosedRange<Double>] {
+        guard characters.count == startTimes.count, characters.count == endTimes.count else { return [] }
+        var out: [ClosedRange<Double>] = []
+        var open: (start: Double, end: Double)?
+        func extend(_ a: Double, _ b: Double) {
+            guard b > a else { return }
+            if let o = open, a <= o.end + 1e-9 {
+                open = (o.start, max(o.end, b))
+                return
+            }
+            if let o = open, o.end - o.start >= minimumSeconds { out.append(o.start...o.end) }
+            open = (a, b)
+        }
+        for i in characters.indices {
+            if i > 0 { extend(endTimes[i - 1], startTimes[i]) }
+            if !Furigana.hasWordCharacter(characters[i]) { extend(startTimes[i], endTimes[i]) }
+        }
+        if let o = open, o.end - o.start >= minimumSeconds { out.append(o.start...o.end) }
+        return out
+    }
+
+    public func nextSilence(after t: Double, minimumSeconds: Double) -> ClosedRange<Double>? {
+        silences(minimumSeconds: minimumSeconds).first { $0.upperBound > t }
+    }
+
     public func shifted(by seconds: Double) -> Alignment {
         guard seconds != 0 else { return self }
         return Alignment(characters: characters,

@@ -173,7 +173,8 @@ final class WorkerTTSService: TTSService {
         if forced != nil, !usesForced {
             Self.log.error("[yomi] forced alignment rejected; keeping the streamed timings")
         }
-        return SynthesizedAudio(audio: audio, alignment: chosen ?? repaired, text: text)
+        return SynthesizedAudio(audio: audio, alignment: chosen ?? repaired, text: text,
+                                alignmentSource: usesForced ? .forced : .provider)
     }
 
     private func accumulate(_ bytes: URLSession.AsyncBytes,
