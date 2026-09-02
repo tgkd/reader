@@ -191,3 +191,10 @@ result against Whisper word anchors (`{"charIdx": whisperStart}`). `words.py <wa
 `.claude/notes/investigations/2026-09-02-v3-collapses-a-spoken-phrase-mid-request.md`. Do not trust
 a naive word-in-text anchor matcher over a whole 1500-char file — it cascades onto the wrong
 occurrence; anchor over a 90 s window.
+
+Later the same day, `collapse/capture.mjs` (six production-shaped blocks, Maiko, v3, NFKC),
+`collapse/dumpwords.py` (Whisper word dump), `collapse/evaluate.py` (monotonic Whisper anchors;
+scores the returned alignment, the collapse repair, the pause relabel and a forced alignment),
+`collapse/relabel.py` (the pause-relabel prototype, rejected: it damages clean files) and
+`collapse/forced-align.mjs` (`POST /v1/forced-alignment`). Nine of nine captures came back within
+Whisper's own bias under forced alignment; see the 2026-09-02 note.

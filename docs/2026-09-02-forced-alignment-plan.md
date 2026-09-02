@@ -1,0 +1,307 @@
+# Plan: replace `eleven_v3`'s TTS alignment with forced alignment at seal
+
+**Status:** implemented 2026-09-02, NOT deployed · **Date:** 2026-09-02 · **Repos:** `~/Projects/cloudflare/aiwork`
+(Worker) and this one (app) · **Evidence:**
+`.claude/notes/investigations/2026-09-02-v3-collapses-a-spoken-phrase-mid-request.md`, rig in
+`scripts/tts-probes/collapse/`, captures in `scripts/tts-probes/out/2026-09-02-relabel/`.
+
+## Implementation status (2026-09-02)
+
+Built and green; nothing deployed and nothing committed.
+
+- **Step 0 passed.** The AI Gateway forwards the multipart POST to
+  `/elevenlabs/v1/forced-alignment` on `cf-aig-authorization` alone — 200 in 3.1 s, body identical
+  to a direct call. No ElevenLabs secret needed, so the route uses `gatewayBase` like every other
+  upstream.
+- **Worker** (`~/Projects/cloudflare/aiwork`): `src/tts.ts` gained
+  `elevenLabsForcedAlignmentURL`, `forcedAlignmentForm`, `parseForcedAlignment`,
+  `ttsForcedAlignmentEnabled`, `forcedAlignmentTrailer`, the two limits and `ForcedAlignment`;
+  `src/index.ts` wraps the streaming reader response; `wrangler.jsonc` gained
+  `TTS_FORCED_ALIGNMENT: "on"` and its stale "Do NOT set eleven_v3" comment is corrected;
+  `API.md` documents the trailer. `npx vitest run`: **221 passed**, 30 of them new.
+- **App**: `Alignment.describes(_:audioSeconds:tolerance:)` and `AlignmentTrailer` in ReaderCore;
+  `WorkerTTSService.accumulate` returns the trailer and `synthesize` prefers it when it validates,
+  logging `alignmentSource` and `forcedLoss`. `swift test`: **251 passed**;
+  `ReaderTests/WorkerTTSServiceTests`: **36 passed**.
+- **End-to-end against real provider bytes.** A recorded `eleven_v3` NDJSON stream (`gon`, 805
+  chars) was fed through `forcedAlignmentTrailer` in 7919-byte chunks that split JSON lines, with a
+  real gateway alignment call: passthrough byte-identical, the teed audio equal to the mp3 on disk
+  (2,139,578 bytes), exactly one trailer, 805/805 characters reproducing the text, starts monotonic,
+  end 133.63 s against 133.72 s of audio. That trailer line then decoded in ReaderCore and passed
+  `describes`.
+- **Short-clip latency**, for the Settings voice sample, which awaits the whole synthesis rather
+  than streaming: 618–732 ms on a 9.6 s clip (52/52 characters, correct). Its `loss` was 5.00 with
+  perfect timings — more evidence not to gate on `loss`.
+
+Remaining: deploy the Worker, then verify in the simulator (steps 3-6 below), then ship the app.
+The one thing local tests cannot prove is that workerd keeps the request context alive for a
+subrequest issued from `flush` after the response has been returned; the first real chapter settles
+it, and a failure there is a missing trailer, not a broken chapter.
+
+## Why
+
+The character timings `eleven_v3` returns with its audio are wrong in three measured shapes
+(a spoken phrase collapsed to ~0 duration; labels 2–3.5 s late for minutes; labels 0.4–1.1 s early
+for a stretch). On six production-shaped blocks (NFKC, ~800–970 chars, Maiko) three carried a
+region off by ≥1 s and the book's first block was 2.3–2.6 s late for all of its three minutes.
+None of it is visible in the returned data: residuals were 0.03–0.04 s, no plateau, no collapse.
+
+ElevenLabs' forced alignment (`POST /v1/forced-alignment`, audio + text) fixed **9 of 9** captures:
+every 30 s bucket within Whisper's own +0.15…+0.25 s bias, p90 error 0.11–0.33 s, worst single
+anchor 1.2 s, 2.7–4.4 s latency, $0.22 per audio hour (≈ $0.011 per 1000-char block, ~11% on top
+of v3's $0.10 per 1000 chars). The pause-relabel heuristic was tried and rejected (it damages clean
+blocks); the collapse repair shipped in `7a38cfb` stays as a fallback.
+
+## Design in one paragraph
+
+The Worker keeps proxying ElevenLabs' NDJSON stream unbuffered, but tees the decoded audio into a
+buffer as it passes. When the upstream stream ends it posts audio + text to forced alignment,
+validates the answer, and appends **one trailer line** to the NDJSON before closing. The app keeps
+using the streamed per-chunk alignment for progressive playback exactly as today; at seal it takes
+the trailer's alignment instead of the concatenated one, rebuilds the timeline and caches it. If
+the trailer is missing or invalid the app falls back to today's path (streamed alignment plus
+collapse repair). Old app builds ignore the trailer, so the Worker deploys first.
+
+### The trailer
+
+Exactly one line, last in the stream, only on the reader path (`/tts/aligned`), only when
+streaming:
+
+```json
+{"forced_alignment":{"characters":["響","け",…],"character_start_times_seconds":[0.06,…],"character_end_times_seconds":[0.5,…]},"forced_alignment_loss":2.03}
+```
+
+Same key names as `alignment` so `ReaderCore.Alignment` decodes it unchanged. `characters` must
+equal the submitted text character by character (the raw API answer inserts a `\r` before every
+`\n`; the Worker strips those before validating). Times are seconds, absolute from file start.
+
+## Worker changes (`~/Projects/cloudflare/aiwork`)
+
+### 0. Verify the gateway first (blocking)
+
+The nine captures called `https://api.elevenlabs.io/v1/forced-alignment` directly with
+`ELEVEN_KEY`. Production reaches ElevenLabs only through the AI Gateway
+(`${gatewayBase(env)}/elevenlabs/v1/...`, key injected at the edge). Before writing code, probe
+whether the gateway forwards a `multipart/form-data` POST to `/forced-alignment` on the gateway
+credential alone (extend `scripts/tts-probes/gateway-management.mjs`, which already proves GET/POST
+JSON forwarding). If it does not, the Worker needs an ElevenLabs secret for this one call
+(`worker-configuration.d.ts` still declares `ELEVENLABS_KEY`; check whether it is set) and the
+call goes to `api.elevenlabs.io` directly.
+
+### 1. `src/tts.ts`
+
+- `export function elevenLabsForcedAlignmentURL(root: string): string` →
+  `${root}/forced-alignment` (root is the same `${gatewayBase(env)}/elevenlabs/v1` as
+  `elevenLabsAlignedURL`, or the direct API root per step 0).
+- `export function forcedAlignmentForm(audio: Uint8Array, text: string): FormData` — `file` as a
+  `Blob` (`audio/mpeg`, name `audio.mp3`), `text` as a plain string field. Text is the exact
+  string that was sent to TTS (already NFKC by the client; the Worker does not normalize).
+- `export function parseForcedAlignment(body: unknown, text: string): ForcedAlignment | undefined`
+  where `ForcedAlignment = { characters: string[]; character_start_times_seconds: number[];
+  character_end_times_seconds: number[]; loss: number }`. Steps: take `body.characters`
+  (`{text,start,end}[]`), drop entries whose `text` is `"\r"`, require `characters.join('') ===
+  text`, equal array lengths, every `start <= end`, starts non-decreasing, all finite, and
+  `end` of the last ≥ 0. Return `undefined` on any failure (log which check).
+- `export function ttsForcedAlignmentEnabled(env): boolean` — reads `TTS_FORCED_ALIGNMENT`
+  (`"on"` / `"off"`, default `"on"` once shipped). This is the rollback switch.
+- `export const FORCED_ALIGNMENT_MAX_AUDIO_BYTES = 16_000_000` and
+  `FORCED_ALIGNMENT_TIMEOUT_MS = 20_000`. A 1400-char block is ≈6 min ≈ 5.8 MB of mp3; anything
+  past the cap means the client is not ours, so stop collecting and skip the call.
+- `export function forcedAlignmentTrailer(stream: ReadableStream<Uint8Array>, align: (audio:
+  Uint8Array) => Promise<ForcedAlignment | undefined>): ReadableStream<Uint8Array>` — the
+  `TransformStream` that (a) passes every byte through unchanged, (b) keeps a UTF-8 line buffer,
+  parses each complete line with `JSON.parse`, base64-decodes `audio_base64` into a chunk list
+  (stop collecting past the byte cap; ignore unparsable lines), (c) in `flush`, if the upstream
+  ended cleanly and collection was not abandoned, concatenates the chunks, awaits `align(...)`,
+  and if it returns a value enqueues `JSON.stringify({ forced_alignment: {...}, forced_alignment_loss:
+  loss }) + '\n'`, then closes. Any throw inside `flush` is caught and logged; the stream still
+  closes. Taking `align` as a parameter is what makes this unit-testable without mocking `fetch`.
+
+  Memory: the base64 text already streams through this isolate; keeping the decoded bytes adds
+  the audio size once (≤ ~6 MB). CPU: base64 decoding of ~8 MB, well under limits.
+
+### 2. `src/index.ts`, route `/tts/aligned`
+
+In the `params.wantsStream` branch, when `isReader && ttsForcedAlignmentEnabled(c.env)`:
+
+```ts
+const align = async (audio: Uint8Array) => {
+  const t0 = Date.now();
+  const r = await fetch(elevenLabsForcedAlignmentURL(root), {
+    method: 'POST', headers: gatewayHeaders(c.env),   // no Content-Type: FormData sets it
+    body: forcedAlignmentForm(audio, text),
+    signal: AbortSignal.timeout(FORCED_ALIGNMENT_TIMEOUT_MS),
+  });
+  if (!r.ok) { console.error(`[tts/aligned] forced alignment ${r.status}: ${(await r.text()).slice(0, 200)}`); return undefined; }
+  const parsed = parseForcedAlignment(await r.json(), text);
+  console.log(`[tts/aligned] forced alignment ${parsed ? 'ok' : 'rejected'} loss=${parsed?.loss} ms=${Date.now() - t0} bytes=${audio.byteLength}`);
+  return parsed;
+};
+return new Response(forcedAlignmentTrailer(response.body!, align), { headers: {...} });
+```
+
+Everything before it (quota reservation, locator retry, error handling) is untouched. `/v2`
+(Jisho) is untouched: the trailer is gated on `isReader`. The non-stream branch stays as it is
+(the reader always streams).
+
+Note the response must not be closed before `flush` finishes: the extra 3–4 s land at the very
+end of the stream, after the last audio chunk. The client is already playing by then (4 s head
+start, generation ~4x faster than speech) and its per-chunk timeout is 300 s.
+
+### 3. `wrangler.jsonc`
+
+- Add `"TTS_FORCED_ALIGNMENT": "on"` with a comment naming this document and the rollback
+  meaning of `"off"`.
+- While there: the comment above `"TTS_MODEL": "eleven_v3"` still says "Do NOT set eleven_v3".
+  Rewrite it: v3 is the model since 2026-09-01 for reading quality; its alignment is replaced by
+  forced alignment at seal (this document); already-generated chapters keep their audio.
+
+### 4. Tests (`test/tts.test.ts`, vitest, no network)
+
+- `elevenLabsForcedAlignmentURL` pins the path.
+- `parseForcedAlignment`: strips `\r`; rejects when the joined characters differ from the text,
+  when array lengths differ, when starts decrease, when a start exceeds its end; accepts the real
+  shape (use a small hand-written body, and one fixture cut from
+  `scripts/tts-probes/out/2026-09-02-relabel/prose-mid.forced.json` with the characters masked
+  to `あ` if you want the real numbers).
+- `forcedAlignmentTrailer`: feed three NDJSON lines (two with audio, one alignment-only) through
+  with a fake `align`; assert the bytes out equal the bytes in plus exactly one trailer line;
+  assert `align` received the concatenated decoded audio; assert that when `align` returns
+  `undefined` or throws, the output equals the input and the stream closes; assert that past the
+  byte cap `align` is not called.
+- Route-level: if the existing suite has a route harness, add one case that `/v2/tts/aligned`
+  never gets a trailer.
+
+### 5. `API.md`
+
+Document the trailer under `/tts/aligned`: shape, "at most one, last line, may be absent", and
+that clients must decode lines that lack `audio_base64`.
+
+### 6. Deploy
+
+`wrangler deploy` after step 0 is green. Old app builds log one `undecodable NDJSON line` per
+chapter and behave as before; that is acceptable for the window until the app ships.
+
+## App changes (this repo)
+
+### 1. `ReaderCore/Sources/ReaderCore/Alignment.swift`
+
+Add beside `TimestampedAudio`:
+
+```swift
+public struct AlignmentTrailer: Decodable {
+    public let forcedAlignment: Alignment
+    public let loss: Double?
+    enum CodingKeys: String, CodingKey {
+        case forcedAlignment = "forced_alignment"
+        case loss = "forced_alignment_loss"
+    }
+}
+```
+
+and a validator the service can reuse:
+
+```swift
+public extension Alignment {
+    func describes(_ text: String, audioSeconds: Double, tolerance: Double = 1.0) -> Bool
+}
+```
+
+true when `characters.joined() == text`, every element is one character, the three arrays have
+equal counts, starts are non-decreasing, `end >= start` everywhere, `untimedTrailingSpeech == 0`,
+and `abs(audioSeconds - endTimes.last) <= tolerance`. (Forced alignment ended 0.05–0.4 s before
+the audio on the nine captures; 1.0 s is the bound.)
+
+### 2. `app/Reader/Services/WorkerTTSService.swift`
+
+- `accumulate` returns `(Data, Alignment, AlignmentTrailer?)`. Per line: try
+  `TimestampedAudio` first; if that fails try `AlignmentTrailer`; if both fail log
+  `undecodable NDJSON line` as today. A trailer is **not** forwarded to `onChunk` /
+  `SynthesisChunkForwarding.sink` and does not count toward `onProgress`. Keep exactly one
+  trailer (a second one is a protocol error: log and ignore it).
+- In `synthesize`, keep every existing guard on the **streamed** alignment (they detect a
+  truncated stream and a v3 hard cut, which forced alignment cannot see). Then:
+
+```swift
+let repaired = alignment.repairingCollapsedRuns(audioSeconds: audioSeconds)
+let chosen: Alignment
+if let forced = trailer?.forcedAlignment, forced.describes(text, audioSeconds: audioSeconds) {
+    chosen = forced
+} else {
+    chosen = repaired
+}
+```
+
+  Extend the `synthesis ok` log line with `alignmentSource=forced|provider`,
+  `forcedLoss=`, and keep `delta`, `collapsedRuns`, `pausesOnSpeech`, `pausesOnPunctuation`
+  computed on the **provider** alignment so the defect statistics keep accumulating.
+- Return `SynthesizedAudio(audio: audio, alignment: chosen, text: text)`. Nothing downstream
+  changes: `finishProgressivePlayback` rebuilds from `synth.alignment`, `DiskAudioStore`
+  writes it to the sidecar, `AlignmentStitcher` (dormant chunking) stitches per segment with
+  `stitchAdvance = max(audioSeconds, endTimes.max())`.
+
+### 3. `app/Reader/Reader/ReaderModel.swift`
+
+No functional change required. `buildPlayback` keeps calling `repairingCollapsedRuns` on load,
+which is a no-op on a forced alignment and still fixes cache entries from before this change.
+Optional: log `alignmentSource` at seal alongside the existing `[yomi]` lines.
+
+### 4. Tests (`app/ReaderTests/WorkerTTSServiceTests.swift`)
+
+- Trailer used when valid: stream three chunks with a deliberately wrong provider alignment
+  (e.g. every char 0.01 s) and a trailer whose times end at the audio length; assert the returned
+  alignment is the trailer's.
+- Trailer rejected when its characters do not reproduce the text; when its end is >1 s from the
+  audio; when it has a flat speech tail; in each case the returned alignment is the provider's
+  (repaired).
+- Trailer is not forwarded: with `onChunk` capturing, assert the callback count equals the number
+  of audio lines.
+- Stream without a trailer behaves exactly as before (the existing tests already cover this;
+  keep them green).
+- `streamed(_:endTimes:audioBytesPerChunk:)` needs a sibling helper that appends a trailer line.
+
+### 5. `CLAUDE.md`
+
+Update the TTS pipeline paragraph and the "one TTS request" invariant: the alignment the reader
+seals and caches is the Worker-provided forced alignment when present; the streamed alignment
+drives only the progressive phase; the collapse repair is the fallback. Point at this document.
+
+### 6. Ship order
+
+Worker first (see above), then the app. A user on the new app against an old Worker gets no
+trailer and today's behaviour.
+
+## Verification (do all of it)
+
+1. Step 0 probe passes, or the direct-key path is chosen deliberately.
+2. `npm test` in aiwork; `swift test` in ReaderCore; `xcodebuild test … -only-testing:ReaderTests/WorkerTTSServiceTests`.
+3. In the simulator, generate the prologue's first block (the known 2.3 s-late case) with the
+   new Worker and app. Pull `<key>.mp3` + `<key>.json` from the app container
+   (`Library/Application Support/Narration/`), write `<name>.txt` from the sidecar's `text`, and
+   run `scripts/tts-probes/collapse/dumpwords.py` + `evaluate.py` on it. Expect every 30 s bucket
+   within +0.0…+0.35 s and p90 ≤ 0.35 s. Then listen to it with the highlight on.
+4. Repeat once on a chapter whose request carries pronunciation rules (a starter book with ruby,
+   or a real EPUB with a lexicon). The captures so far had no rules; forced alignment sees kanji
+   and hears the alias, and this is the one unmeasured risk. Look at the per-word `loss` around
+   the ruby'd names in the Worker log if the anchors there are worse than elsewhere.
+5. Read the Worker log for the added latency (`ms=`) over a few chapters and confirm the client
+   never stalls at the pre-roll: `generatedTime` must stay ahead of the playhead until seal.
+6. Watch `forcedLoss` and `alignmentSource` in the `[yomi]` logs for a day. If `provider` shows up
+   with a `rejected` on the Worker side, read why before touching thresholds.
+
+## Rollback
+
+Set `TTS_FORCED_ALIGNMENT` to `"off"` and deploy the Worker. No trailer, the app falls back to
+the streamed alignment plus collapse repair, no app release needed. Chapters cached with a forced
+alignment keep it.
+
+## Out of scope, deliberately
+
+- Re-aligning chapters already in the cache. It would need an upload endpoint (`/tts/align`,
+  audio + text from the phone) and a migration; the collapse repair covers the worst case there.
+  Decide after the logs show how many cached blocks are late.
+- A `loss` threshold. On the nine captures `loss` ranged 1.6–3.7 and did not predict timing error
+  (yamanashi's 3.66 was fine). Log it; do not gate on it yet.
+- The dormant `ChunkingTTSService`. It works unchanged with per-segment trailers; deleting it is a
+  separate decision.
+- `/v2/tts/aligned` (Jisho).
