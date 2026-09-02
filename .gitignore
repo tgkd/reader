@@ -33,3 +33,4 @@ scripts/tts-probes/out/
 .claude/notes/
 .claude/duck/
 .claude/settings.local.json
+__pycache__/
