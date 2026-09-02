@@ -122,8 +122,8 @@ final class WorkerTTSService: TTSService {
             throw await Self.failure(status: http.statusCode, body: bytes)
         }
 
-        let (audio, alignment) = try await accumulate(bytes, expecting: text.count,
-                                                      key: request.cacheKey)
+        let (audio, alignment, trailer) = try await accumulate(bytes, expecting: text.count,
+                                                               key: request.cacheKey)
         let audioSeconds = NarrationAudio.seconds(bytes: audio.count)
         let describedSeconds = alignment.endTimes.last ?? 0
         let delta = audioSeconds - describedSeconds
@@ -156,30 +156,47 @@ final class WorkerTTSService: TTSService {
                 untimedCharacters: alignment.untimedTrailingCharacters))
         }
         let repaired = alignment.repairingCollapsedRuns(audioSeconds: audioSeconds)
+        let forced = trailer?.forcedAlignment
+        let chosen = forced.flatMap { $0.describes(text, audioSeconds: audioSeconds) ? $0 : nil }
+        let usesForced = chosen != nil
         let pauses = alignment.pauseAttribution()
         Self.log.info("""
             [yomi] synthesis ok chars=\(text.count, privacy: .public) \
             audioSeconds=\(audioSeconds, privacy: .public) delta=\(delta, privacy: .public) \
+            alignmentSource=\(usesForced ? "forced" : "provider", privacy: .public) \
+            forcedLoss=\(trailer?.loss ?? .nan, privacy: .public) \
             collapsedRuns=\(alignment.collapsedSpeechRuns.count, privacy: .public) \
             repairedDelta=\(audioSeconds - (repaired.endTimes.last ?? 0), privacy: .public) \
             pausesOnSpeech=\(pauses.onSpeech, privacy: .public) \
             pausesOnPunctuation=\(pauses.onPunctuation, privacy: .public)
             """)
-        return SynthesizedAudio(audio: audio, alignment: repaired, text: text)
+        if forced != nil, !usesForced {
+            Self.log.error("[yomi] forced alignment rejected; keeping the streamed timings")
+        }
+        return SynthesizedAudio(audio: audio, alignment: chosen ?? repaired, text: text)
     }
 
     private func accumulate(_ bytes: URLSession.AsyncBytes,
                             expecting characterCount: Int,
-                            key: ContentKey) async throws -> (Data, Alignment) {
+                            key: ContentKey) async throws -> (Data, Alignment, AlignmentTrailer?) {
         var audio = Data()
         var characters: [String] = []
         var startTimes: [Double] = []
         var endTimes: [Double] = []
+        var trailer: AlignmentTrailer?
         let decoder = JSONDecoder()
 
         for try await line in bytes.lines {
             guard !line.isEmpty, let data = line.data(using: .utf8) else { continue }
             guard let chunk = try? decoder.decode(TimestampedAudio.self, from: data) else {
+                if let found = try? decoder.decode(AlignmentTrailer.self, from: data) {
+                    if trailer != nil {
+                        Self.log.error("[yomi] more than one alignment trailer; keeping the first")
+                    } else {
+                        trailer = found
+                    }
+                    continue
+                }
                 Self.log.error("[yomi] undecodable NDJSON line: \(line.prefix(400), privacy: .public)")
                 continue
             }
@@ -206,6 +223,8 @@ final class WorkerTTSService: TTSService {
                 """)
             throw WorkerError.truncatedStream
         }
-        return (audio, Alignment(characters: characters, startTimes: startTimes, endTimes: endTimes))
+        return (audio,
+                Alignment(characters: characters, startTimes: startTimes, endTimes: endTimes),
+                trailer)
     }
 }

@@ -56,6 +56,17 @@ final class WorkerTTSServiceTests: XCTestCase {
         return out
     }
 
+    private func trailerLine(_ text: String, endTimes: [Double], loss: Double? = 2.0) -> String {
+        let chars = text.map { "\"\($0)\"" }.joined(separator: ",")
+        let startValues: [Double] = [0.0] + Array(endTimes.dropLast())
+        let starts = startValues.map { String($0) }.joined(separator: ",")
+        let ends = endTimes.map { String($0) }.joined(separator: ",")
+        let lossField = loss.map { ",\"forced_alignment_loss\":\($0)" } ?? ""
+        return "{\"forced_alignment\":{\"characters\":[\(chars)],"
+            + "\"character_start_times_seconds\":[\(starts)],"
+            + "\"character_end_times_seconds\":[\(ends)]}\(lossField)}\n"
+    }
+
     private func response(_ body: Data) -> @Sendable (URLRequest) throws -> (HTTPURLResponse, Data) {
         { request in
             let resp = HTTPURLResponse(url: request.url!, statusCode: 200,
@@ -229,6 +240,95 @@ final class WorkerTTSServiceTests: XCTestCase {
         XCTAssertEqual(out.alignment.startTimes[4], 0.8, accuracy: 1e-9)
         XCTAssertEqual(out.alignment.collapsedSpeechRuns, [])
     }
+
+
+    func testPrefersTheForcedAlignmentTrailerOverTheStreamedTimings() async throws {
+        let text = "吾輩は猫"
+        var body = streamed(text, endTimes: [0.1, 0.2, 0.3, 0.4], audioBytesPerChunk: 8_000)
+        body.append(Data(trailerLine(text, endTimes: [0.5, 1.0, 1.5, 2.0]).utf8))
+        MockURLProtocol.handler = response(body)
+
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: text, voice: .shizuka))
+        XCTAssertEqual(out.audioSeconds, 2.0, accuracy: 0.001)
+        XCTAssertEqual(out.alignment.endTimes, [0.5, 1.0, 1.5, 2.0])
+    }
+
+    func testAcceptsATrailerWithoutALoss() async throws {
+        let text = "吾輩は猫"
+        var body = streamed(text, endTimes: [0.1, 0.2, 0.3, 0.4], audioBytesPerChunk: 8_000)
+        body.append(Data(trailerLine(text, endTimes: [0.5, 1.0, 1.5, 2.0], loss: nil).utf8))
+        MockURLProtocol.handler = response(body)
+
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: text, voice: .shizuka))
+        XCTAssertEqual(out.alignment.endTimes, [0.5, 1.0, 1.5, 2.0])
+    }
+
+    func testKeepsTheStreamedTimingsWhenTheTrailerDescribesOtherText() async throws {
+        let text = "吾輩は猫"
+        var body = streamed(text, endTimes: [0.5, 1.0, 1.5, 2.0], audioBytesPerChunk: 8_000)
+        body.append(Data(trailerLine("吾輩は犬", endTimes: [0.5, 1.0, 1.5, 2.0]).utf8))
+        MockURLProtocol.handler = response(body)
+
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: text, voice: .shizuka))
+        XCTAssertEqual(out.alignment.characters.joined(), text)
+        XCTAssertEqual(out.alignment.endTimes, [0.5, 1.0, 1.5, 2.0])
+    }
+
+    func testKeepsTheStreamedTimingsWhenTheTrailerDoesNotReachTheAudio() async throws {
+        let text = "吾輩は猫"
+        var body = streamed(text, endTimes: [0.5, 1.0, 1.5, 2.0], audioBytesPerChunk: 8_000)
+        body.append(Data(trailerLine(text, endTimes: [0.1, 0.2, 0.3, 0.4]).utf8))
+        MockURLProtocol.handler = response(body)
+
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: text, voice: .shizuka))
+        XCTAssertEqual(out.alignment.endTimes, [0.5, 1.0, 1.5, 2.0])
+    }
+
+    func testKeepsTheStreamedTimingsWhenTheTrailerStopsTimingItsOwnSpeech() async throws {
+        let text = "吾輩は猫"
+        var body = streamed(text, endTimes: [0.5, 1.0, 1.5, 2.0], audioBytesPerChunk: 8_000)
+        body.append(Data(trailerLine(text, endTimes: [0.5, 1.0, 2.0, 2.0]).utf8))
+        MockURLProtocol.handler = response(body)
+
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: text, voice: .shizuka))
+        XCTAssertEqual(out.alignment.endTimes, [0.5, 1.0, 1.5, 2.0])
+    }
+
+    func testATrailerIsNotForwardedAsAChunk() async throws {
+        let text = "吾輩は猫"
+        var body = streamed(text, endTimes: [0.5, 1.0, 1.5, 2.0], audioBytesPerChunk: 8_000)
+        body.append(Data(trailerLine(text, endTimes: [0.5, 1.0, 1.5, 2.0]).utf8))
+        MockURLProtocol.handler = response(body)
+
+        let forwarded = ChunkCounter()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let service = WorkerTTSService(
+            baseURL: URL(string: "https://test.example.com")!,
+            userId: { "user-123" },
+            session: URLSession(configuration: config),
+            onChunk: { _, _, _ in forwarded.increment() })
+        _ = try await service.synthesize(SynthesisRequest(text: text, voice: .shizuka))
+        XCTAssertEqual(forwarded.value, text.count)
+    }
+
+    func testRepairsACollapsedPhraseWhenNoTrailerArrives() async throws {
+        let text = "吾輩は猫。名前はまだ無いのだ。"
+        var ends: [Double] = [0.2, 0.4, 0.6, 0.8, 1.0]
+        for i in 0..<9 { ends.append(1.0 + Double(i + 1) * 0.01) }
+        ends.append(1.5)
+        MockURLProtocol.handler = response(
+            streamed(text, endTimes: ends, audioBytesPerChunk: 3_600))
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: text, voice: .shizuka))
+        XCTAssertEqual(out.alignment.endTimes.last ?? 0, out.audioSeconds, accuracy: 1e-6)
+    }
+
 
     func testRejectsMultiCharacterAlignmentElements() async {
         let body = """
@@ -432,4 +532,21 @@ private final class ProgressSamples: @unchecked Sendable {
 
     func append(_ v: Double) { lock.lock(); samples.append(v); lock.unlock() }
     var values: [Double] { lock.lock(); defer { lock.unlock() }; return samples }
+}
+
+private final class ChunkCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
 }

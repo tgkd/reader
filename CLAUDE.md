@@ -69,9 +69,9 @@ PDFKit / networking live in the `app/` target only.
   wrapped by `ChunkingTTSService` — **dormant by design since 2026-09-01**: a displayed chapter is
   capped at `Chapter.renderableHardMax` (1400) which is below `SynthesisLimits.maxRequestChars`
   (1500, or whatever `/tts/voices` serves for the configured model), so **one chapter is exactly one
-  request** and the chunked path never fires. That is not an optimization — a request that
-  `eleven_v3` mis-times leaves the rest of that request early by 1.5-2.2 s (measured), so each extra
-  request is another seam where the highlight holds and then jumps. See
+  request** and the chunked path never fires. That is not an optimization — `eleven_v3` mis-times its own
+  audio (see the alignment invariant below), and each extra request is another seam where the
+  highlight holds and then jumps. See
   `.claude/notes/investigations/2026-09-02-v3-collapses-a-spoken-phrase-mid-request.md`, which
   supersedes the causal story in the 2026-09-01 note.
   If it does fire it is sequential and publishes under the PARENT key with a running
@@ -236,6 +236,18 @@ PDFKit / networking live in the `app/` target only.
   under `headStartSeconds`.
 - **Read `alignment`, never `normalized_alignment`** from the TTS response — only `alignment`
   tracks the displayed/tokenized text.
+- **The timings a chapter is SEALED and CACHED with come from forced alignment, not from the TTS
+  response.** The Worker buffers the audio while proxying the NDJSON stream unbuffered, posts it
+  with the text to ElevenLabs' `/v1/forced-alignment` when the stream ends, and appends one trailer
+  line (`forced_alignment`, same field names as `alignment`, plus `forced_alignment_loss`). That
+  fixed 9 of 9 captures to p90 0.11-0.33 s where `eleven_v3`'s own timings were seconds out. The
+  trailer is never load-bearing: `WorkerTTSService` takes it only if `Alignment.describes` passes
+  (reproduces the text, monotonic, no untimed tail, within 1 s of the audio), else it keeps the
+  streamed alignment with `Alignment.repairingCollapsedRuns` applied — which is also what an older
+  Worker, a failed alignment call, or `TTS_FORCED_ALIGNMENT=off` leave it with. The streamed
+  per-chunk alignment still drives the PROGRESSIVE phase; the swap happens at seal, and the log line
+  says `alignmentSource=forced|provider`. `repairingCollapsedRuns` also runs on the cached path, so
+  chapters sealed before this keep improving. See `docs/2026-09-02-forced-alignment-plan.md`.
 - **Normalize once (NFKC), identically everywhere** (`Normalize.nfkc`): tokenizer, TTS request,
   and `ContentKey` all normalize at their boundary. Import does NOT normalize — it happens
   downstream so every ingestion path shares one normalization.
@@ -258,18 +270,14 @@ PDFKit / networking live in the `app/` target only.
 - **A displayed chapter is exactly ONE TTS request** (2026-09-01). `Chapter.renderableHardMax`
   (1400) must stay at or below `SynthesisLimits.maxRequestChars` (1500, or whatever `/tts/voices`
   serves for the configured model), pinned by `testADisplayedChapterAlwaysFitsInOneRequest`.
-  The reason is `eleven_v3`: **it can collapse a spoken phrase to ~0 duration mid-request, and every
-  timestamp after it is then early by the missing 1.5-2.2 s** (measured 2026-09-02 — it is NOT extra
-  speech after the last label; the trailing residual exists because the last sentence is spoken
-  later than labelled). Split a chapter into N requests and each seam adds a hold plus a jump while
-  the next segment's labels start; raising the cap back re-creates that.
-  `Alignment.repairingCollapsedRuns` repairs the collapse from the residual, at seal and on the cached
-  path, so a paid chapter is kept and re-timed rather than rejected — only completeness (character
-  count, terminal untimed speech) is enforced on a response. A second, unrepaired defect exists: the
-  prologue's first ~135 s carries labels 2-3.5 s LATE (sentence-end silences land on mid-sentence
-  characters) and converges; detectable only against an independent clock, logged as
-  `pausesOnSpeech`. See
-  `.claude/notes/investigations/2026-09-02-v3-collapses-a-spoken-phrase-mid-request.md`.
+  The reason is `eleven_v3`, whose own timestamps are not trustworthy in three measured shapes
+  (2026-09-02, nine captures against Whisper): a spoken phrase collapsed to ~0 duration with
+  everything after it early by the missing 1.5-2.2 s; labels 2-3.5 s LATE for minutes, converging
+  before the end; labels ~1 s early for a stretch. Three of six production-shaped blocks carried a
+  region off by >=1 s and the reader's FIRST block was 2.3 s late for all three of its minutes —
+  none of it visible in the response, whose residuals were all 0.03-0.04 s. **A small residual is
+  not evidence of sync.** Splitting a chapter into N requests adds a seam per join on top of that.
+  See `.claude/notes/investigations/2026-09-02-v3-collapses-a-spoken-phrase-mid-request.md`.
 - **One CoreText frame per chapter, rasterized through tiles this app owns.** The cap
   (`Chapter.maxRenderableChars`) does NOT keep the surface under the platform texture limit,
   and never did: measured 2026-08-25, a 4k chapter is 999x44664 px in yokogaki (999x60859 at the

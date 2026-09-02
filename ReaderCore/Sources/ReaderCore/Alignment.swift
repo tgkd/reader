@@ -98,6 +98,21 @@ public struct Alignment: Codable, Equatable {
         return PauseAttribution(onSpeech: speech, onPunctuation: punctuation)
     }
 
+    public func describes(_ text: String, audioSeconds: Double, tolerance: Double = 1.0) -> Bool {
+        guard !characters.isEmpty,
+              startTimes.count == characters.count,
+              endTimes.count == characters.count,
+              characters.allSatisfy({ $0.count == 1 }),
+              characters.joined() == text,
+              untimedTrailingSpeech == 0 else { return false }
+        for i in characters.indices {
+            guard startTimes[i].isFinite, endTimes[i].isFinite,
+                  endTimes[i] >= startTimes[i],
+                  i == 0 || startTimes[i] >= startTimes[i - 1] else { return false }
+        }
+        return abs(audioSeconds - (endTimes.last ?? 0)) <= tolerance
+    }
+
     public func shifted(by seconds: Double) -> Alignment {
         guard seconds != 0 else { return self }
         return Alignment(characters: characters,
@@ -113,6 +128,21 @@ public struct Alignment: Codable, Equatable {
     func endTime(at i: Int) -> Double {
         guard !endTimes.isEmpty else { return 0 }
         return endTimes[min(max(i, 0), endTimes.count - 1)]
+    }
+}
+
+public struct AlignmentTrailer: Decodable {
+    public let forcedAlignment: Alignment
+    public let loss: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case forcedAlignment = "forced_alignment"
+        case loss = "forced_alignment_loss"
+    }
+
+    public init(forcedAlignment: Alignment, loss: Double?) {
+        self.forcedAlignment = forcedAlignment
+        self.loss = loss
     }
 }
 
