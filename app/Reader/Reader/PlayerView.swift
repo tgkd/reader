@@ -151,11 +151,17 @@ struct PlayerView: View {
                         let inset: CGFloat = 8
                         let usable = max(0, geo.size.width - inset)
                         let done = min(1, max(0, model.generatedFraction))
-                        Capsule()
-                            .fill(theme.bg.opacity(0.75))
-                            .frame(width: usable * (1 - done), height: 4)
-                            .position(x: inset + usable * (done + (1 - done) / 2),
-                                      y: geo.size.height / 2)
+                        let played = model.duration > 0
+                            ? min(1, max(0, model.currentTime / model.duration)) : 0
+                        let start = max(inset + usable * done,
+                                        inset + usable * played + Self.thumbClearance)
+                        let end = inset + usable
+                        if end > start {
+                            Capsule()
+                                .fill(theme.bg.opacity(0.75))
+                                .frame(width: end - start, height: 4)
+                                .position(x: (start + end) / 2, y: geo.size.height / 2)
+                        }
                     }
                     .allowsHitTesting(false)
                 }
@@ -314,6 +320,8 @@ struct PlayerView: View {
     private var percentLabel: String {
         "\(Int((model.synthesisProgress * 100).rounded()))%"
     }
+
+    private static let thumbClearance: CGFloat = 22
 
     private var generatedBounds: ClosedRange<Double>? {
         guard model.isGenerating else { return nil }
