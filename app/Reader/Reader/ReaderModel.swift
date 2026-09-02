@@ -424,11 +424,17 @@ final class ReaderModel {
               let silence = alignment.nextSilence(after: now + Self.swapLeadSeconds,
                                                   minimumSeconds: Self.swapSilenceSeconds),
               silence.lowerBound + Self.swapLeadSeconds < audioSeconds - 1 else {
+            WorkerTTSService.log.info(
+                "[yomi] exact swap immediate at=\(self.playerTime, privacy: .public)")
             swapInExactAudio(audio)
             watchForStalledEnd(audioSeconds)
             return
         }
         let at = max(now + 0.05, silence.lowerBound + Self.swapLeadSeconds)
+        WorkerTTSService.log.info("""
+            [yomi] exact swap scheduled now=\(now, privacy: .public) at=\(at, privacy: .public) \
+            silence=\(silence.lowerBound, privacy: .public)-\(silence.upperBound, privacy: .public)
+            """)
         pendingExactSwap = (audio, audioSeconds)
         exactSwapObserver = player.addBoundaryTimeObserver(
             forTimes: [NSValue(time: CMTime(seconds: at, preferredTimescale: 600))], queue: .main
@@ -442,6 +448,8 @@ final class ReaderModel {
         exactSwapObserver = nil
         guard let pending = pendingExactSwap else { return }
         pendingExactSwap = nil
+        WorkerTTSService.log.info(
+            "[yomi] exact swap performed at=\(self.playerTime, privacy: .public) playing=\(self.isPlaying, privacy: .public)")
         swapInExactAudio(pending.audio)
         watchForStalledEnd(pending.audioSeconds)
     }
