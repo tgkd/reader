@@ -198,3 +198,11 @@ scores the returned alignment, the collapse repair, the pause relabel and a forc
 `collapse/relabel.py` (the pause-relabel prototype, rejected: it damages clean files) and
 `collapse/forced-align.mjs` (`POST /v1/forced-alignment`). Nine of nine captures came back within
 Whisper's own bias under forced alignment; see the 2026-09-02 note.
+
+**`alias-single-char`** — whether ElevenLabs applies an alias whose base is ONE character, or a
+base containing a space, in continuous Japanese. Both do, with `word_boundaries: false` (measured
+2026-09-02 on `eleven_v3`, Maiko: baseline 5.25 s; `顧問` two-character control 12.20 s; `昇` alone
+10.53 s; `滝 昇` 9.49 s). So the `≥2` floor on a rule's base is the lexicon's and the Worker's own
+(`PronunciationLexicon` `singleCharacterBase`, `PRONUNCIATION_LIMITS.minSurfaceChars`), not a
+provider limit. The probe archives the dictionaries it creates. Books for `RealBook*Probe` live in
+`samples/private/` (gitignored); the probes fall back to that folder when `YOMI_EPUB` is unset.

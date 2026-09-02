@@ -34,3 +34,6 @@ scripts/tts-probes/out/
 .claude/duck/
 .claude/settings.local.json
 __pycache__/
+
+# Copyrighted books used by RealBook*Probe; never committed.
+samples/private/

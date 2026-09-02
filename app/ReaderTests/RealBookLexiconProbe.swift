@@ -4,8 +4,8 @@ import ReaderCore
 
 final class RealBookLexiconProbe: XCTestCase {
     func testRealBookLexicon() async throws {
-        guard let path = ProcessInfo.processInfo.environment["YOMI_EPUB"] else {
-            throw XCTSkip("set YOMI_EPUB to a book path")
+        guard let path = ProcessInfo.processInfo.environment["YOMI_EPUB"] ?? PrivateSamples.firstEPUB() else {
+            throw XCTSkip("set YOMI_EPUB, or put a book in samples/private/")
         }
         let chapters = try await EPUBImporter(url: URL(fileURLWithPath: path)).chapters()
             .flatMap { $0.splitToRenderable() }
