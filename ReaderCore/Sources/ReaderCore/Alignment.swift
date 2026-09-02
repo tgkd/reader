@@ -30,6 +30,74 @@ public struct Alignment: Codable, Equatable {
         return characters.suffix(n).filter(Furigana.hasWordCharacter).count
     }
 
+    public static let collapsedRunMinLength = 8
+    public static let collapsedCharacterMaxSeconds = 0.02
+    public static let collapseRepairMinSeconds = 0.3
+
+    public var collapsedSpeechRuns: [Range<Int>] {
+        guard characters.count == startTimes.count, characters.count == endTimes.count else { return [] }
+        let stop = characters.count - untimedTrailingCharacters
+        var runs: [Range<Int>] = []
+        var i = 0
+        while i < stop {
+            guard isCollapsedSpeech(i) else { i += 1; continue }
+            var j = i
+            while j < stop, isCollapsedSpeech(j) { j += 1 }
+            if j - i >= Self.collapsedRunMinLength { runs.append(i..<j) }
+            i = j
+        }
+        return runs
+    }
+
+    private func isCollapsedSpeech(_ i: Int) -> Bool {
+        Furigana.hasWordCharacter(characters[i])
+            && endTimes[i] - startTimes[i] <= Self.collapsedCharacterMaxSeconds
+    }
+
+    public func repairingCollapsedRuns(audioSeconds: Double) -> Alignment {
+        guard let last = endTimes.last else { return self }
+        let delta = audioSeconds - last
+        guard delta >= Self.collapseRepairMinSeconds else { return self }
+        let runs = collapsedSpeechRuns
+        guard !runs.isEmpty else { return self }
+
+        var starts = startTimes
+        var ends = endTimes
+        let total = Double(runs.reduce(0) { $0 + $1.count })
+        var shift = 0.0
+        for run in runs {
+            let add = delta * Double(run.count) / total
+            let per = add / Double(run.count)
+            for (n, k) in run.enumerated() {
+                starts[k] = startTimes[k] + shift + per * Double(n)
+                ends[k] = startTimes[k] + shift + per * Double(n + 1)
+            }
+            shift += add
+            for k in run.upperBound..<characters.count {
+                starts[k] = startTimes[k] + shift
+                ends[k] = endTimes[k] + shift
+            }
+        }
+        return Alignment(characters: characters, startTimes: starts, endTimes: ends)
+    }
+
+    public struct PauseAttribution: Equatable {
+        public let onSpeech: Int
+        public let onPunctuation: Int
+    }
+
+    public func pauseAttribution(minSeconds: Double = 0.8) -> PauseAttribution {
+        guard characters.count == startTimes.count, characters.count == endTimes.count else {
+            return PauseAttribution(onSpeech: 0, onPunctuation: 0)
+        }
+        var speech = 0
+        var punctuation = 0
+        for i in characters.indices where endTimes[i] - startTimes[i] >= minSeconds {
+            if Furigana.hasWordCharacter(characters[i]) { speech += 1 } else { punctuation += 1 }
+        }
+        return PauseAttribution(onSpeech: speech, onPunctuation: punctuation)
+    }
+
     public func shifted(by seconds: Double) -> Alignment {
         guard seconds != 0 else { return self }
         return Alignment(characters: characters,

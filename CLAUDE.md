@@ -69,10 +69,11 @@ PDFKit / networking live in the `app/` target only.
   wrapped by `ChunkingTTSService` — **dormant by design since 2026-09-01**: a displayed chapter is
   capped at `Chapter.renderableHardMax` (1400) which is below `SynthesisLimits.maxRequestChars`
   (1500, or whatever `/tts/voices` serves for the configured model), so **one chapter is exactly one
-  request** and the chunked path never fires. That is not an optimization — `eleven_v3` ends every
-  request with 1.5-2.2 s of speech its alignment does not describe, so each extra request would put
-  another mid-chapter freeze of the highlight into the book. See
-  `.claude/notes/investigations/2026-09-01-v3-unlabelled-tail-and-one-request-per-chapter.md`.
+  request** and the chunked path never fires. That is not an optimization — a request that
+  `eleven_v3` mis-times leaves the rest of that request early by 1.5-2.2 s (measured), so each extra
+  request is another seam where the highlight holds and then jumps. See
+  `.claude/notes/investigations/2026-09-02-v3-collapses-a-spoken-phrase-mid-request.md`, which
+  supersedes the causal story in the 2026-09-01 note.
   If it does fire it is sequential and publishes under the PARENT key with a running
   `SynthesizedAudio.stitchAdvance` offset, so what the reader streams equals what is sealed;
   exponential 429 backoff on **both** the chunked and single-request paths;
@@ -257,12 +258,18 @@ PDFKit / networking live in the `app/` target only.
 - **A displayed chapter is exactly ONE TTS request** (2026-09-01). `Chapter.renderableHardMax`
   (1400) must stay at or below `SynthesisLimits.maxRequestChars` (1500, or whatever `/tts/voices`
   serves for the configured model), pinned by `testADisplayedChapterAlwaysFitsInOneRequest`.
-  The reason is `eleven_v3`: **every request ends with 1.5-2.2 s of speech its alignment does not
-  describe** (measured, RMS -45 dB to -11 dB past `endTimes.last`). At one request per chapter that
-  tail lands after the last sentence and nobody notices; split a chapter into N requests and N-1 of
-  those tails land mid-chapter, freezing the highlight for seconds at a time while words are spoken.
-  Raising the cap back re-creates that. See
-  `.claude/notes/investigations/2026-09-01-v3-unlabelled-tail-and-one-request-per-chapter.md`.
+  The reason is `eleven_v3`: **it can collapse a spoken phrase to ~0 duration mid-request, and every
+  timestamp after it is then early by the missing 1.5-2.2 s** (measured 2026-09-02 — it is NOT extra
+  speech after the last label; the trailing residual exists because the last sentence is spoken
+  later than labelled). Split a chapter into N requests and each seam adds a hold plus a jump while
+  the next segment's labels start; raising the cap back re-creates that.
+  `Alignment.repairingCollapsedRuns` repairs the collapse from the residual, at seal and on the cached
+  path, so a paid chapter is kept and re-timed rather than rejected — only completeness (character
+  count, terminal untimed speech) is enforced on a response. A second, unrepaired defect exists: the
+  prologue's first ~135 s carries labels 2-3.5 s LATE (sentence-end silences land on mid-sentence
+  characters) and converges; detectable only against an independent clock, logged as
+  `pausesOnSpeech`. See
+  `.claude/notes/investigations/2026-09-02-v3-collapses-a-spoken-phrase-mid-request.md`.
 - **One CoreText frame per chapter, rasterized through tiles this app owns.** The cap
   (`Chapter.maxRenderableChars`) does NOT keep the surface under the platform texture limit,
   and never did: measured 2026-08-25, a 4k chapter is 999x44664 px in yokogaki (999x60859 at the

@@ -179,3 +179,15 @@ fractions of a cent. Read the script and do the arithmetic before running it.
 
 Prices are per model, so re-check them against `TTS_MODEL` rather than carrying a $/hour figure
 across a model change — narration used to cost twice this on the multilingual rate.
+
+**`collapse/`** — where `eleven_v3`'s undescribed time actually sits. `pause-lag.py <mp3>
+<alignment.json>` compares the audio's speech envelope with the alignment's predicted one and prints
+the best lag per 20 s window: a step from ~0 to +1.9 s at 260 s on `names-cap1500-s01` located a
+15-character phrase the alignment had given 0.16 s. `repair-sim.py <mp3> <alignment.json>
+[anchors.json]` finds interior collapsed runs, stretches them to absorb the residual, and scores the
+result against Whisper word anchors (`{"charIdx": whisperStart}`). `words.py <wav> <t0> <t1>
+[offset]` dumps Whisper words with timestamps in a window (run with
+`uv run --with faster-whisper`). Findings in
+`.claude/notes/investigations/2026-09-02-v3-collapses-a-spoken-phrase-mid-request.md`. Do not trust
+a naive word-in-text anchor matcher over a whole 1500-char file — it cascades onto the wrong
+occurrence; anchor over a 90 s window.

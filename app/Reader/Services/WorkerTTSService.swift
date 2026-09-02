@@ -10,7 +10,6 @@ final class WorkerTTSService: TTSService {
         case badResponse
         case truncatedStream
         case misalignedStream
-        case audioAlignmentMismatch(seconds: Double)
         case truncatedGeneration(untimedCharacters: Int)
 
         var errorDescription: String? {
@@ -21,7 +20,6 @@ final class WorkerTTSService: TTSService {
             case .badResponse: return "Malformed TTS response"
             case .truncatedStream: return "Narration ended early"
             case .misalignedStream: return "Narration timings didn't match the text"
-            case .audioAlignmentMismatch: return "Narration timings didn't match the audio"
             case .truncatedGeneration: return "Narration stopped before the end of the chapter"
             }
         }
@@ -73,8 +71,6 @@ final class WorkerTTSService: TTSService {
 
     static let log = Logger(subsystem: "app.reader.app", category: "narration")
 
-    private static let alignmentAheadTolerance = 0.1
-    private static let trailingAudioTolerance = 2.5
 
     private let baseURL: URL
     private let userId: @Sendable () -> String?
@@ -159,14 +155,17 @@ final class WorkerTTSService: TTSService {
             throw reject(.truncatedGeneration(
                 untimedCharacters: alignment.untimedTrailingCharacters))
         }
-        guard delta >= -Self.alignmentAheadTolerance, delta <= Self.trailingAudioTolerance else {
-            throw reject(.audioAlignmentMismatch(seconds: delta))
-        }
+        let repaired = alignment.repairingCollapsedRuns(audioSeconds: audioSeconds)
+        let pauses = alignment.pauseAttribution()
         Self.log.info("""
             [yomi] synthesis ok chars=\(text.count, privacy: .public) \
-            audioSeconds=\(audioSeconds, privacy: .public) delta=\(delta, privacy: .public)
+            audioSeconds=\(audioSeconds, privacy: .public) delta=\(delta, privacy: .public) \
+            collapsedRuns=\(alignment.collapsedSpeechRuns.count, privacy: .public) \
+            repairedDelta=\(audioSeconds - (repaired.endTimes.last ?? 0), privacy: .public) \
+            pausesOnSpeech=\(pauses.onSpeech, privacy: .public) \
+            pausesOnPunctuation=\(pauses.onPunctuation, privacy: .public)
             """)
-        return SynthesizedAudio(audio: audio, alignment: alignment, text: text)
+        return SynthesizedAudio(audio: audio, alignment: repaired, text: text)
     }
 
     private func accumulate(_ bytes: URLSession.AsyncBytes,

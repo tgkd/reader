@@ -348,7 +348,8 @@ final class ReaderModel {
             tokens = await tokenizeWithSourceReadings(synth.text)
         }
         guard let tokens, gen == loadGeneration, !Task.isCancelled else { return .aborted }
-        setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: synth.alignment)))
+        let alignment = synth.alignment.repairingCollapsedRuns(audioSeconds: synth.audioSeconds)
+        setTimeline(SpanTimeline(CharTokenMapper.map(tokens: tokens, alignment: alignment)))
 
         guard !synth.audio.isEmpty else { return .undecodable }
         let source = ChapterAudioSource(expectedBytes: synth.audio.count)
@@ -705,6 +706,11 @@ final class ReaderModel {
     }
 
     private var sessionIsActive = false
+    private var outputLatency = 0.0
+
+    private func refreshOutputLatency() {
+        outputLatency = AVAudioSession.sharedInstance().outputLatency
+    }
 
     private func activateSession() {
         if !sessionIsActive {
@@ -712,6 +718,7 @@ final class ReaderModel {
             try? session.setCategory(.playback)
             sessionIsActive = (try? session.setActive(true)) != nil
         }
+        refreshOutputLatency()
         nowPlaying.activate()
         nowPlaying.setMetadata(bookTitle: document.title, chapterTitle: chapterTitle,
                                chapterIndex: chapterIndex, chapterCount: chapterCount,
@@ -732,7 +739,7 @@ final class ReaderModel {
         link.stop()
         persistProgress()
         currentTime = playerTime
-        activeIndex = highlightIndex(at: currentTime)
+        activeIndex = highlightIndex(at: currentTime - outputLatency)
         nowPlaying.setPlayback(elapsed: currentTime, rate: 0)
     }
 
@@ -881,7 +888,7 @@ final class ReaderModel {
             return
         }
         currentTime = playerTime
-        activeIndex = highlightIndex(at: currentTime)
+        activeIndex = highlightIndex(at: currentTime - outputLatency)
         #if DEBUG
         logHighlight()
         #endif
@@ -995,6 +1002,7 @@ final class ReaderModel {
     }
 
     private func handleRouteChange(_ note: Notification) {
+        refreshOutputLatency()
         guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
               AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable,
               isPlaying else { return }

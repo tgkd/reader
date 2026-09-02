@@ -140,36 +140,19 @@ final class WorkerTTSServiceTests: XCTestCase {
         }
     }
 
-    func testRejectsAlignmentThatDoesNotCoverTheAudio() async {
+    func testKeepsPaidAudioTheAlignmentDoesNotDescribe() async throws {
         MockURLProtocol.handler = alignedResponse("吾輩は猫", audioBytesPerChunk: 40_000)
-        do {
-            _ = try await makeService().synthesize(
-                SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
-            XCTFail("Expected undescribed audio to throw")
-        } catch let error as WorkerTTSService.WorkerError {
-            guard case .audioAlignmentMismatch(let seconds) = error else {
-                return XCTFail("Expected .audioAlignmentMismatch, got \(error)")
-            }
-            XCTAssertEqual(seconds, 8.0, accuracy: 0.01)
-        } catch {
-            XCTFail("Expected a WorkerError, got \(error)")
-        }
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+        XCTAssertEqual(out.audioSeconds - (out.alignment.endTimes.last ?? 0), 8.0, accuracy: 0.01)
+        XCTAssertEqual(out.alignment.collapsedSpeechRuns, [])
     }
 
-    func testRejectsAudioShorterThanTheAlignment() async {
+    func testKeepsAudioShorterThanTheAlignment() async throws {
         MockURLProtocol.handler = alignedResponse("吾輩は猫", audioBytesPerChunk: 1)
-        do {
-            _ = try await makeService().synthesize(
-                SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
-            XCTFail("Expected audio shorter than the alignment to throw")
-        } catch let error as WorkerTTSService.WorkerError {
-            guard case .audioAlignmentMismatch(let seconds) = error else {
-                return XCTFail("Expected .audioAlignmentMismatch, got \(error)")
-            }
-            XCTAssertLessThan(seconds, -1.9)
-        } catch {
-            XCTFail("Expected a WorkerError, got \(error)")
-        }
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+        XCTAssertLessThan(out.audioSeconds - (out.alignment.endTimes.last ?? 0), -1.9)
     }
 
     func testRejectsAGenerationThatStoppedTimingSpeech() async {
@@ -214,46 +197,37 @@ final class WorkerTTSServiceTests: XCTestCase {
         XCTAssertEqual(out.audioSeconds - (out.alignment.endTimes.last ?? 0), -0.05, accuracy: 0.001)
     }
 
-    func testRejectsAnAlignmentAheadOfItsAudioBeyondTheTolerance() async {
+    func testKeepsAnAlignmentAheadOfItsAudio() async throws {
         MockURLProtocol.handler = response(
             streamed("吾輩は猫", endTimes: [0.4, 0.8, 1.2, 1.5], audioBytesPerChunk: 4_000))
-        do {
-            _ = try await makeService().synthesize(
-                SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
-            XCTFail("Expected an alignment ahead of the audio to throw")
-        } catch let error as WorkerTTSService.WorkerError {
-            guard case .audioAlignmentMismatch(let seconds) = error else {
-                return XCTFail("Expected .audioAlignmentMismatch, got \(error)")
-            }
-            XCTAssertEqual(seconds, -0.5, accuracy: 0.001)
-        } catch {
-            XCTFail("Expected a WorkerError, got \(error)")
-        }
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
+        XCTAssertEqual(out.audioSeconds - (out.alignment.endTimes.last ?? 0), -0.5, accuracy: 0.001)
     }
 
-    func testAcceptsTrailingAudioJustInsideTheTolerance() async throws {
+    func testUnexplainedTrailingAudioLeavesTheAlignmentUntouched() async throws {
         MockURLProtocol.handler = response(
             streamed("吾輩は猫", endTimes: [0.15, 0.3, 0.45, 0.6], audioBytesPerChunk: 12_000))
         let out = try await makeService().synthesize(
             SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
         XCTAssertEqual(out.audioSeconds - (out.alignment.endTimes.last ?? 0), 2.4, accuracy: 0.001)
+        XCTAssertEqual(out.alignment.endTimes, [0.15, 0.3, 0.45, 0.6])
     }
 
-    func testRejectsTrailingAudioBeyondTheTolerance() async {
+    func testRepairsACollapsedPhraseAtSeal() async throws {
+        let text = "吾輩は猫。名前はまだ無いのだ。"
+        var ends: [Double] = [0.2, 0.4, 0.6, 0.8, 1.0]
+        for i in 0..<9 { ends.append(1.0 + Double(i + 1) * 0.01) }
+        ends.append(1.5)
         MockURLProtocol.handler = response(
-            streamed("吾輩は猫", endTimes: [0.1, 0.2, 0.3, 0.4], audioBytesPerChunk: 12_000))
-        do {
-            _ = try await makeService().synthesize(
-                SynthesisRequest(text: "吾輩は猫", voice: .shizuka))
-            XCTFail("Expected unexplained trailing audio to throw")
-        } catch let error as WorkerTTSService.WorkerError {
-            guard case .audioAlignmentMismatch(let seconds) = error else {
-                return XCTFail("Expected .audioAlignmentMismatch, got \(error)")
-            }
-            XCTAssertEqual(seconds, 2.6, accuracy: 0.001)
-        } catch {
-            XCTFail("Expected a WorkerError, got \(error)")
-        }
+            streamed(text, endTimes: ends, audioBytesPerChunk: 3_600))
+        let out = try await makeService().synthesize(
+            SynthesisRequest(text: text, voice: .shizuka))
+        XCTAssertEqual(out.audioSeconds, 3.375, accuracy: 0.001)
+        XCTAssertEqual(out.alignment.endTimes.last ?? 0, out.audioSeconds, accuracy: 1e-6)
+        XCTAssertEqual(out.alignment.startTimes[14], 1.09 + 1.875, accuracy: 1e-6)
+        XCTAssertEqual(out.alignment.startTimes[4], 0.8, accuracy: 1e-9)
+        XCTAssertEqual(out.alignment.collapsedSpeechRuns, [])
     }
 
     func testRejectsMultiCharacterAlignmentElements() async {
