@@ -333,8 +333,10 @@ PDFKit / networking live in the `app/` target only.
   to the client, and a reading printed in the book is not a generation parameter — it is content
   only the client has. ElevenLabs accepts only a dictionary *locator* on a synthesis request, so
   the rules must reach the Worker for it to create that dictionary; there is no design in which
-  they don't. The Worker re-validates every rule (kana-only, ≥2 chars, must occur in the
-  submitted text, capped) because they are spent against our own account, and resolves the
+  they don't. The Worker re-validates every rule (kana-only, non-empty base, must occur in the
+  submitted text, capped; the ≥2-character floor is the CLIENT's — measured 2026-09-03, lifting
+  it bought two rules MeCab already knew and zero new sites, see
+  `.claude/notes/decisions/2026-09-02-single-character-pronunciation-rules.md`) because they are spent against our own account, and resolves the
   surviving set to a pinned locator by canonical hash, so the same text resolves to the same
   dictionary on every device.
   **A rule's base does not have to be a WORD — it has to be a string whose reading the book
@@ -351,7 +353,15 @@ PDFKit / networking live in the `app/` target only.
   rules, not an excluded class. Still unmeasured, and the reason not to widen further: ElevenLabs'
   precedence among OVERLAPPING rules is undocumented, and the lexicon already emits overlapping
   pairs today (飛込 ⊂ 飛込ん, ご馳走 ⊂ 馳走). See
-  `.claude/notes/investigations/2026-08-27-ruby-lexicon-coverage.md`. Note the occurrence filter runs BEFORE the hash, so identity is
+  `.claude/notes/investigations/2026-08-27-ruby-lexicon-coverage.md`.
+  **A derived span inherits repair provenance from every annotation it composes** (2026-09-03):
+  on a flattened source (small kana restored by `KanaRepair`), a token or widened span that
+  contains a repaired annotation is `unconfirmedRepair` unless the tokenizer agrees — the
+  chapter's own token readings count first, then the isolated lookup. Keying that gate on the
+  annotation's surface let `宮だ → みゃだ` (匂宮, printed みや) ship; the token readings also
+  recover the words the isolated lookup never sees whole (几帳面, 躊躇, 饒舌: it asks about the
+  parts of a monoruby group). Inert on any book the importer did not flag as flattened.
+  Note the occurrence filter runs BEFORE the hash, so identity is
   currently per CHAPTER, not per book — deterministic and correct, but it mints one
   undeletable dictionary per chapter read (§11 of the findings doc, incl. the fix). The model,
   `language_code` and the five `voice_settings` live in aiwork's `src/tts.ts` (model overridable

@@ -61,17 +61,27 @@ public enum PronunciationLexicon {
             if let tokens = part.tokens {
                 spans = merging(spans, tokenSpans(projection, tokens: tokens))
             }
+            let repairs = zip(projection.readings, projection.spans(of: projection.readings))
+                .filter { $0.0.wasRepaired }.map(\.1.start)
+            spans = spans.map { span in
+                var span = span
+                span.repaired = repairs.contains(where: span.range.contains)
+                return span
+            }
             return (Normalize.nfkc(part.text), spans, valid)
         }
         let spans = parts.flatMap(\.spans)
         guard !spans.isEmpty else { return Lexicon(rules: [], rejected: []) }
 
-        let repairedSurfaces = Set(parts.flatMap(\.valid).filter(\.wasRepaired)
-            .map { Normalize.nfkc($0.surface) })
+        let repairedSurfaces = Set(spans.filter(\.repaired).map(\.surface))
 
         var bySurface: [String: [String: Int]] = [:]
+        var tokenizerReadings: [String: Set<String>] = [:]
         for span in spans {
             bySurface[span.surface, default: [:]][span.reading, default: 0] += 1
+            if let tokenizer = span.tokenizerReading {
+                tokenizerReadings[span.surface, default: []].insert(tokenizer)
+            }
         }
 
         let ordered = bySurface.keys.sorted { ($0.count, $0) > ($1.count, $1) }
@@ -116,8 +126,10 @@ public enum PronunciationLexicon {
             }
 
             if isFlattened, repairedSurfaces.contains(surface) {
-                guard let tokenizer = corroborate(surface),
-                      KanaRepair.flattened(tokenizer) == KanaRepair.flattened(reading) else {
+                let inContext = tokenizerReadings[surface].flatMap { $0.count == 1 ? $0.first : nil }
+                guard let tokenizer = [inContext, corroborate(surface)].compactMap({ $0 })
+                    .first(where: { KanaRepair.flattened($0) == KanaRepair.flattened(reading) })
+                else {
                     reject(.unconfirmedRepair); continue
                 }
                 rules.append(PronunciationRule(surface: surface, reading: tokenizer))
@@ -136,6 +148,10 @@ public enum PronunciationLexicon {
         let start: Int
         let surface: String
         let reading: String
+        var tokenizerReading: String?
+        var repaired = false
+
+        var range: Range<Int> { start..<(start + surface.count) }
     }
 
     private static func regrouped(_ readings: [SourceReading]) -> [SourceReading] {
@@ -194,13 +210,20 @@ public enum PronunciationLexicon {
         for (i, token) in tokens.enumerated() {
             guard let reading = book[i] else { continue }
             spans.append(Span(start: starts[i], surface: token.surface,
-                              reading: Normalize.nfkc(reading)))
+                              reading: Normalize.nfkc(reading),
+                              tokenizerReading: tokenizerReading(of: tokens[i...i])))
             guard token.surface.count == 1,
                   let wider = contextualSpan(projection, tokens: tokens, starts: starts, around: i)
             else { continue }
             spans.append(wider)
         }
         return spans
+    }
+
+    private static func tokenizerReading(of tokens: ArraySlice<Token>) -> String? {
+        let readings = tokens.map(\.reading)
+        guard !readings.contains(where: { $0 == nil }) else { return nil }
+        return readings.compactMap { $0 }.joined()
     }
 
     static let maxContextTokens = 2
@@ -224,7 +247,8 @@ public enum PronunciationLexicon {
                 let normalized = Normalize.nfkc(reading)
                 guard normalized != Normalize.nfkc(surface) else { continue }
                 if best == nil || surface.count < best!.surface.count {
-                    best = Span(start: starts[lo], surface: surface, reading: normalized)
+                    best = Span(start: starts[lo], surface: surface, reading: normalized,
+                                tokenizerReading: tokenizerReading(of: tokens[lo...hi]))
                 }
             }
         }
@@ -233,8 +257,17 @@ public enum PronunciationLexicon {
 
     private static func merging(_ spans: [Span], _ others: [Span]) -> [Span] {
         func key(_ s: Span) -> String { "\(s.start)\u{1}\(s.surface)\u{1}\(s.reading)" }
-        var seen = Set(spans.map(key))
-        return spans + others.filter { seen.insert(key($0)).inserted }
+        var out = spans
+        var index = Dictionary(spans.enumerated().map { (key($1), $0) }, uniquingKeysWith: { a, _ in a })
+        for span in others {
+            if let i = index[key(span)] {
+                if out[i].tokenizerReading == nil { out[i].tokenizerReading = span.tokenizerReading }
+            } else {
+                index[key(span)] = out.count
+                out.append(span)
+            }
+        }
+        return out
     }
 
     private static func occurrencesOf(_ needle: String, in haystack: String) -> [Int] {

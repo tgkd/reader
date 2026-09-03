@@ -252,6 +252,72 @@ final class PronunciationLexiconTests: XCTestCase {
                        "one repaired part taints the whole assembled name")
     }
 
+    func testARepairedReadingSeenThroughATokenStillNeedsCorroboration() {
+        let readings = [
+            SourceReading(start: 0, length: 1, surface: "匂", reading: "におう", groupLength: 2),
+            SourceReading(start: 1, length: 1, surface: "宮", reading: "みゃ",
+                          rawReading: "みや", groupLength: 2),
+        ]
+        let blind = PronunciationLexicon.build(
+            text: "匂宮だ。", readings: readings, isFlattened: true,
+            tokens: [Token(surface: "匂"), Token(surface: "宮"), Token(surface: "だ"),
+                     Token(surface: "。")],
+            corroborate: { _ in nil })
+
+        XCTAssertTrue(blind.rules.isEmpty, "\(blind.rules)")
+        XCTAssertEqual(blind.rejected.first(where: { $0.surface == "宮だ" })?.rejection,
+                       .unconfirmedRepair,
+                       "the window descends from a repaired annotation, so the gate that judges "
+                           + "the annotation must judge the window too; keying it on the "
+                           + "surface let みゃだ ship for a word the book prints みや")
+
+        let confirmed = PronunciationLexicon.build(
+            text: "匂宮だ。", readings: readings, isFlattened: true,
+            tokens: [Token(surface: "匂", reading: "におう"), Token(surface: "宮", reading: "みや"),
+                     Token(surface: "だ", reading: "だ"), Token(surface: "。")],
+            corroborate: { _ in nil })
+
+        XCTAssertEqual(confirmed.rules, [PronunciationRule(surface: "宮だ", reading: "みやだ"),
+                                         PronunciationRule(surface: "匂宮", reading: "におうみや")],
+                       "the chapter's own tokens carry the tokenizer's reading of each window, "
+                           + "and its spelling wins over the repair")
+    }
+
+    func testTheTokenizersOwnReadingCorroboratesARepairedGroup() {
+        let readings = [
+            SourceReading(start: 0, length: 1, surface: "寂", reading: "せき", groupLength: 2),
+            SourceReading(start: 1, length: 1, surface: "寥", reading: "りょう",
+                          rawReading: "りよう", groupLength: 2),
+        ]
+        let lex = PronunciationLexicon.build(
+            text: "寂寥とした。", readings: readings, isFlattened: true,
+            tokens: [Token(surface: "寂寥", reading: "せきりょう"), Token(surface: "と"),
+                     Token(surface: "し"), Token(surface: "た"), Token(surface: "。")],
+            corroborate: { _ in nil })
+
+        XCTAssertEqual(lex.rules, [PronunciationRule(surface: "寂寥", reading: "せきりょう")],
+                       "the isolated lookup asks about the parts the book annotated, never the "
+                           + "word; the token that spans the group already knows it")
+    }
+
+    func testARepairTheTokenizerReadsDifferentlyStaysRefused() {
+        let readings = [
+            SourceReading(start: 0, length: 1, surface: "明", reading: "みょう",
+                          rawReading: "みよう", groupLength: 2),
+            SourceReading(start: 1, length: 1, surface: "静", reading: "じょう",
+                          rawReading: "じよう", groupLength: 2),
+        ]
+        let lex = PronunciationLexicon.build(
+            text: "明静高校。", readings: readings, isFlattened: true,
+            tokens: [Token(surface: "明", reading: "あきら"), Token(surface: "静", reading: "せい"),
+                     Token(surface: "高校", reading: "こうこう"), Token(surface: "。")],
+            corroborate: { _ in nil })
+
+        XCTAssertTrue(lex.rules.isEmpty, "\(lex.rules)")
+        XCTAssertEqual(lex.rejected.first(where: { $0.surface == "明静" })?.rejection,
+                       .unconfirmedRepair)
+    }
+
     func testAdmitsAStemAnnotationReadAgainstItsToken() {
         let lex = PronunciationLexicon.build(
             text: "響け！",
