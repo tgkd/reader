@@ -569,7 +569,7 @@ private enum HTMLText {
                                    options: .regularExpression)
         s = s.replacingOccurrences(of: "(?i)<\\s*(br|/p|/div|/h[1-6]|/li|/tr)\\s*/?>", with: "\n",
                                    options: .regularExpression)
-        s = s.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: anyTag, with: "", options: .regularExpression)
         s = decodeEntities(s)
         s = s.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
         s = s.replacingOccurrences(of: " *\\n *", with: "\n", options: .regularExpression)
@@ -586,7 +586,7 @@ private enum HTMLText {
         var rest = Substring(input)
 
         func plain(_ s: Substring) -> String {
-            var t = String(s).replacingOccurrences(of: "(?is)<[^>]+>", with: "",
+            var t = String(s).replacingOccurrences(of: "(?is)\(anyTag)", with: "",
                                                    options: .regularExpression)
             t = decodeEntities(t)
             return t.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -602,9 +602,29 @@ private enum HTMLText {
             let body = String(inner).replacingOccurrences(
                 of: "(?is)\(openTag("rp")).*?</rp\\s*>", with: "", options: .regularExpression)
 
-            var pairs = capturePairs(
+            let spans = capturePairSpans(
                 "(?is)\(openTag("rb"))(.*?)</rb\\s*>\\s*\(openTag("rt"))(.*?)</rt\\s*>", in: body)
-            if pairs.isEmpty { pairs = groupedPairs(in: body) }
+            if !spans.isEmpty {
+                var wrote = false
+                var cursor = body.startIndex
+                for span in spans {
+                    let gap = plain(body[cursor..<span.range.lowerBound])
+                    cursor = span.range.upperBound
+                    if !gap.isEmpty {
+                        if wrote { out.append(rubyGroupEnd); wrote = false }
+                        out += gap
+                    }
+                    let b = plain(Substring(span.base)), r = plain(Substring(span.reading))
+                    guard !b.isEmpty, !r.isEmpty else { out += b; continue }
+                    out.append(rubyOpen); out += b; out.append(rubyClose)
+                    readings.append(r)
+                    wrote = true
+                }
+                if wrote { out.append(rubyGroupEnd) }
+                out += plain(body[cursor...])
+                continue
+            }
+            let pairs = groupedPairs(in: body)
             if !pairs.isEmpty {
                 var wrote = false
                 for (base, reading) in pairs {
@@ -644,8 +664,11 @@ private enum HTMLText {
     }
 
     private static func openTag(_ name: String) -> String {
-        "<\(name)\\b(?:\"[^\"]*\"|'[^']*'|[^>\"'])*>"
+        "<\(name)\\b\(tagRest)"
     }
+
+    private static let tagRest = "(?:\"[^\"]*\"|'[^']*'|[^>\"'])*>"
+    private static let anyTag = "<\(tagRest)"
 
     private static func groupedPairs(in body: String) -> [(String, String)] {
         let bases = capture("(?is)\(openTag("rb"))(.*?)</rb\\s*>", in: body)
@@ -689,6 +712,26 @@ private enum HTMLText {
         return re.matches(in: s, range: NSRange(location: 0, length: ns.length)).compactMap { m in
             guard m.numberOfRanges >= 2, m.range(at: 1).location != NSNotFound else { return nil }
             return ns.substring(with: m.range(at: 1))
+        }
+    }
+
+    private struct RubyPairSpan {
+        let range: Range<String.Index>
+        let base: String
+        let reading: String
+    }
+
+    private static func capturePairSpans(_ pattern: String, in s: String) -> [RubyPairSpan] {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = s as NSString
+        return re.matches(in: s, range: NSRange(location: 0, length: ns.length)).compactMap { m in
+            guard m.numberOfRanges >= 3,
+                  m.range(at: 1).location != NSNotFound,
+                  m.range(at: 2).location != NSNotFound,
+                  let range = Range(m.range, in: s) else { return nil }
+            return RubyPairSpan(range: range,
+                                base: ns.substring(with: m.range(at: 1)),
+                                reading: ns.substring(with: m.range(at: 2)))
         }
     }
 

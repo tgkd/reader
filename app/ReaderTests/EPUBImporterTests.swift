@@ -178,6 +178,63 @@ final class EPUBImporterTests: XCTestCase {
                        "a one-kanji reading must not be asserted over other contexts")
     }
 
+    func testKeepsUnannotatedTailOfAnExplicitRuby() async throws {
+        let body = "<p><ruby><rb>\u{98DF}</rb><rt>\u{305F}</rt>\u{3079}\u{308B}</ruby>\u{3002}</p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "\u{98DF}\u{3079}\u{308B}\u{3002}")
+        XCTAssertEqual(chapter.sourceReadings.map(\.surface), ["\u{98DF}"])
+        XCTAssertEqual(chapter.sourceReadings.map(\.reading), ["\u{305F}"])
+        let chars = Array(chapter.text)
+        for r in chapter.sourceReadings {
+            XCTAssertEqual(String(chars[r.start..<r.end]), r.surface)
+        }
+    }
+
+    func testKeepsTextBetweenExplicitRubyPairsAndSplitsTheGroupThere() async throws {
+        let body = "<p><ruby><rb>\u{6F22}</rb><rt>\u{304B}\u{3093}</rt>\u{306E}"
+            + "<rb>\u{5B57}</rb><rt>\u{3058}</rt></ruby></p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "\u{6F22}\u{306E}\u{5B57}")
+        XCTAssertEqual(chapter.sourceReadings.map(\.surface), ["\u{6F22}", "\u{5B57}"])
+        XCTAssertEqual(chapter.sourceReadings.map(\.reading), ["\u{304B}\u{3093}", "\u{3058}"])
+        XCTAssertEqual(chapter.sourceReadings.map(\.groupLength), [nil, nil] as [Int?],
+                       "text between the pairs breaks the run, so neither is part of a group")
+        let chars = Array(chapter.text)
+        for r in chapter.sourceReadings {
+            XCTAssertEqual(String(chars[r.start..<r.end]), r.surface)
+        }
+    }
+
+    func testAttributeValuesContainingAngleBracketsStayOutOfTheText() async throws {
+        let body = "<p><span title=\"a > b\">\u{672C}\u{6587}</span>"
+            + "<span title='c > d'>\u{7D9A}\u{304D}</span></p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "\u{672C}\u{6587}\u{7D9A}\u{304D}")
+    }
+
+    func testAngleBracketInARubyAttributeStaysOutOfTheText() async throws {
+        let body = "<p><ruby title=\"a > b\">\u{6F22}\u{5B57}<rt>\u{304B}\u{3093}\u{3058}</rt></ruby></p>"
+        let url = try Fixture.epub(
+            manifest: [Fixture.EPUBItem(id: "c0", href: "c0.xhtml", content: Fixture.xhtml(body: body))],
+            spine: [Fixture.SpineRef("c0")])
+        let chapter = try await chapters(url)[0]
+
+        XCTAssertEqual(chapter.text, "\u{6F22}\u{5B57}")
+        XCTAssertEqual(chapter.sourceReadings.map(\.reading), ["\u{304B}\u{3093}\u{3058}"])
+    }
+
     func testKeepsEveryPairOfGroupedRuby() async throws {
         let body = "<p><ruby><rbc><rb>漢</rb><rb>字</rb></rbc>"
             + "<rtc><rt>かん</rt><rt>じ</rt></rtc></ruby>を読む</p>"
