@@ -1,0 +1,13 @@
+{
+  "fill": { "solid": "extended-srgb:0.00000,0.00000,0.00000,1.00000" },
+  "groups": [
+    {
+      "layers": [
+        { "glass": true, "hidden": false, "image-name": "reading-mark.svg", "name": "Reading rhythm" }
+      ],
+      "shadow": { "kind": "neutral", "opacity": 0.35 },
+      "translucency": { "enabled": true, "value": 0.15 }
+    }
+  ],
+  "supported-platforms": { "squares": ["iOS"] }
+}
