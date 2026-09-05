@@ -4,8 +4,8 @@
 #
 # Drops the bulk the reader never uses — the FTS5 tables (words_fts/meanings_fts
 # + shadow tables) and the search_ngrams column — plus unused columns/tables,
-# and keeps only ONE example per word. Full WORD coverage is preserved so any
-# tapped token still resolves; only fuzzy-search infrastructure is removed.
+# and keeps only ONE example per word. Keeps canonical entries AND the exact
+# alternate spellings/readings in word_aliases; no fuzzy-search indexes are needed.
 #
 # Output (default app/Reader/Resources/jisho-compact.db) is bundled in the Reader
 # app and gitignored — regenerate with this script. Lookup uses idx_words_word
@@ -28,6 +28,9 @@ ATTACH DATABASE '$SRC' AS src;
 CREATE TABLE words (id INTEGER PRIMARY KEY, word TEXT, reading TEXT, reading_hiragana TEXT, priority_rank INTEGER DEFAULT 999);
 INSERT INTO words SELECT id, word, reading, reading_hiragana, priority_rank FROM src.words;
 
+CREATE TABLE word_aliases (word_id INTEGER NOT NULL, surface TEXT NOT NULL, surface_hiragana TEXT, form_kind TEXT NOT NULL);
+INSERT INTO word_aliases SELECT word_id, surface, surface_hiragana, form_kind FROM src.word_aliases;
+
 CREATE TABLE meanings (id INTEGER PRIMARY KEY, word_id INTEGER, meaning TEXT, part_of_speech TEXT, misc TEXT, field TEXT);
 INSERT INTO meanings SELECT id, word_id, meaning, part_of_speech, misc, field FROM src.meanings;
 
@@ -39,6 +42,8 @@ INSERT INTO examples SELECT word_id, japanese_text, english_text, reading FROM s
 CREATE INDEX idx_words_word ON words(word);
 CREATE INDEX idx_words_reading ON words(reading);
 CREATE INDEX idx_words_reading_hiragana ON words(reading_hiragana);
+CREATE INDEX idx_aliases_surface ON word_aliases(surface);
+CREATE INDEX idx_aliases_hiragana ON word_aliases(surface_hiragana);
 CREATE INDEX idx_meanings_word_id ON meanings(word_id);
 CREATE INDEX idx_examples_word_id ON examples(word_id);
 
@@ -47,4 +52,4 @@ VACUUM;
 SQL
 
 echo "Built $OUT ($(ls -lh "$OUT" | awk '{print $5}'))"
-sqlite3 "$OUT" "SELECT 'words', COUNT(*) FROM words UNION ALL SELECT 'meanings', COUNT(*) FROM meanings UNION ALL SELECT 'examples', COUNT(*) FROM examples;"
+sqlite3 "$OUT" "SELECT 'words', COUNT(*) FROM words UNION ALL SELECT 'aliases', COUNT(*) FROM word_aliases UNION ALL SELECT 'meanings', COUNT(*) FROM meanings UNION ALL SELECT 'examples', COUNT(*) FROM examples;"

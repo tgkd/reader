@@ -4,34 +4,55 @@ import ReaderCore
 
 final class SQLiteDictionaryService: DictionaryService {
     private let db: OpaquePointer
+    private let hasAliases: Bool
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    init?(resource: String = "jisho-compact", ext: String = "db") {
+    convenience init?(resource: String = "jisho-compact", ext: String = "db") {
         guard let path = Bundle.main.path(forResource: resource, ofType: ext) else { return nil }
+        self.init(path: path)
+    }
+
+    init?(path: String) {
         var handle: OpaquePointer?
-        let uri = "file:\(path)?immutable=1"
+        let uri = URL(fileURLWithPath: path).absoluteString + "?immutable=1"
         guard sqlite3_open_v2(uri, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK,
-              let handle else { return nil }
+              let handle else {
+            if let handle { sqlite3_close(handle) }
+            return nil
+        }
         db = handle
+        var statement: OpaquePointer?
+        sqlite3_prepare_v2(handle, "SELECT 1 FROM sqlite_master WHERE name = 'word_aliases' AND type = 'table'", -1, &statement, nil)
+        hasAliases = sqlite3_step(statement) == SQLITE_ROW
+        sqlite3_finalize(statement)
     }
 
     deinit { sqlite3_close(db) }
 
     func surfaceInfo(_ surface: String) -> SurfaceInfo? {
         guard !surface.isEmpty else { return nil }
-        let rows = query("""
+        let form = Normalize.nfkc(surface)
+        let folded = Normalize.kanaFold(form)
+        var rows = query("""
             SELECT w.word AS word, w.priority_rank AS rank, m.part_of_speech AS pos
             FROM words w LEFT JOIN meanings m ON m.word_id = w.id
-            WHERE w.word = ?1 OR w.reading = ?1 OR w.reading_hiragana = ?1;
-            """, [.text(surface)])
+            WHERE w.word = ?1 OR w.reading = ?1 OR w.reading_hiragana = ?2;
+            """, [.text(form), .text(folded)])
+        let alias = aliasId(form: form, folded: folded, reading: "")
+        if rows.isEmpty, let id = alias {
+            rows = query("""
+                SELECT w.word AS word, w.priority_rank AS rank, m.part_of_speech AS pos
+                FROM words w LEFT JOIN meanings m ON m.word_id = w.id WHERE w.id = ?1;
+                """, [.int(id)])
+        }
         guard !rows.isEmpty else { return nil }
 
         var rank = 999
         var hasExpression = false
         var hasNonExpression = false
-        var matchedWord = false
+        var matchedWord = alias != nil
         for r in rows {
-            if r.text("word") == surface { matchedWord = true }
+            if r.text("word") == form { matchedWord = true }
             rank = min(rank, r.int("rank") ?? 999)
             guard let pos = r.text("pos"), !pos.isEmpty else { continue }
             let codes = pos.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -44,18 +65,22 @@ final class SQLiteDictionaryService: DictionaryService {
     }
 
     func lookup(dictionaryForm: String, reading: String?) -> DictionaryEntry? {
-        let readingHira = reading ?? ""
+        let form = Normalize.nfkc(dictionaryForm)
+        guard !form.isEmpty else { return nil }
+        let folded = Normalize.kanaFold(form)
+        let readingHira = Normalize.kanaFold(reading ?? "")
 
         var id = firstId("""
             SELECT id FROM words WHERE word = ?1
             ORDER BY (reading_hiragana = ?2) DESC, priority_rank ASC, id ASC LIMIT 1;
-            """, [.text(dictionaryForm), .text(readingHira)])
+            """, [.text(form), .text(readingHira)])
         if id == nil {
             id = firstId("""
-                SELECT id FROM words WHERE reading = ?1 OR reading_hiragana = ?1
+                SELECT id FROM words WHERE reading = ?1 OR reading_hiragana = ?2
                 ORDER BY priority_rank ASC, id ASC LIMIT 1;
-                """, [.text(dictionaryForm)])
+                """, [.text(form), .text(folded)])
         }
+        if id == nil { id = aliasId(form: form, folded: folded, reading: readingHira) }
         guard let wordId = id else { return nil }
 
         let senseRows = query("""
@@ -93,6 +118,18 @@ final class SQLiteDictionaryService: DictionaryService {
     }
 
     private enum Bind { case text(String); case int(Int) }
+
+    private func aliasId(form: String, folded: String, reading: String) -> Int? {
+        guard hasAliases else { return nil }
+        let rows = query("""
+            SELECT DISTINCT w.id, w.reading_hiragana
+            FROM word_aliases a JOIN words w ON w.id = a.word_id
+            WHERE a.surface = ?1 OR a.surface_hiragana = ?2;
+            """, [.text(form), .text(folded)])
+        if rows.count == 1 { return rows[0].int("id") }
+        let matchingReading = rows.filter { !reading.isEmpty && $0.text("reading_hiragana") == reading }
+        return matchingReading.count == 1 ? matchingReading[0].int("id") : nil
+    }
 
     private struct Row {
         let cols: [String: Any]
