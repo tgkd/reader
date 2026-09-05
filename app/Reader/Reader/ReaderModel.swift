@@ -23,6 +23,7 @@ final class ReaderModel {
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
     private(set) var isPlaying = false
+    private var wantsPlayback = false
     private(set) var synthesisProgress: Double = 0
 
     static let supportedSpeeds: [Double] = [0.75, 1.0, 1.25, 1.5]
@@ -222,7 +223,8 @@ final class ReaderModel {
         synthesisProgress = 0
         audioState = .synthesizing
         chromeVisible = true
-        if await ensureAudio() { play() }
+        wantsPlayback = true
+        if await ensureAudio(), wantsPlayback { play() }
     }
 
     func cancelSynthesis() {
@@ -275,9 +277,10 @@ final class ReaderModel {
                 }
                 defer {
                     services.synthesisStream.unsubscribe(key)
-                    if progressive != nil { endProgressivePlayback() }
+                    if gen == loadGeneration, progressive != nil { endProgressivePlayback() }
                 }
                 synth = try await services.synthesis.task(for: request).value
+                guard gen == loadGeneration else { return false }
                 endSynthesisProgress(success: true)
                 if progressive?.isPlaying == true {
                     finishProgressivePlayback(with: synth, gen: gen)
@@ -759,6 +762,7 @@ final class ReaderModel {
 
     func play() {
         guard let player else { return }
+        wantsPlayback = true
         activateSession()
         if currentTime >= duration, duration > 0 { seekPlayer(to: 0) }
         lastAdvance = nil
@@ -798,6 +802,7 @@ final class ReaderModel {
     }
 
     func pause() {
+        wantsPlayback = false
         player?.pause()
         isPlaying = false
         link.stop()
@@ -854,9 +859,12 @@ final class ReaderModel {
 
     func stop() {
         saveProgressOnLeave()
+        wantsPlayback = false
         loadGeneration &+= 1
         playbackTask?.cancel()
         playbackTask = nil
+        progressive = nil
+        generatedTime = 0
         teardownPlayer()
         duration = 0
         isPlaying = false
