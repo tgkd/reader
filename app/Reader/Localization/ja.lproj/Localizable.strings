@@ -182,3 +182,7 @@
 "a11y.voiceDemo" = "声のサンプルを再生";
 "a11y.playerExpand" = "プレーヤーを開く";
 "a11y.playerCollapse" = "プレーヤーを閉じる";
+
+"a11y.hideControls" = "操作ボタンを隠す";
+"a11y.showControls" = "操作ボタンを表示";
+"a11y.hideControls.hint" = "ページをタップすると操作ボタンを再表示します。";

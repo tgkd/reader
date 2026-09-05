@@ -85,6 +85,7 @@ struct ReaderView: View {
                         ? safeArea.bottom
                         : 88 + safeArea.bottom,
                     initialToken: model.initialToken,
+                    chromeVisible: model.chromeVisible,
                     onTapToken: { model.tapToken($0) },
                     onTapBackground: { model.toggleChrome() },
                     onVisibleToken: { model.noteVisibleToken($0) },
@@ -138,6 +139,11 @@ struct ReaderView: View {
                 chromeIcon(app.themeName.symbol, label: L10n.a11yTheme) {
                     app.cycleTheme()
                 }
+                chromeIcon("eye.slash", label: L10n.a11yHideControls) {
+                    model.toggleChrome()
+                }
+                .accessibilityHint(L10n.a11yHideControlsHint)
+                .disabled(model.audioState == .synthesizing)
             }
             .glassEffect(.regular, in: Capsule())
         }
@@ -200,7 +206,7 @@ struct ReaderView: View {
         return "\(model.chapterTitle) · \(model.chapterIndex + 1)/\(model.chapterCount)"
     }
 
-    @ViewBuilder private func transport(_ model: ReaderModel, width: CGFloat) -> some View {
+    private func transport(_ model: ReaderModel, width: CGFloat) -> some View {
         PlayerView(model: model, expandedWidth: width - 32)
             .padding(.trailing, 16)
             .padding(.bottom, 26)

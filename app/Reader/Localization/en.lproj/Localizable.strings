@@ -184,3 +184,7 @@
 "a11y.voiceDemo" = "Play voice sample";
 "a11y.playerExpand" = "Expand player";
 "a11y.playerCollapse" = "Collapse player";
+
+"a11y.hideControls" = "Hide controls";
+"a11y.showControls" = "Show controls";
+"a11y.hideControls.hint" = "Tap the page to show controls again.";

@@ -7,7 +7,7 @@ struct PlayerView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.theme) private var theme
     @State private var isExpanded = false
-    @State private var showSpeed = false
+    @GestureState private var speedDrag = SpeedDrag()
     @Namespace private var glassNS
 
     private enum Row: Equatable {
@@ -24,6 +24,13 @@ struct PlayerView: View {
     }
 
     private var row: Row { Row(model.audioState) }
+    private var showSpeed: Bool { speedDrag.isActive && model.chromeVisible }
+
+    private struct SpeedDrag: Equatable {
+        var initialIndex: Int?
+        var isActive = false
+        var translation: CGFloat = 0
+    }
 
     var body: some View {
         GlassEffectContainer {
@@ -43,8 +50,10 @@ struct PlayerView: View {
         }
         .animation(.smooth(duration: 0.38), value: isExpanded)
         .animation(.smooth(duration: 0.3), value: showSpeed)
-        .onChange(of: isExpanded) { _, open in if !open { showSpeed = false } }
-        .onChange(of: row) { _, r in if r != .ready { showSpeed = false } }
+        .onChange(of: speedDrag) { _, drag in
+            guard drag.isActive, let initialIndex = drag.initialIndex else { return }
+            selectSpeed(at: initialIndex + Int((drag.translation / 24).rounded()))
+        }
     }
 
     private var collapsedCircle: some View {
@@ -276,28 +285,55 @@ struct PlayerView: View {
     }
 
     private var speedPill: some View {
-        Button { showSpeed.toggle() } label: {
-            Text("\(speedText(model.speed))×")
-                .font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                .foregroundStyle(showSpeed ? theme.onAccent : theme.ink)
-                .frame(minWidth: 44)
-                .frame(height: 28)
-                .background(Capsule().fill(showSpeed ? theme.accent : .clear))
-                .overlay(Capsule().strokeBorder(showSpeed ? .clear : theme.hair, lineWidth: 1))
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(L10n.a11ySpeed)
-        .accessibilityValue("\(speedText(model.speed))×")
+        Text("\(speedText(model.speed))×")
+            .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+            .foregroundStyle(showSpeed ? theme.onAccent : theme.ink)
+            .frame(width: 44, height: 28)
+            .background(Capsule().fill(showSpeed ? theme.accent : .clear))
+            .overlay(Capsule().strokeBorder(showSpeed ? .clear : theme.hair, lineWidth: 1))
+            .frame(height: 44)
+            .contentShape(Rectangle())
+            .gesture(
+                LongPressGesture(minimumDuration: 0.25, maximumDistance: 12)
+                    .sequenced(before: DragGesture(minimumDistance: 0))
+                    .updating($speedDrag) { value, state, _ in
+                        if state.initialIndex == nil {
+                            state.initialIndex = ReaderModel.supportedSpeeds.firstIndex(of: model.speed)
+                        }
+                        if case .second(true, let drag) = value {
+                            state.isActive = true
+                            state.translation = drag?.translation.width ?? 0
+                        }
+                    }
+            )
+            .sensoryFeedback(.selection, trigger: model.speed)
+            .sensoryFeedback(.impact(weight: .light), trigger: showSpeed) { _, open in open }
+            .accessibilityElement()
+            .accessibilityLabel(L10n.a11ySpeed)
+            .accessibilityValue("\(speedText(model.speed))×")
+            .accessibilityAdjustableAction { direction in
+                let index = ReaderModel.supportedSpeeds.firstIndex(of: model.speed) ?? 1
+                switch direction {
+                case .increment: selectSpeed(at: index + 1)
+                case .decrement: selectSpeed(at: index - 1)
+                default: break
+                }
+            }
+    }
+
+    private func selectSpeed(at index: Int) {
+        let speeds = ReaderModel.supportedSpeeds
+        let speed = speeds[min(speeds.count - 1, max(0, index))]
+        if speed != model.speed { model.setSpeed(speed) }
     }
 
     private var speedPanel: some View {
-        SpeedSlider(speeds: ReaderModel.supportedSpeeds, value: model.speed) {
-            model.setSpeed($0)
-        }
-        .padding(4)
-        .frame(width: max(190, expandedWidth * 0.55), height: 48)
-        .glassEffect(.regular, in: Capsule())
+        SpeedSlider(speeds: ReaderModel.supportedSpeeds, value: model.speed)
+            .padding(4)
+            .frame(width: max(190, expandedWidth * 0.55), height: 48)
+            .glassEffect(.regular, in: Capsule())
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     private var collapseButton: some View {
@@ -335,76 +371,5 @@ struct PlayerView: View {
 
     private func speedText(_ v: Double) -> String {
         SpeedSlider.label(v)
-    }
-}
-
-private struct SpeedSlider: View {
-    let speeds: [Double]
-    let value: Double
-    let onChange: (Double) -> Void
-
-    @Environment(\.theme) private var theme
-
-    static func label(_ v: Double) -> String {
-        v == v.rounded() ? "\(Int(v))" : String(format: "%g", v)
-    }
-
-    private var index: Int { speeds.firstIndex(of: value) ?? 0 }
-
-    var body: some View {
-        GeometryReader { geo in
-            let inset: CGFloat = 5
-            let knobW: CGFloat = 46
-            let h = geo.size.height
-            let travel = max(0, geo.size.width - inset * 2 - knobW)
-            let step = speeds.count > 1 ? travel / CGFloat(speeds.count - 1) : 0
-            let center = inset + knobW / 2 + step * CGFloat(index)
-            ZStack(alignment: .leading) {
-                Capsule().fill(theme.hi)
-                    .overlay(Capsule().strokeBorder(theme.hair, lineWidth: 1))
-                Capsule().fill(theme.accent)
-                    .frame(width: min(geo.size.width, center + knobW / 2 + inset))
-                ForEach(speeds.indices, id: \.self) { i in
-                    Circle()
-                        .fill(i <= index ? theme.onAccent.opacity(0.55) : theme.muted.opacity(0.55))
-                        .frame(width: 5, height: 5)
-                        .opacity(i == index ? 0 : 1)
-                        .position(x: inset + knobW / 2 + step * CGFloat(i), y: h / 2)
-                }
-                Capsule().fill(theme.surface)
-                    .frame(width: knobW, height: h - inset * 2)
-                    .overlay {
-                        Text("\(Self.label(value))×")
-                            .font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                            .foregroundStyle(theme.ink)
-                    }
-                    .position(x: center, y: h / 2)
-            }
-            .clipShape(Capsule())
-            .animation(.spring(response: 0.3, dampingFraction: 0.74), value: index)
-            .contentShape(Capsule())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { g in select(at: g.location.x, inset: inset, knobW: knobW, step: step) }
-            )
-        }
-        .sensoryFeedback(.selection, trigger: index)
-        .accessibilityElement()
-        .accessibilityLabel(L10n.a11ySpeed)
-        .accessibilityValue("\(Self.label(value))×")
-        .accessibilityAdjustableAction { direction in
-            switch direction {
-            case .increment: if index + 1 < speeds.count { onChange(speeds[index + 1]) }
-            case .decrement: if index > 0 { onChange(speeds[index - 1]) }
-            default: break
-            }
-        }
-    }
-
-    private func select(at x: CGFloat, inset: CGFloat, knobW: CGFloat, step: CGFloat) {
-        guard step > 0 else { return }
-        let raw = (x - inset - knobW / 2) / step
-        let i = min(speeds.count - 1, max(0, Int(raw.rounded())))
-        if speeds[i] != value { onChange(speeds[i]) }
     }
 }

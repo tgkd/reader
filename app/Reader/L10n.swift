@@ -165,6 +165,9 @@ enum L10n {
     static var a11yPosition: String { String(localized: "a11y.position") }
     static var a11yPlayWord: String { String(localized: "a11y.playWord") }
     static var a11yAudioCached: String { String(localized: "a11y.audioCached") }
+    static var a11yHideControls: String { String(localized: "a11y.hideControls") }
+    static var a11yShowControls: String { String(localized: "a11y.showControls") }
+    static var a11yHideControlsHint: String { String(localized: "a11y.hideControls.hint") }
     static var a11ySpeed: String { String(localized: "a11y.speed") }
     static var a11yVoiceDemo: String { String(localized: "a11y.voiceDemo") }
     static var a11yPlayerExpand: String { String(localized: "a11y.playerExpand") }

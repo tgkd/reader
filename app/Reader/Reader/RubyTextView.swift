@@ -15,6 +15,7 @@ struct RubyTextView: UIViewRepresentable {
     var topInset: CGFloat = 0
     var bottomInset: CGFloat = 0
     var initialToken: Int? = nil
+    var chromeVisible = true
     var onTapToken: (Int) -> Void
     var onTapBackground: () -> Void
     var onVisibleToken: ((Int) -> Void)? = nil
@@ -30,6 +31,13 @@ struct RubyTextView: UIViewRepresentable {
     func updateUIView(_ sv: RubyScrollView, context: Context) {
         sv.content.onTapToken = onTapToken
         sv.content.onTapBackground = onTapBackground
+        sv.content.chromeVisible = chromeVisible
+        sv.content.accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: chromeVisible ? L10n.a11yHideControls : L10n.a11yShowControls) { _ in
+                onTapBackground()
+                return true
+            }
+        ]
         sv.onVisibleToken = onVisibleToken
         sv.onNextChapter = onNextChapter
         sv.configure(spans: spans, structureVersion: structureVersion,
@@ -100,6 +108,13 @@ final class RubyScrollView: UIScrollView, UIScrollViewDelegate {
         addSubview(nextButton)
         content.viewportCenter = { [weak self] in self?.viewportCenterInContent() }
         delegate = self
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleSurfaceTap))
+        tap.delegate = self
+        addGestureRecognizer(tap)
+    }
+
+    @objc private func handleSurfaceTap(_ gesture: UITapGestureRecognizer) {
+        content.handleTap(at: gesture.location(in: content))
     }
 
     private func reportVisibleToken() {
@@ -325,6 +340,7 @@ private final class FollowTarget: NSObject {
 final class RubyContentView: UIView {
     var onTapToken: (Int) -> Void = { _ in }
     var onTapBackground: () -> Void = {}
+    var chromeVisible = true
 
     private var spans: [TokenSpan] = []
     private var activeIndex: Int?
@@ -370,7 +386,6 @@ final class RubyContentView: UIView {
         layer.addSublayer(highlightLayer)
         isAccessibilityElement = true
         accessibilityTraits = .staticText
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap)))
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -716,9 +731,8 @@ final class RubyContentView: UIView {
         return reflowAnchor
     }
 
-    @objc private func handleTap(_ g: UITapGestureRecognizer) {
-        guard currentFrame() != nil else { onTapBackground(); return }
-        let p = g.location(in: self)
+    func handleTap(at p: CGPoint) {
+        guard chromeVisible, currentFrame() != nil else { onTapBackground(); return }
         let flipped = CGPoint(x: p.x, y: bounds.height - p.y)
         guard let li = lineIndex(at: flipped) else { onTapBackground(); return }
         let lr = lineRanges[li]
@@ -763,5 +777,16 @@ final class RubyContentView: UIView {
             }
         }
         return String(out)
+    }
+}
+
+extension RubyScrollView: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        var view = touch.view
+        while let candidate = view, candidate !== self {
+            if candidate is UIControl { return false }
+            view = candidate.superview
+        }
+        return true
     }
 }
